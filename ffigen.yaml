@@ -1,0 +1,32 @@
+name: LlamaDartBridgeBindings
+description: Generated bindings for native/llama_dart_bridge/include/llama_dart.h.
+output: lib/src/ffi/generated_bindings.dart
+preamble: |
+  // Regenerate with: dart run ffigen --config ffigen.yaml
+headers:
+  entry-points:
+    - native/llama_dart_bridge/include/llama_dart.h
+functions:
+  include:
+    - llama_dart_.*
+structs:
+  include:
+    - llama_dart_.*
+enums:
+  include:
+    - llama_dart_.*
+compiler-opts:
+  - -Inative/llama_dart_bridge/include
+macros:
+  include:
+    - LLAMA_DART_ABI_VERSION
+globals:
+  exclude:
+    - .*
+typedefs:
+  exclude:
+    - .*
+unions:
+  exclude:
+    - .*
+silence-enum-warning: true

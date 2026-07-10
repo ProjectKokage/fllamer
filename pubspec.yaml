@@ -1,0 +1,24 @@
+name: fllamer
+description: Mobile-first local llama.cpp inference, embeddings, RAG, multimodal, LoRA, and speculative decoding for Dart and Flutter.
+version: 0.1.0
+
+repository: https://github.com/ProjectKokage/fllamer
+topics:
+  - ffi
+  - llama-cpp
+  - local-ai
+  - rag
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  code_assets: ^1.0.0
+  crypto: ^3.0.7
+  ffi: ^2.2.0
+  hooks: ^1.0.0
+
+dev_dependencies:
+  ffigen: ^15.0.0
+  lints: ^6.0.0
+  test: ^1.25.6
