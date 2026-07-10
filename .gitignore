@@ -1,0 +1,12 @@
+# https://dart.dev/guides/libraries/private-files
+# Created by `dart pub`
+**/.dart_tool/
+**/build/
+**/.idea/
+*.iml
+**/local.properties
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Applications commit lockfiles; this repository root is a reusable package.
+/pubspec.lock
