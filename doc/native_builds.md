@@ -77,8 +77,9 @@ Target notes:
   `ANDROID_NDK_ROOT`, then the newest numeric version under
   `ANDROID_HOME/ndk/*`. It passes the Android CMake toolchain, target ABI, NDK
   API level from the build config, and `c++_static`.
-- iOS 15.0 is the explicit minimum in the example Xcode project and CocoaPods
-  configuration. The pinned embedded Metal scheduler uses
+- iOS 15.0 is the explicit minimum in the example Xcode project. The example
+  integrates Flutter plugins through Swift Package Manager and does not require
+  CocoaPods. The pinned embedded Metal scheduler uses
   `MTLSharedEvent.waitUntilSignaledValue`, which was introduced in iOS 15, so
   the hook rejects lower deployment targets rather than emitting a binary with
   an unsafe runtime path. The hook passes `CMAKE_SYSTEM_NAME=iOS`, the target

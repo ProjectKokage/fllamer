@@ -6,6 +6,10 @@ supports image selection for vision projectors, generation cancellation,
 conversation reset, explicit model unload, capability reporting, and final
 generation telemetry.
 
+The example requires Flutter 3.44 or newer (Dart 3.12 or newer). Its Android
+project uses Flutter's AGP 9 migration configuration, and its iOS plugins are
+integrated with Swift Package Manager.
+
 The example does not bundle models or download model data. Android file
 selection uses the platform document picker, so no broad storage or internet
 permission is required. The Android picker returns a sanitized temporary cache

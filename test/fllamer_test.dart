@@ -304,100 +304,88 @@ void main() {
       }
     });
 
-    test(
-      'build hook emits a bundled native code asset',
-      () async {
-        if (Platform.isWindows) {
-          markTestSkipped(
-            'CMake native-assets hook is not configured for Windows.',
-          );
-        }
-
-        await testCodeBuildHook(
-          mainMethod: build_hook.main,
-          targetOS: OS.current,
-          check: (_, output) {
-            final assets = output.assets.encodedAssets
-                .map((asset) => asset.asCodeAsset)
-                .toList();
-
-            expect(assets, hasLength(1));
-            expect(assets.single.id, 'package:fllamer/llama_dart_bridge');
-            expect(assets.single.linkMode, isA<DynamicLoadingBundled>());
-            expect(File.fromUri(assets.single.file!).existsSync(), isTrue);
-
-            final dependencies = output.dependencies
-                .map((uri) => uri.toFilePath())
-                .toList();
-            expect(
-              dependencies,
-              contains(
-                endsWith('native/llama_dart_bridge/src/state_snapshot.h'),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(endsWith('third_party/llama.cpp/src/llama.cpp')),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith('third_party/llama.cpp/common/speculative.cpp'),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith(
-                  'third_party/llama.cpp/ggml/src/ggml-metal/ggml-metal.cpp',
-                ),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith('third_party/llama.cpp/tools/mtmd/mtmd-helper.cpp'),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith('third_party/llama.cpp/vendor/miniaudio/miniaudio.h'),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith('third_party/llama.cpp/vendor/cpp-httplib/httplib.h'),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith('third_party/llama.cpp/vendor/nlohmann/json.hpp'),
-              ),
-            );
-            expect(
-              dependencies,
-              contains(
-                endsWith('third_party/llama.cpp/vendor/stb/stb_image.h'),
-              ),
-            );
-            expect(
-              dependencies,
-              isNot(
-                contains(
-                  endsWith(
-                    'third_party/llama.cpp/models/ggml-vocab-gpt-2.gguf',
-                  ),
-                ),
-              ),
-            );
-          },
+    test('build hook emits a bundled native code asset', () async {
+      if (Platform.isWindows) {
+        markTestSkipped(
+          'CMake native-assets hook is not configured for Windows.',
         );
-      },
-      timeout: const Timeout(Duration(minutes: 5)),
-    );
+      }
+
+      await testCodeBuildHook(
+        mainMethod: build_hook.main,
+        targetOS: OS.current,
+        check: (_, output) {
+          final assets = output.assets.encodedAssets
+              .map((asset) => asset.asCodeAsset)
+              .toList();
+
+          expect(assets, hasLength(1));
+          expect(assets.single.id, 'package:fllamer/llama_dart_bridge');
+          expect(assets.single.linkMode, isA<DynamicLoadingBundled>());
+          expect(File.fromUri(assets.single.file!).existsSync(), isTrue);
+
+          final dependencies = output.dependencies
+              .map((uri) => uri.toFilePath())
+              .toList();
+          expect(
+            dependencies,
+            contains(endsWith('native/llama_dart_bridge/src/state_snapshot.h')),
+          );
+          expect(
+            dependencies,
+            contains(endsWith('third_party/llama.cpp/src/llama.cpp')),
+          );
+          expect(
+            dependencies,
+            contains(endsWith('third_party/llama.cpp/common/speculative.cpp')),
+          );
+          expect(
+            dependencies,
+            contains(
+              endsWith(
+                'third_party/llama.cpp/ggml/src/ggml-metal/ggml-metal.cpp',
+              ),
+            ),
+          );
+          expect(
+            dependencies,
+            contains(
+              endsWith('third_party/llama.cpp/tools/mtmd/mtmd-helper.cpp'),
+            ),
+          );
+          expect(
+            dependencies,
+            contains(
+              endsWith('third_party/llama.cpp/vendor/miniaudio/miniaudio.h'),
+            ),
+          );
+          expect(
+            dependencies,
+            contains(
+              endsWith('third_party/llama.cpp/vendor/cpp-httplib/httplib.h'),
+            ),
+          );
+          expect(
+            dependencies,
+            contains(
+              endsWith('third_party/llama.cpp/vendor/nlohmann/json.hpp'),
+            ),
+          );
+          expect(
+            dependencies,
+            contains(endsWith('third_party/llama.cpp/vendor/stb/stb_image.h')),
+          );
+          expect(
+            dependencies,
+            isNot(
+              contains(
+                endsWith('third_party/llama.cpp/models/ggml-vocab-gpt-2.gguf'),
+              ),
+            ),
+          );
+        },
+      );
+    }, timeout: const Timeout(Duration(minutes: 5)));
 
     test('build hook maps only supported Android ABIs', () {
       expect(
