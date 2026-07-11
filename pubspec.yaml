@@ -1,6 +1,6 @@
 name: fllamer
 description: Mobile-first local llama.cpp inference, embeddings, RAG, multimodal, LoRA, and speculative decoding for Dart and Flutter.
-version: 0.1.0
+version: 0.1.1
 
 repository: https://github.com/ProjectKokage/fllamer
 topics:

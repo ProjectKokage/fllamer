@@ -1,3 +1,15 @@
+## 0.1.1
+
+- Updated `code_assets` to 1.2.1, `hooks` to 2.0.2, and `ffigen` to
+  20.1.1, then regenerated the internal Dart FFI bindings.
+- Raised the example app to Flutter 3.44 and Dart 3.12, migrated Android to
+  AGP 9.0.1, Kotlin 2.3.20, and a checksum-verified Gradle 9.1 wrapper, and
+  replaced its CocoaPods-only plugin wiring with Swift Package Manager.
+- Updated the curated `llama.cpp` snapshot to upstream build `b9967`, including
+  tokenizer input hardening, Q2_0 support, and CPU/Metal/multimodal fixes, and
+  adapted the private bridge integration to upstream's renamed speculative
+  initialization helper.
+
 ## 0.1.0
 
 - Prepared the package for warning-free pub.dev validation: vendored the
