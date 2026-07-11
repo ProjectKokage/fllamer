@@ -66,7 +66,7 @@ struct llama_dart_context {
   llama_context *context = nullptr;
   mtmd_context *multimodal = nullptr;
   llama_dart_model *model = nullptr;
-  common_init_speculative_result_ptr speculative_init;
+  common_speculative_init_result_ptr speculative_init;
   common_speculative_ptr speculative;
   common_params_speculative speculative_params;
   llama_context *speculative_context = nullptr;
@@ -3951,8 +3951,8 @@ llama_dart_result llama_dart_context_create(
       speculative_params =
           common_base_params_to_speculative(speculative_params);
 
-      common_init_speculative_result_ptr speculative_init =
-          common_init_speculative_from_params(speculative_params,
+      common_speculative_init_result_ptr speculative_init =
+          common_speculative_init_from_params(speculative_params,
                                               model->model, created);
       if (speculative_init == nullptr) {
         return fail(LLAMA_DART_ERROR_INTERNAL,

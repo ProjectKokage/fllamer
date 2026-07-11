@@ -2,9 +2,9 @@
 
 - Upstream: `https://github.com/ggml-org/llama.cpp`
 - Local snapshot: `third_party/llama.cpp`
-- Commit: `f5525f7e7a7e7cbecd386144299493ea40499bd3`
-- Observed tag description: `gguf-v0.19.0-864-gf5525f7e7`
-- Sync date: 2026-07-08
+- Commit: `4f37f519722aa3242eecb7649466b4a4a2d6d6da`
+- Upstream build tag: `b9967`
+- Sync date: 2026-07-11
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
   `third_party/llama.cpp/licenses/` with redistributed source or binaries.
@@ -96,7 +96,7 @@ shift; no upstream cache internals cross the bridge.
 
 The bridge also statically links pinned `llama-common` and normalizes
 model-backed settings with `common_base_params_to_speculative` before calling
-`common_init_speculative_from_params`. Generation then uses
+`common_speculative_init_from_params`. Generation then uses
 `common_speculative_init`, `common_speculative_process`,
 `common_speculative_draft`, `common_speculative_accept`, and the
 context-removal capability probe. These C++ helpers remain private bridge
