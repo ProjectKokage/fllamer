@@ -44,7 +44,6 @@ void main() async {
   final info = await LlamaModel.inspect(
     const LlamaModelConfig(
       modelPath: '/app/private/model.gguf',
-      nativeLibraryPath: 'build/native/libllama_dart_bridge.dylib',
     ),
   );
 
@@ -53,7 +52,6 @@ void main() async {
   final embedding = await LlamaEmbeddings.embedText(
     const LlamaModelConfig(
       modelPath: '/app/private/embedding-model.gguf',
-      nativeLibraryPath: 'build/native/libllama_dart_bridge.dylib',
     ),
     'local retrieval context',
   );
@@ -62,7 +60,6 @@ void main() async {
   final engine = await LlamaEngine.load(
     const LlamaModelConfig(
       modelPath: '/app/private/model.gguf',
-      nativeLibraryPath: 'build/native/libllama_dart_bridge.dylib',
     ),
   );
   try {
@@ -83,8 +80,9 @@ void main() async {
 - Typed exception hierarchy for native and feature-gating failures.
 - Runtime capability reporting.
 - Runtime upstream commit and native build-flag reporting.
-- Native bridge lookup by explicit `nativeLibraryPath`, `FLLAMER_NATIVE_LIBRARY`,
-  or platform default library name.
+- Native bridge lookup through the bundled code-asset ID by default, including
+  Apple framework packaging. Explicit `nativeLibraryPath` and
+  `FLLAMER_NATIVE_LIBRARY` remain available for custom/debug bridges.
 - Opt-in process-wide native log capture with typed levels, bounded local
   buffering, and app-owned draining; logging is disabled by default.
 - Experimental CMake-backed native-assets build hook that bundles the native
@@ -121,6 +119,11 @@ void main() async {
   `LlamaChatTemplate` helpers use temporary vocab-only model loads.
 - Worker-isolate chat-template formatting with `llama_chat_apply_template`,
   plus capability-gated upstream Jinja rendering for tool-aware requests.
+  Template-less models fail with `UnsupportedFeatureException` instead of
+  silently inheriting llama.cpp's ChatML fallback. Apps can explicitly supply
+  `LlamaModelConfig.chatTemplate`, and inspect the selected template through
+  `LlamaModelInfo.chatTemplate`, `LlamaModel.chatTemplate()`, or the loaded
+  engine without reopening its path.
 - Worker-isolate `LlamaEngine.load`/`close` ownership for native model and
   context handles, plus `warmUp()` for predictable first-request latency,
   prompt-only `prefill()` with typed timing telemetry for reusable prefixes,
@@ -141,11 +144,13 @@ void main() async {
   counts, and draft/verification timings. Prompt evaluation adds model special
   tokens only when the context is empty; chat-template text parses trusted
   model control tokens. `continueCompletion()` samples directly from a
-  prefetched or restored non-empty context, with cancellation and prior-session
-  sampler penalty history preserved. Streaming uses a worker start/step/dispose
-  protocol: `streamChunkTokens` coalesces up to four tokens by default, paused
-  subscriptions stop requesting native steps, and parallel requests serialize
-  on the context.
+  prefetched or restored non-empty context, with prior-session sampler penalty
+  history preserved across successful requests. Streaming uses a worker
+  start/step/dispose protocol: `streamChunkTokens` coalesces up to four tokens by
+  default, paused subscriptions stop requesting native steps, and a second
+  active or pending stream is rejected with a typed generation error.
+  Cancelling a subscription awaits native cleanup and resets its context before
+  another request can start, so partial prompt/output state is not retained.
 - Sampling controls for temperature, top-k, top-p, min-p, typical-p,
   repetition/presence/frequency penalties, Mirostat v1/v2, seed, stop strings,
   and model token IDs.
@@ -245,8 +250,9 @@ before persistence or display.
 - Android API levels below 28 and 32-bit Android `armeabi-v7a`; pass
   `--target-platform android-arm64,android-x64` for Android APK validation.
 - iOS versions below 15.0. The pinned embedded Metal backend uses an event API
-  introduced in iOS 15, and the native-assets hook rejects lower deployment
-  targets instead of producing a binary that can fail at runtime.
+  introduced in iOS 15. The native-assets hook compiles the bridge for at least
+  iOS 15 even when Flutter supplies its generic iOS 13 hook input; applications
+  must also set their Xcode deployment target to iOS 15.0 or newer.
 
 ## Safety notes
 
@@ -269,6 +275,7 @@ before persistence or display.
 
 ```sh
 dart run ffigen --config ffigen.yaml
+dart run ffigen --config ffigen.native_assets.yaml
 cmake -S native/llama_dart_bridge -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native --config Release
 ctest --test-dir build/native --output-on-failure
@@ -279,8 +286,13 @@ ctest --test-dir build/native --output-on-failure
 `fllamer` is GPL-3.0 licensed. The published package vendors pinned `llama.cpp`
 source; keep upstream notices from `third_party/llama.cpp/LICENSE`,
 `third_party/llama.cpp/AUTHORS`, and `third_party/llama.cpp/licenses/` with any
-redistribution. Model files, adapters, and mmproj files are app-supplied data
-with their own licenses.
+redistribution. The package manifest registers these files plus the vendored
+cpp-httplib, stb, and miniaudio notices as Flutter additional licenses so they
+are collected into generated application notices. This does not decide whether
+a particular application is compatible with GPL-3.0; distributors still need
+to make that product/legal decision and meet the applicable source and notice
+obligations. Model files, adapters, and mmproj files are app-supplied data with
+their own licenses.
 
 The vendored upstream source is pinned at
 `4f37f519722aa3242eecb7649466b4a4a2d6d6da` (`b9967`).

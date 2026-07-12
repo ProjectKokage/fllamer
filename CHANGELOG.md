@@ -1,3 +1,32 @@
+## Unreleased
+
+- Fixed default bundled-bridge lookup by resolving the native code-asset ID,
+  including Flutter's Apple framework packaging, while preserving explicit
+  library-path and environment overrides.
+- Rejected concurrent engine streams and context work instead of placing them
+  in an unbounded deferred queue. Stream cancellation is now stream-scoped,
+  awaits worker cleanup, resets partial context state, and cannot abort a
+  different request; concurrent `close()` calls share one cleanup future.
+- Bumped the bridge ABI to 37. Chat formatting now requires a valid embedded or
+  explicit `LlamaModelConfig.chatTemplate`, exposes the effective template and
+  loaded-model metadata, and never silently substitutes ChatML. Freeing an
+  incomplete native generation resets its context.
+- Raised generic Flutter iOS native-asset hook inputs to the bridge's real iOS
+  15 minimum, capped default CMake parallelism at four jobs with an explicit
+  `FLLAMER_BUILD_JOBS` override, and streamed build output.
+- Registered vendored llama.cpp, nlohmann/json, cpp-httplib, stb, and miniaudio
+  licenses/authorship as Flutter additional notices.
+
+Migration notes:
+
+- Rebuild custom native bridges for ABI 37; ABI 36 libraries are rejected.
+- Supply `LlamaModelConfig.chatTemplate` for models without a valid embedded
+  chat template.
+- Serialize work per engine. Concurrent generations and context operations now
+  fail immediately instead of entering a deferred queue.
+- Treat stream cancellation as clearing the engine context; prefill or resend
+  the intended history before continuing generation.
+
 ## 0.1.1
 
 - Updated `code_assets` to 1.2.1, `hooks` to 2.0.2, and `ffigen` to

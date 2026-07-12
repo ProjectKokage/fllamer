@@ -23,7 +23,13 @@ Generated bindings:
 
 ```sh
 dart run ffigen --config ffigen.yaml
+dart run ffigen --config ffigen.native_assets.yaml
 ```
+
+The first file preserves runtime `DynamicLibrary` lookup for explicit custom
+bridge paths. The second generates `@Native` symbol addresses for the bundled
+asset ID `package:fllamer/llama_dart_bridge`; both are internal implementation
+details and must be regenerated after a bridge-header change.
 
 The bridge builds against the curated, vendored `third_party/llama.cpp`
 snapshot recorded in `doc/upstream_sync.md`. Do not point published builds at
@@ -39,8 +45,12 @@ For local development and explicit runtime testing, the Dart layer can still
 open a native library by:
 
 - pass `nativeLibraryPath`,
-- set `FLLAMER_NATIVE_LIBRARY`, or
-- relying on the platform default library name when it is already discoverable.
+- set `FLLAMER_NATIVE_LIBRARY`.
+
+When neither override is present, the Dart layer resolves the code asset by
+its registered asset ID. It does not guess a platform filename; this is what
+allows Flutter's Apple framework layout to work without an application-owned
+path workaround.
 
 ## Native-assets hook
 
@@ -53,7 +63,11 @@ The hook uses the same CMake project as the local smoke build, with
 Flutter/Dart debug, profile, or release mode, so the hook uses
 `RelWithDebInfo` for every bundled bridge: native code remains optimized while
 retaining debug information for local symbolication. Final release packaging
-may still strip the copied application artifact. It keeps the portable CPU flags from
+may still strip the copied application artifact. CMake build parallelism is
+bounded to four jobs by default to avoid scaling native compiler memory with a
+high-core-count host; set `FLLAMER_BUILD_JOBS` to a positive integer when a CI
+runner needs a different explicit limit. Command output is streamed instead of
+retained in hook memory. It keeps the portable CPU flags from
 `native/llama_dart_bridge/CMakeLists.txt`, including `GGML_OPENMP=OFF` and
 `GGML_LLAMAFILE=OFF`. `LLAMA_BUILD_MTMD=ON` links image/audio preprocessing
 into the bridge, while `MTMD_VIDEO=OFF` prevents runtime ffmpeg dependencies.
@@ -77,14 +91,18 @@ Target notes:
   `ANDROID_NDK_ROOT`, then the newest numeric version under
   `ANDROID_HOME/ndk/*`. It passes the Android CMake toolchain, target ABI, NDK
   API level from the build config, and `c++_static`.
-- iOS 15.0 is the explicit minimum in the example Xcode project. The example
+- iOS 15.0 is the explicit minimum in the example Xcode project. Flutter's
+  native-assets driver currently supplies a generic iOS 13 hook target even
+  when the Xcode project has a newer deployment target, so the hook raises the
+  native bridge's effective CMake deployment target to 15.0. Applications must
+  still set their own iOS deployment target to 15.0 or newer; the hook cannot
+  rewrite an application's Xcode support policy. The example
   integrates Flutter plugins through Swift Package Manager and does not require
   CocoaPods. The pinned embedded Metal scheduler uses
-  `MTLSharedEvent.waitUntilSignaledValue`, which was introduced in iOS 15, so
-  the hook rejects lower deployment targets rather than emitting a binary with
-  an unsafe runtime path. The hook passes `CMAKE_SYSTEM_NAME=iOS`, the target
-  SDK, architecture, and deployment target from the native-assets build
-  config. Xcode command line tools must be available.
+  `MTLSharedEvent.waitUntilSignaledValue`, which was introduced in iOS 15. The
+  hook passes `CMAKE_SYSTEM_NAME=iOS`, the target SDK and architecture, and the
+  greater of the native-assets target or iOS 15.0. Xcode command line tools
+  must be available.
 - macOS and Linux host builds are supported by the same hook. Windows is not
   configured yet.
 

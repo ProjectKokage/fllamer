@@ -137,6 +137,10 @@ carries a separate n-gram drafting implementation. N-gram cache files are not
 exposed because the pinned upstream loader aborts on malformed external cache
 data, which cannot be allowed across the bridge C ABI.
 
+ABI 37 adds an optional validated chat-template override to model loading and
+an effective-template getter. Plain and tool-aware chat paths now reject a
+missing template before upstream's generic ChatML fallback can apply.
+
 Note: pinned upstream documents `llama_state_get_size()` as a save-only sizing
 helper. Do not use it to preflight `llama_state_set_data()` restores; it can be
 too small for the serialized state being restored.

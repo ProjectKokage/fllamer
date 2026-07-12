@@ -18,6 +18,12 @@ Model SHA-256 calculation and in-memory vector-index JSON persistence/loading
 also use short-lived workers because those Dart-only operations can process
 hundreds of megabytes in mobile apps.
 
+Normal runtime lookup uses the registered code-asset ID
+`package:fllamer/llama_dart_bridge`, including Flutter's Apple framework
+layout. A separate generated lookup binding remains available for explicit
+`nativeLibraryPath` or `FLLAMER_NATIVE_LIBRARY` overrides used by custom builds
+and tests.
+
 Upstream native logging is process-global, so the bridge installs one callback
 that is silent unless `LlamaRuntime.configureNativeLogging()` enables a minimum
 level. The callback writes only to a mutex-protected 1 MiB/4096-record FIFO;
@@ -69,10 +75,13 @@ start/step/dispose protocol for the native generation handle. Each caller
 request permits at most one bounded native batch, `streamChunkTokens` coalesces
 normal token steps, and a paused subscription stops requesting subsequent
 batches. Cancellation can dispose an idle paused generation; context/state/LoRA
-commands received meanwhile remain queued, and parallel streams serialize on
-the same context. Stop strings are held back at the byte boundary; custom stop
-token IDs terminate before token-to-piece conversion, sampler acceptance, or
-context decode, so the terminating token is neither emitted nor committed.
+commands received meanwhile fail with a typed busy error, and a second stream is
+rejected before it can affect the active context. Cancelling a stream awaits
+worker disposal and resets the context before releasing the engine's generation
+slot, so partially evaluated prompt or output tokens cannot leak into the next
+request. Stop strings are held back at the byte boundary; custom stop token IDs
+terminate before token-to-piece conversion, sampler acceptance, or context
+decode, so the terminating token is neither emitted nor committed.
 `LlamaEngine.prefill()` uses the same validated prompt decode path with a
 zero-token sampling limit. Its default tokenization mode adds model special
 tokens only at position zero, allowing later calls to append reusable prefixes
@@ -104,6 +113,13 @@ and merges template stops. The worker retains raw streamed text and invokes the
 pinned parser at completion, returning a normalized assistant message with
 typed tool calls on the terminal chunk. Native pointers and tool execution
 never cross into the public API.
+
+Chat formatting always selects either `LlamaModelConfig.chatTemplate` or the
+GGUF's embedded default. The bridge validates and exposes that effective
+template; absence is a typed unsupported error, never an implicit ChatML
+choice. Loaded-engine model info, metadata, and template reads reuse the same
+worker-owned model so callers do not need another pathname-based inspection
+load.
 
 Model-backed speculative completion mirrors every target prefill and verify
 batch through `common_speculative_process`, lets the selected upstream strategy
