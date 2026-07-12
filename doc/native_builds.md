@@ -130,6 +130,9 @@ Current verification:
   in Release builds, and an ASan/UBSan Debug build passes locally.
   Fixture-backed vocab/context checks run when
   `third_party/llama.cpp/models/ggml-vocab-gpt-2.gguf` exists.
+- Apple `ctest` asks the public Metal backend capability path about representative
+  supported types and missing-kernel types, including TQ1_0/TQ2_0, so a future
+  broad capability claim cannot silently reintroduce null-pipeline dispatch.
 - Set `LLAMA_DART_TEST_MODEL` to an app-owned weighted GGUF before `dart test`
   to run opt-in warm-up, prompt-only prefill and continuation,
   explicit/automatic context-shift continuation, and deterministic stop-token
@@ -319,6 +322,36 @@ Current verification:
   reporting, deterministic file/byte image preprocessing, streamed generation,
   prompt telemetry, and cleanup. The default suite never downloads or packages
   these files.
+- Set `LLAMA_DART_TEST_GEMMA4_MODEL`,
+  `LLAMA_DART_TEST_GEMMA4_MMPROJ`, and `LLAMA_DART_TEST_GEMMA4_IMAGE` to the
+  Apache-2.0 Gemma 4 mobile fixture to verify that an undersized non-causal
+  microbatch fails recoverably before upstream decode. The model repository is
+  pinned at `unsloth/gemma-4-E2B-it-qat-mobile-GGUF` revision
+  `ae6332216be5fea499f72bb6e484648ab3bdbb00`; the image is pinned test media
+  from the vendored llama.cpp commit.
+
+  | File | Bytes | SHA-256 |
+  | --- | ---: | --- |
+  | `gemma-4-E2B-it-qat-UD-Q2_K_XL.gguf` | 2,186,184,768 | `8279c8b153490e400831e89fc8162348911dfbe3c70d22055c70abaa9b05a0b4` |
+  | `mmproj-BF16.gguf` | 986,833,728 | `38b33846f56426cd650e0e574d78de125abdfcedf35c0d7f6929f6ffe26efe02` |
+  | `third_party/llama.cpp/tools/mtmd/test-1.jpeg` | 124,071 | `2dff664c0c8aaea18aff8cbe7e868845b775e90cdd7a0bac98df709b131deaa3` |
+
+  ```sh
+  hf download unsloth/gemma-4-E2B-it-qat-mobile-GGUF \
+    gemma-4-E2B-it-qat-UD-Q2_K_XL.gguf mmproj-BF16.gguf \
+    --revision ae6332216be5fea499f72bb6e484648ab3bdbb00 \
+    --local-dir /tmp/fllamer-gemma4-fixture
+  LLAMA_DART_TEST_GEMMA4_MODEL=/tmp/fllamer-gemma4-fixture/gemma-4-E2B-it-qat-UD-Q2_K_XL.gguf \
+  LLAMA_DART_TEST_GEMMA4_MMPROJ=/tmp/fllamer-gemma4-fixture/mmproj-BF16.gguf \
+  LLAMA_DART_TEST_GEMMA4_IMAGE=third_party/llama.cpp/tools/mtmd/test-1.jpeg \
+    dart test --plain-name \
+      'real Gemma 4 rejects an unsafe non-causal microbatch recoverably'
+  ```
+
+  The test validates all three files, loads a CPU context with
+  `batchSize: 512` and `ubatchSize: 128`, and requires a typed
+  `GenerationException` instead of a native assertion. The default suite never
+  downloads or packages these files.
 - Set `LLAMA_DART_TEST_AUDIO_MODEL`, `LLAMA_DART_TEST_AUDIO_MMPROJ`, and
   `LLAMA_DART_TEST_AUDIO_FILE` to run real `mtmd` audio-transcription coverage.
   The official conversion is derived from the Apache-2.0

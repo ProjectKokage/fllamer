@@ -122,6 +122,71 @@ void main() {
       }
     });
 
+    test('formats ordinary Gemma 4 chat through the Jinja fallback', () async {
+      final bridgePath = _nativeBridgePath;
+      const modelPath = 'third_party/llama.cpp/models/ggml-vocab-gemma-4.gguf';
+      if (!File(bridgePath).existsSync()) {
+        markTestSkipped('native bridge has not been built at $bridgePath');
+      }
+      if (!File(modelPath).existsSync()) {
+        markTestSkipped('Gemma 4 vocab fixture is missing at $modelPath');
+      }
+
+      final config = LlamaModelConfig(
+        modelPath: modelPath,
+        mmprojPath: 'format-only-mmproj.gguf',
+        nativeLibraryPath: bridgePath,
+        gpu: const GpuConfig.cpu(),
+      );
+      final textMessages = <ChatMessage>[ChatMessage.user('hello-gemma4')];
+      final withAssistant = await LlamaChatTemplate.format(
+        config,
+        textMessages,
+      );
+      final withoutAssistant = await LlamaChatTemplate.format(
+        config,
+        textMessages,
+        addAssistantPrompt: false,
+      );
+
+      expect(withAssistant, contains('hello-gemma4'));
+      expect(withoutAssistant, contains('hello-gemma4'));
+      expect(withAssistant, isNot(withoutAssistant));
+      expect(
+        await LlamaChatTemplate.countTokens(config, textMessages),
+        await LlamaTokenizer.countTokens(
+          config,
+          withAssistant,
+          addSpecial: true,
+          parseSpecial: true,
+        ),
+      );
+
+      final mediaPrompt = await LlamaChatTemplate.format(config, <ChatMessage>[
+        ChatMessage.content(
+          role: ChatRole.user,
+          parts: const <ChatContentPart>[
+            TextPart('before-media'),
+            ImagePart.fromFile('image.png'),
+            TextPart('between-media'),
+            AudioPart.fromFile('audio.wav'),
+            TextPart('after-media'),
+          ],
+        ),
+      ]);
+      final before = mediaPrompt.indexOf('before-media');
+      final firstMarker = mediaPrompt.indexOf('<__media__>');
+      final between = mediaPrompt.indexOf('between-media');
+      final secondMarker = mediaPrompt.indexOf('<__media__>', firstMarker + 1);
+      final after = mediaPrompt.indexOf('after-media');
+      expect(before, greaterThanOrEqualTo(0));
+      expect(firstMarker, greaterThan(before));
+      expect(between, greaterThan(firstMarker));
+      expect(secondMarker, greaterThan(between));
+      expect(after, greaterThan(secondMarker));
+      expect(mediaPrompt, isNot(contains('forbidden_tool_name_9')));
+    });
+
     test('captures native logs only when configured', () async {
       final bridgePath = _nativeBridgePath;
       if (!File(bridgePath).existsSync()) {
@@ -2817,6 +2882,97 @@ void main() {
         await engine.close();
       }
     });
+
+    test(
+      'real Gemma 4 rejects an unsafe non-causal microbatch recoverably',
+      () async {
+        final modelPath = Platform.environment['LLAMA_DART_TEST_GEMMA4_MODEL'];
+        final mmprojPath =
+            Platform.environment['LLAMA_DART_TEST_GEMMA4_MMPROJ'];
+        final imagePath = Platform.environment['LLAMA_DART_TEST_GEMMA4_IMAGE'];
+        if (modelPath == null ||
+            modelPath.isEmpty ||
+            mmprojPath == null ||
+            mmprojPath.isEmpty ||
+            imagePath == null ||
+            imagePath.isEmpty) {
+          markTestSkipped(
+            'LLAMA_DART_TEST_GEMMA4_MODEL, '
+            'LLAMA_DART_TEST_GEMMA4_MMPROJ, and '
+            'LLAMA_DART_TEST_GEMMA4_IMAGE are not all set',
+          );
+          return;
+        }
+        final bridgePath = _nativeBridgePath;
+        if (!File(bridgePath).existsSync()) {
+          markTestSkipped('native bridge has not been built at $bridgePath');
+        }
+
+        await LlamaModel.validateFile(
+          modelPath,
+          expectedSizeBytes: 2186184768,
+          expectedSha256:
+              '8279c8b153490e400831e89fc8162348911dfbe3c70d22055c70abaa9b05a0b4',
+        );
+        await LlamaModel.validateFile(
+          mmprojPath,
+          expectedSizeBytes: 986833728,
+          expectedSha256:
+              '38b33846f56426cd650e0e574d78de125abdfcedf35c0d7f6929f6ffe26efe02',
+        );
+        await LlamaModel.validateFile(
+          imagePath,
+          expectedSizeBytes: 124071,
+          expectedSha256:
+              '2dff664c0c8aaea18aff8cbe7e868845b775e90cdd7a0bac98df709b131deaa3',
+          requireGgufMagic: false,
+        );
+
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: modelPath,
+            mmprojPath: mmprojPath,
+            nativeLibraryPath: bridgePath,
+            contextSize: 4096,
+            batchSize: 512,
+            ubatchSize: 128,
+            gpu: const GpuConfig.cpu(),
+          ),
+        );
+        try {
+          await expectLater(
+            engine
+                .chat(
+                  messages: <ChatMessage>[
+                    ChatMessage.content(
+                      role: ChatRole.user,
+                      parts: <ChatContentPart>[
+                        ImagePart.fromFile(imagePath, mimeType: 'image/jpeg'),
+                        const TextPart('Describe this image.'),
+                      ],
+                    ),
+                  ],
+                  config: const GenerationConfig(
+                    maxTokens: 1,
+                    temperature: 0,
+                    topK: 1,
+                    seed: 42,
+                  ),
+                )
+                .toList(),
+            throwsA(
+              isA<GenerationException>().having(
+                (error) => error.message,
+                'message',
+                contains('non-causal media chunk exceeds ubatch_size'),
+              ),
+            ),
+          );
+        } finally {
+          await engine.close();
+        }
+      },
+    );
 
     test('real audio fixture transcribes file and byte inputs', () async {
       final modelPath = Platform.environment['LLAMA_DART_TEST_AUDIO_MODEL'];

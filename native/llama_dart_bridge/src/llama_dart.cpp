@@ -1288,6 +1288,28 @@ llama_dart_result decode_multimodal_prompt(
                 "multimodal prompt exceeds context size");
   }
 
+  const size_t n_batch = llama_n_batch(context->context);
+  const size_t n_ubatch = llama_n_ubatch(context->context);
+  // The pinned mtmd helper temporarily disables causal attention and passes a
+  // physical batch directly to llama_decode. llama.cpp requires that entire
+  // non-causal batch to fit in one ubatch, so reject it before the assertion.
+  for (size_t i = 0; i < mtmd_input_chunks_size(chunks.get()); ++i) {
+    const mtmd_input_chunk *chunk =
+        mtmd_input_chunks_get(chunks.get(), i);
+    if (chunk == nullptr ||
+        !mtmd_decode_use_non_causal(context->multimodal, chunk)) {
+      continue;
+    }
+    const size_t chunk_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+    const size_t decode_tokens = std::min(n_batch, chunk_tokens);
+    if (decode_tokens > n_ubatch) {
+      return fail(
+          LLAMA_DART_ERROR_GENERATION,
+          "non-causal media chunk exceeds ubatch_size; increase "
+          "ubatch_size to batch_size or reduce the media token count");
+    }
+  }
+
   sampler_tokens->clear();
   for (size_t i = 0; i < mtmd_input_chunks_size(chunks.get()); ++i) {
     const mtmd_input_chunk *chunk =
@@ -1588,10 +1610,8 @@ llama_dart_result completion_grammar(
     std::string *grammar_root, const parsed_chat_plan *chat_plan) {
   grammar->clear();
   *grammar_root = "root";
-  if (chat_plan != nullptr) {
-    *grammar = chat_plan->grammar;
-    return LLAMA_DART_SUCCESS;
-  }
+  // Request-owned structured output remains authoritative. In particular,
+  // some Jinja planners do not copy a raw GBNF grammar into their plan.
   if (config->json_schema_size > 0) {
     return convert_json_schema_to_grammar(config->json_schema_data,
                                           config->json_schema_size, grammar);
@@ -1602,6 +1622,10 @@ llama_dart_result completion_grammar(
     grammar_root->assign(
         reinterpret_cast<const char *>(config->grammar_root_data),
         config->grammar_root_size);
+    return LLAMA_DART_SUCCESS;
+  }
+  if (chat_plan != nullptr) {
+    *grammar = chat_plan->grammar;
   }
   return LLAMA_DART_SUCCESS;
 }
@@ -2223,11 +2247,6 @@ llama_dart_result validate_completion_request(
   if (config->chat_plan_data != nullptr && config->chat_plan_size == 0) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "chat plan must not be empty");
-  }
-  if (config->chat_plan_size > 0 &&
-      (config->grammar_size > 0 || config->json_schema_size > 0)) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "chat plan cannot be combined with grammar or JSON schema");
   }
   if (config->chat_plan_size > 0 &&
       (contains_nul(config->chat_plan_data, config->chat_plan_size) ||
@@ -3621,7 +3640,7 @@ llama_dart_result llama_dart_model_create_chat_plan(
     return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
   } catch (const std::exception &error) {
     return fail_parts(LLAMA_DART_ERROR_UNSUPPORTED,
-                      "chat template could not render tools: ", error.what());
+                      "chat template could not create a plan: ", error.what());
   } catch (...) {
     return fail(LLAMA_DART_ERROR_INTERNAL,
                 "unknown chat plan creation failure");

@@ -1,3 +1,17 @@
+## Unreleased
+
+- Added a legacy-first Jinja chat-template fallback for ordinary chat, so
+  models such as Gemma 4 can use their embedded template without changing the
+  established legacy path for other models. The fallback keeps custom GBNF,
+  JSON mode, JSON Schema, template stops, and media ordering intact, and plain
+  fallback output is not forced through the strict tool-output parser.
+- Corrected the pinned Metal backend's `MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS`
+  capability checks to reject source types without compiled kernels, including
+  TQ1_0 and TQ2_0, before scheduling can reach a missing pipeline.
+- Added a multimodal preflight for non-causal media chunks whose physical
+  decode batch would exceed `ubatchSize`, returning a typed generation error
+  instead of reaching an upstream assertion.
+
 ## 0.2.0
 
 - Fixed default bundled-bridge lookup by resolving the native code-asset ID,

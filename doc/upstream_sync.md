@@ -18,6 +18,13 @@ When syncing, export the selected paths from the exact commit, remove upstream
 ignore files, then run the native, Dart, Flutter, and publish checks before
 updating the commit and date above.
 
+The curated snapshot currently carries one package-local backend safety delta:
+Metal `supports_op` uses source-type allowlists matching its compiled
+`MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS` kernels. This prevents missing
+pipelines, notably for TQ1_0/TQ2_0, from being advertised to the scheduler.
+Re-evaluate and preferably drop this delta when the pinned upstream version
+gains those kernels or equivalent fail-closed capability checks.
+
 Current bridge integration uses these public upstream C APIs:
 
 - `llama_backend_init`

@@ -59,6 +59,10 @@ request without adding storage or internet permissions.
 - Paths, MIME types, and media kinds are validated before native processing.
 - Prompt markers come from the pinned `mtmd` runtime and are inserted in
   content-part order before the model chat template is applied.
+- Media chunks that require non-causal attention are checked before decode. If
+  their physical decode batch is larger than the configured `ubatchSize`, the
+  request returns `GenerationException`; raise `ubatchSize` (normally to
+  `batchSize`) or reduce the media token count.
 - A modality unsupported by the loaded mmproj fails with
   `UnsupportedFeatureException`.
 

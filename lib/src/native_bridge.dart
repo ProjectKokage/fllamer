@@ -531,19 +531,58 @@ final class NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
   }) {
     final prepared = _prepareMultimodalChat(messages, _multimodalMarker);
-    if (_requiresChatPlan(prepared.messages, toolCalling)) {
-      return _createChatPlan(
-        model,
-        prepared.messages,
-        toolCalling,
-        addAssistantPrompt: addAssistantPrompt,
-      ).prompt;
-    }
-    return _applyChatTemplate(
+    return _renderPreparedChat(
       model,
       prepared.messages,
       addAssistantPrompt: addAssistantPrompt,
-    );
+      toolCalling: toolCalling,
+    ).prompt;
+  }
+
+  _NativeRenderedChat _renderPreparedChat(
+    ffi.Pointer<llama_dart_model> model,
+    List<ChatMessage> messages, {
+    required bool addAssistantPrompt,
+    required LlamaToolCallingConfig toolCalling,
+    String? grammar,
+    Map<String, Object?>? jsonSchema,
+  }) {
+    if (_requiresChatPlan(messages, toolCalling)) {
+      final plan = _createChatPlan(
+        model,
+        messages,
+        toolCalling,
+        addAssistantPrompt: addAssistantPrompt,
+        grammar: grammar,
+        jsonSchema: jsonSchema,
+        parseOutput: true,
+      );
+      return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
+    }
+
+    try {
+      return _NativeRenderedChat(
+        prompt: _applyChatTemplate(
+          model,
+          messages,
+          addAssistantPrompt: addAssistantPrompt,
+        ),
+      );
+    } on UnsupportedFeatureException {
+      // Keep the plan for its prompt, grammar metadata, and stop strings. Plain
+      // bounded output stays raw because the upstream terminal parser is
+      // strict and can reject an otherwise valid truncated response.
+      final plan = _createChatPlan(
+        model,
+        messages,
+        toolCalling,
+        addAssistantPrompt: addAssistantPrompt,
+        grammar: grammar,
+        jsonSchema: jsonSchema,
+        parseOutput: false,
+      );
+      return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
+    }
   }
 
   LlamaChatTemplateCapabilities _chatTemplateCapabilitiesModel(
@@ -1541,6 +1580,7 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     String? grammar,
     Map<String, Object?>? jsonSchema,
+    required bool parseOutput,
   }) {
     var tools = toolCalling.toJson();
     final String toolChoice;
@@ -1601,6 +1641,7 @@ final class NativeLlamaBridge {
       return _NativeChatPlan(
         json: planJson,
         prompt: decoded['prompt'] as String,
+        parseOutput: parseOutput,
         usedToolCallIds: <String>{
           for (final message in messages) ...<String>{
             for (final call in message.toolCalls)
@@ -2728,12 +2769,21 @@ final class _NativeChatPlan {
   _NativeChatPlan({
     required this.json,
     required this.prompt,
+    required this.parseOutput,
     required Set<String> usedToolCallIds,
   }) : usedToolCallIds = Set<String>.unmodifiable(usedToolCallIds);
 
   final String json;
   final String prompt;
+  final bool parseOutput;
   final Set<String> usedToolCallIds;
+}
+
+final class _NativeRenderedChat {
+  const _NativeRenderedChat({required this.prompt, this.plan});
+
+  final String prompt;
+  final _NativeChatPlan? plan;
 }
 
 final class _NativeMediaInput {
@@ -3006,13 +3056,13 @@ final class _NativeEngineHandles {
     bool manageRequestLoras = true,
   }) {
     final promptBytes = utf8.encode(prompt);
-    final grammarBytes = chatPlan != null || config.grammar == null
+    final grammarBytes = config.grammar == null
         ? const <int>[]
         : utf8.encode(config.grammar!);
     final grammarRootBytes = grammarBytes.isEmpty
         ? const <int>[]
         : utf8.encode(config.grammarRoot);
-    final jsonSchemaBytes = chatPlan != null || config.jsonSchema == null
+    final jsonSchemaBytes = config.jsonSchema == null
         ? const <int>[]
         : utf8.encode(jsonEncode(config.jsonSchema));
     final chatPlanBytes = chatPlan == null
@@ -3211,7 +3261,7 @@ final class _NativeEngineHandles {
           final text = data == ffi.nullptr || size == 0
               ? ''
               : utf8.decode(data.asTypedList(size), allowMalformed: true);
-          final assistantMessage = chatPlan == null
+          final assistantMessage = chatPlan == null || !chatPlan.parseOutput
               ? null
               : bridge._parseChatOutput(chatPlan, text, config.toolCalling);
           return (
@@ -3234,26 +3284,19 @@ final class _NativeEngineHandles {
   ({String text, GenerationTelemetry telemetry, ChatMessage? assistantMessage})
   completeChat(List<ChatMessage> messages, GenerationConfig config) {
     final prepared = _prepareMultimodalChat(messages, bridge._multimodalMarker);
-    final chatPlan = _requiresChatPlan(prepared.messages, config.toolCalling)
-        ? bridge._createChatPlan(
-            model,
-            prepared.messages,
-            config.toolCalling,
-            addAssistantPrompt: true,
-            grammar: config.grammar,
-            jsonSchema: config.jsonSchema,
-          )
-        : null;
+    final rendered = bridge._renderPreparedChat(
+      model,
+      prepared.messages,
+      addAssistantPrompt: true,
+      toolCalling: config.toolCalling,
+      grammar: config.grammar,
+      jsonSchema: config.jsonSchema,
+    );
     return complete(
-      chatPlan?.prompt ??
-          bridge._applyChatTemplate(
-            model,
-            prepared.messages,
-            addAssistantPrompt: true,
-          ),
+      rendered.prompt,
       config,
       media: prepared.media,
-      chatPlan: chatPlan,
+      chatPlan: rendered.plan,
       parseSpecial: true,
     );
   }
@@ -3325,26 +3368,19 @@ final class _NativeEngineHandles {
     GenerationConfig config,
   ) {
     final prepared = _prepareMultimodalChat(messages, bridge._multimodalMarker);
-    final chatPlan = _requiresChatPlan(prepared.messages, config.toolCalling)
-        ? bridge._createChatPlan(
-            model,
-            prepared.messages,
-            config.toolCalling,
-            addAssistantPrompt: true,
-            grammar: config.grammar,
-            jsonSchema: config.jsonSchema,
-          )
-        : null;
+    final rendered = bridge._renderPreparedChat(
+      model,
+      prepared.messages,
+      addAssistantPrompt: true,
+      toolCalling: config.toolCalling,
+      grammar: config.grammar,
+      jsonSchema: config.jsonSchema,
+    );
     return startCompletionStream(
-      chatPlan?.prompt ??
-          bridge._applyChatTemplate(
-            model,
-            prepared.messages,
-            addAssistantPrompt: true,
-          ),
+      rendered.prompt,
       config,
       media: prepared.media,
-      chatPlan: chatPlan,
+      chatPlan: rendered.plan,
       parseSpecial: true,
     );
   }
@@ -3643,7 +3679,7 @@ final class _NativeStreamingGeneration {
       }
       if (isDone) {
         _terminal = true;
-        final assistantMessage = chatPlan == null
+        final assistantMessage = chatPlan == null || !chatPlan!.parseOutput
             ? null
             : bridge._parseChatOutput(
                 chatPlan!,

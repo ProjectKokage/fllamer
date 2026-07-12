@@ -109,7 +109,10 @@ Use smaller quantized models first on phones. Raise context size, batch size,
 ubatch size, batch threads, or GPU layers only after measuring memory,
 sustained decode speed, and thermal behavior on the target device. `ubatchSize`
 must not exceed `batchSize`; raise `batchSize` first when larger physical
-batches are needed.
+batches are needed. Some multimodal projectors use non-causal attention for a
+media chunk and require that chunk's physical decode batch to fit in
+`ubatchSize`; the bridge checks this before decode and reports a generation
+error with an actionable tuning hint.
 
 `LlamaRuntime.currentCapabilities().metal`/`vulkan` report compiled backends.
 `LlamaEngine.contextInfo().gpuBackend` reports the backend selected for the

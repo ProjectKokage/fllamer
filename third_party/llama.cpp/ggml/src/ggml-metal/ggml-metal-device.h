@@ -291,6 +291,8 @@ void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev);
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total);
+bool ggml_metal_supports_mul_mat_type(enum ggml_type type);
+bool ggml_metal_supports_get_rows_type(enum ggml_type type);
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op);
 
 const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev);

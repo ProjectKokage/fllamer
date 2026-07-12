@@ -1048,6 +1048,49 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
     }
 }
 
+// Keep these types in sync with the kernel_mul_{mm,mv}[_id] template
+// instantiations in ggml-metal.metal.  Advertising a type without a matching
+// kernel lets the scheduler send the op to Metal, where pipeline lookup can
+// fail and the encoder would otherwise dereference a null pipeline.
+bool ggml_metal_supports_mul_mat_type(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Keep this list in sync with the kernel_get_rows_* template instantiations in
+// ggml-metal.metal.  In particular, the ternary TQ formats currently have no
+// Metal get-rows kernels.
+bool ggml_metal_supports_get_rows_type(enum ggml_type type) {
+    return type == GGML_TYPE_I32 || ggml_metal_supports_mul_mat_type(type);
+}
+
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op) {
     const bool has_simdgroup_mm        = dev->props.has_simdgroup_mm;
     const bool has_simdgroup_reduction = dev->props.has_simdgroup_reduction;
@@ -1273,9 +1316,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GATED_DELTA_NET:
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
+            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+            return has_simdgroup_reduction && ggml_metal_supports_mul_mat_type(op->src[0]->type);
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
@@ -1335,7 +1379,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
-            return op->src[0]->type != GGML_TYPE_NVFP4;
+            return ggml_metal_supports_get_rows_type(op->src[0]->type);
         case GGML_OP_SET_ROWS:
             {
                 if (op->src[0]->type != GGML_TYPE_F32 && op->src[0]->type != GGML_TYPE_F16) {

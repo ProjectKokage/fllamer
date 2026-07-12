@@ -727,12 +727,26 @@ int main() {
   assert(llama_dart_context_complete(nullptr, &completion_config,
                                      &completion, nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
-  completion_config.chat_plan_data = nullptr;
-  completion_config.chat_plan_size = 0;
+  assert(std::strstr(llama_dart_last_error_message(), "context") != nullptr);
+  assert(std::strstr(llama_dart_last_error_message(), "cannot be combined") ==
+         nullptr);
   completion_config.grammar_data = nullptr;
   completion_config.grammar_size = 0;
   completion_config.grammar_root_data = nullptr;
   completion_config.grammar_root_size = 0;
+  completion_config.json_schema_data =
+      reinterpret_cast<const uint8_t *>(json_schema);
+  completion_config.json_schema_size = std::strlen(json_schema);
+  assert(llama_dart_context_complete(nullptr, &completion_config,
+                                     &completion, nullptr) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(std::strstr(llama_dart_last_error_message(), "context") != nullptr);
+  assert(std::strstr(llama_dart_last_error_message(), "cannot be combined") ==
+         nullptr);
+  completion_config.chat_plan_data = nullptr;
+  completion_config.chat_plan_size = 0;
+  completion_config.json_schema_data = nullptr;
+  completion_config.json_schema_size = 0;
   int32_t stop_token = 1;
   completion_config.stop_token_count = 1;
   assert(llama_dart_context_complete(nullptr, &completion_config,
@@ -1072,6 +1086,63 @@ int main() {
   assert(chat_capabilities.supports_tools == 1);
   assert(chat_capabilities.supports_tool_calls == 1);
   assert(chat_capabilities.supports_parallel_tool_calls == 1);
+
+  prompt = {};
+  assert(llama_dart_model_apply_chat_template(
+             tool_model, &chat_message, 1, 1, &prompt) ==
+         LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(prompt.data == nullptr);
+  assert(prompt.size == 0);
+
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(simple_chat_request),
+             std::strlen(simple_chat_request), &chat_plan) ==
+         LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  assert(chat_plan.size > 0);
+  const std::string plain_gemma4_chat_plan(
+      reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
+  assert(plain_gemma4_chat_plan.find("hello") != std::string::npos);
+  llama_dart_buffer_free(chat_plan.data);
+
+  const char marker_chat_request[] =
+      R"({"messages":[{"role":"user","content":"before<__media__>middle<__media__>after"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(marker_chat_request),
+             std::strlen(marker_chat_request), &chat_plan) ==
+         LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  assert(chat_plan.size > 0);
+  const std::string marker_chat_plan(
+      reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
+  const size_t before_pos = marker_chat_plan.find("before");
+  const size_t first_marker_pos = marker_chat_plan.find("<__media__>");
+  const size_t middle_pos = marker_chat_plan.find("middle");
+  const size_t second_marker_pos = marker_chat_plan.find(
+      "<__media__>", first_marker_pos + 1);
+  const size_t after_pos = marker_chat_plan.find("after");
+  assert(before_pos < first_marker_pos);
+  assert(first_marker_pos < middle_pos);
+  assert(middle_pos < second_marker_pos);
+  assert(second_marker_pos < after_pos);
+  assert(marker_chat_plan.find("lookup") == std::string::npos);
+  llama_dart_buffer_free(chat_plan.data);
+
+  const char simple_chat_request_without_generation_prompt[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":false})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 simple_chat_request_without_generation_prompt),
+             std::strlen(simple_chat_request_without_generation_prompt),
+             &chat_plan) == LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  assert(chat_plan.size > 0);
+  llama_dart_buffer_free(chat_plan.data);
 
   assert(llama_dart_model_create_chat_plan(
              tool_model, reinterpret_cast<const uint8_t *>(tool_chat_request),

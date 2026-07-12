@@ -28,6 +28,10 @@ ordered JSON to the worker isolate, and calls pinned upstream
 `json_schema_to_grammar` before sampler creation. Schema conversion therefore
 does not block the Flutter UI isolate.
 
+The same request-owned grammar or schema remains authoritative when ordinary
+chat has to fall back from the legacy formatter to the model's Jinja chat
+plan. The plan still contributes its generation prefix and stop strings.
+
 The pinned converter supports common object, array, string, numeric, union,
 `const`/`enum`, local `$defs`/`$ref`, and composition constraints. Unsupported
 schemas return `UnsupportedFeatureException`; malformed JSON or conflicting raw
