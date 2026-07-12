@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.1
 
 - Added a legacy-first Jinja chat-template fallback for ordinary chat, so
   models such as Gemma 4 can use their embedded template without changing the
