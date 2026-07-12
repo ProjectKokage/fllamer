@@ -325,6 +325,33 @@ class LlamaDartBridgeBindings {
         )
       >();
 
+  llama_dart_result llama_dart_model_get_chat_template(
+    ffi.Pointer<llama_dart_model> model,
+    ffi.Pointer<llama_dart_buffer> out_template,
+  ) {
+    return llama_dart_result.fromValue(
+      _llama_dart_model_get_chat_template(model, out_template),
+    );
+  }
+
+  late final _llama_dart_model_get_chat_templatePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<llama_dart_model>,
+            ffi.Pointer<llama_dart_buffer>,
+          )
+        >
+      >('llama_dart_model_get_chat_template');
+  late final _llama_dart_model_get_chat_template =
+      _llama_dart_model_get_chat_templatePtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<llama_dart_model>,
+              ffi.Pointer<llama_dart_buffer>,
+            )
+          >();
+
   llama_dart_result llama_dart_model_tokenize(
     ffi.Pointer<llama_dart_model> model,
     ffi.Pointer<ffi.Uint8> text_data,
@@ -1397,6 +1424,11 @@ final class llama_dart_model_load_config extends ffi.Struct {
 
   @ffi.Uint32()
   external int gpu_backend;
+
+  external ffi.Pointer<ffi.Uint8> chat_template_data;
+
+  @ffi.Size()
+  external int chat_template_size;
 }
 
 final class llama_dart_model_info extends ffi.Struct {
@@ -1841,4 +1873,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 36;
+const int LLAMA_DART_ABI_VERSION = 37;

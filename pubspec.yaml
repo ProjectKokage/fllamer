@@ -22,3 +22,14 @@ dev_dependencies:
   ffigen: ^20.1.1
   lints: ^6.0.0
   test: ^1.25.6
+
+# Flutter collects these vendored native notices into its generated NOTICES
+# bundle. This section does not add a Flutter runtime dependency.
+flutter:
+  licenses:
+    - third_party/llama.cpp/LICENSE
+    - third_party/llama.cpp/AUTHORS
+    - third_party/llama.cpp/licenses/LICENSE-jsonhpp
+    - third_party/llama.cpp/licenses/LICENSE-miniaudio
+    - third_party/llama.cpp/licenses/LICENSE-stb
+    - third_party/llama.cpp/vendor/cpp-httplib/LICENSE

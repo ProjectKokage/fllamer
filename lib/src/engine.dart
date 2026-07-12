@@ -180,6 +180,15 @@ abstract final class LlamaModel {
     return NativeLlamaBridge.modelMetadata(config);
   }
 
+  /// Returns the effective explicit or GGUF-provided chat template.
+  ///
+  /// Throws [UnsupportedFeatureException] instead of guessing a fallback when
+  /// the model has no valid template.
+  static Future<String> chatTemplate(LlamaModelConfig config) async {
+    config.validate();
+    return NativeLlamaBridge.chatTemplate(config);
+  }
+
   static Future<String> architecture(LlamaModelConfig config) async {
     final value = (await metadata(config))['general.architecture'];
     if (value == null || value.trim().isEmpty) {
@@ -506,6 +515,7 @@ final class LlamaEngine {
   final LlamaModelConfig config;
   final NativeLlamaEngineSession _native;
   bool _closed = false;
+  Future<void>? _closeFuture;
 
   static Future<LlamaEngine> load(LlamaModelConfig config) async {
     config.validate();
@@ -592,6 +602,26 @@ final class LlamaEngine {
             telemetry: chunk.telemetry,
           ),
         );
+  }
+
+  /// Inspects the already-loaded native model without reopening its path.
+  Future<LlamaModelInfo> modelInfo() async {
+    _ensureOpen();
+    return _native.modelInfo();
+  }
+
+  /// Reads bounded GGUF metadata from the already-loaded native model.
+  Future<Map<String, String>> modelMetadata() async {
+    _ensureOpen();
+    return _native.modelMetadata();
+  }
+
+  /// Returns the loaded model's effective explicit or embedded chat template.
+  ///
+  /// No generic template is guessed when the model does not provide one.
+  Future<String> chatTemplate() async {
+    _ensureOpen();
+    return _native.chatTemplate();
   }
 
   /// Tokenizes [text] with the model already owned by this engine.
@@ -832,17 +862,25 @@ final class LlamaEngine {
     await _native.unloadLora(adapterId);
   }
 
-  Future<void> close() async {
-    if (_closed) {
-      return;
+  Future<void> close() {
+    final existing = _closeFuture;
+    if (existing != null) {
+      return existing;
     }
     _closed = true;
-    await _native.close();
+    final closeFuture = _native.close();
+    _closeFuture = closeFuture;
+    return closeFuture;
   }
 
   void _ensureOpen() {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
+    }
+    if (_native.hasActiveGeneration) {
+      throw const GenerationException(
+        'Another generation is already active on this engine.',
+      );
     }
   }
 }

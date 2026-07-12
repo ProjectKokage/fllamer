@@ -52,6 +52,7 @@ struct llama_dart_lora_adapter;
 
 struct llama_dart_model {
   llama_model *model = nullptr;
+  std::string chat_template_override;
   size_t active_contexts = 0;
   size_t active_lora_adapters = 0;
   uint32_t gpu_backend = LLAMA_DART_GPU_BACKEND_CPU;
@@ -109,6 +110,7 @@ struct llama_dart_generation {
   size_t emitted_size = 0;
   size_t stop_holdback = 0;
   bool done = false;
+  bool terminal_delivered = false;
 };
 
 struct llama_dart_lora_adapter {
@@ -194,6 +196,7 @@ uint32_t continuation_log_level = LLAMA_DART_LOG_INFO;
 constexpr size_t kMaxMediaBytes = 64u * 1024u * 1024u;
 constexpr size_t kMaxMediaInputs = 64u;
 constexpr size_t kMaxStopTokens = 1024u;
+constexpr size_t kMaxChatTemplateBytes = 16u * 1024u * 1024u;
 constexpr size_t kMaxCapturedLogBytes = 1024u * 1024u;
 constexpr size_t kMaxCapturedLogRecords = 4096u;
 constexpr int32_t kMaxModelMetadataScalarSize = 4096;
@@ -424,6 +427,126 @@ bool is_ascii_blank(const uint8_t *data, size_t size) {
     }
   }
   return true;
+}
+
+bool is_valid_utf8(const uint8_t *data, size_t size) {
+  if (data == nullptr) {
+    return size == 0;
+  }
+  size_t offset = 0;
+  while (offset < size) {
+    const uint8_t first = data[offset];
+    if (first <= 0x7f) {
+      offset += 1;
+      continue;
+    }
+
+    size_t length = 0;
+    uint8_t second_min = 0x80;
+    uint8_t second_max = 0xbf;
+    if (first >= 0xc2 && first <= 0xdf) {
+      length = 2;
+    } else if (first == 0xe0) {
+      length = 3;
+      second_min = 0xa0;
+    } else if (first >= 0xe1 && first <= 0xec) {
+      length = 3;
+    } else if (first == 0xed) {
+      length = 3;
+      second_max = 0x9f;
+    } else if (first >= 0xee && first <= 0xef) {
+      length = 3;
+    } else if (first == 0xf0) {
+      length = 4;
+      second_min = 0x90;
+    } else if (first >= 0xf1 && first <= 0xf3) {
+      length = 4;
+    } else if (first == 0xf4) {
+      length = 4;
+      second_max = 0x8f;
+    } else {
+      return false;
+    }
+
+    if (size - offset < length) {
+      return false;
+    }
+    const uint8_t second = data[offset + 1];
+    if (second < second_min || second > second_max) {
+      return false;
+    }
+    for (size_t i = 2; i < length; ++i) {
+      if (data[offset + i] < 0x80 || data[offset + i] > 0xbf) {
+        return false;
+      }
+    }
+    offset += length;
+  }
+  return true;
+}
+
+llama_dart_result require_effective_chat_template(
+    const llama_dart_model *model, const char **out_template,
+    size_t *out_template_size) {
+  if (out_template != nullptr) {
+    *out_template = nullptr;
+  }
+  if (out_template_size != nullptr) {
+    *out_template_size = 0;
+  }
+  if (model == nullptr || model->model == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "model must not be null");
+  }
+
+  const char *chat_template = model->chat_template_override.empty()
+                                  ? llama_model_chat_template(model->model, nullptr)
+                                  : model->chat_template_override.c_str();
+  if (chat_template == nullptr) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "model does not define a chat template");
+  }
+  const size_t chat_template_size = std::strlen(chat_template);
+  if (chat_template_size > kMaxChatTemplateBytes) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "model chat template exceeds the 16 MiB safety limit");
+  }
+  const uint8_t *chat_template_bytes =
+      reinterpret_cast<const uint8_t *>(chat_template);
+  if (chat_template_size == 0 ||
+      is_ascii_blank(chat_template_bytes, chat_template_size)) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "model chat template must not be blank");
+  }
+  if (!is_valid_utf8(chat_template_bytes, chat_template_size)) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "model chat template is not valid UTF-8");
+  }
+
+  if (out_template != nullptr) {
+    *out_template = chat_template;
+  }
+  if (out_template_size != nullptr) {
+    *out_template_size = chat_template_size;
+  }
+  return LLAMA_DART_SUCCESS;
+}
+
+llama_dart_result initialize_effective_chat_templates(
+    const llama_dart_model *model, common_chat_templates_ptr *out_templates) {
+  const llama_dart_result selected =
+      require_effective_chat_template(model, nullptr, nullptr);
+  if (selected != LLAMA_DART_SUCCESS) {
+    return selected;
+  }
+  *out_templates = common_chat_templates_init(
+      model->model, model->chat_template_override.empty()
+                        ? ""
+                        : model->chat_template_override);
+  if (*out_templates == nullptr) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "model chat template is not available");
+  }
+  return LLAMA_DART_SUCCESS;
 }
 
 void clear_char_buffer(char *buffer, size_t size) {
@@ -2688,6 +2811,36 @@ llama_dart_result llama_dart_model_load(
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "model path must not contain line breaks");
   }
+  if (config->chat_template_data == nullptr &&
+      config->chat_template_size > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat_template_data must not be null when chat_template_size "
+                "is positive");
+  }
+  if (config->chat_template_data != nullptr &&
+      config->chat_template_size == 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat template override must not be empty");
+  }
+  if (config->chat_template_size > kMaxChatTemplateBytes) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat template override exceeds the 16 MiB safety limit");
+  }
+  if (config->chat_template_size > 0 &&
+      is_ascii_blank(config->chat_template_data,
+                     config->chat_template_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat template override must not be blank");
+  }
+  if (contains_nul(config->chat_template_data, config->chat_template_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat template override must not contain NUL");
+  }
+  if (!is_valid_utf8(config->chat_template_data,
+                     config->chat_template_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat template override is not valid UTF-8");
+  }
 
   try {
     const llama_dart_result retained = backend_retain();
@@ -2698,9 +2851,16 @@ llama_dart_result llama_dart_model_load(
     const std::string path(
         reinterpret_cast<const char *>(config->model_path_data),
         config->model_path_size);
+    std::string chat_template_override;
+    if (config->chat_template_size > 0) {
+      chat_template_override.assign(
+          reinterpret_cast<const char *>(config->chat_template_data),
+          config->chat_template_size);
+    }
 
     std::unique_ptr<llama_dart_model> handle =
         std::make_unique<llama_dart_model>();
+    handle->chat_template_override = std::move(chat_template_override);
     llama_model_params params = llama_model_default_params();
     std::vector<ggml_backend_dev_t> devices;
     uint32_t effective_backend = LLAMA_DART_GPU_BACKEND_CPU;
@@ -3011,6 +3171,41 @@ llama_dart_result llama_dart_model_metadata_get(
   return LLAMA_DART_SUCCESS;
 }
 
+llama_dart_result llama_dart_model_get_chat_template(
+    const llama_dart_model *model, llama_dart_buffer *out_template) {
+  if (out_template == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_template must not be null");
+  }
+  out_template->data = nullptr;
+  out_template->size = 0;
+
+  const char *chat_template = nullptr;
+  size_t chat_template_size = 0;
+  const llama_dart_result selected = require_effective_chat_template(
+      model, &chat_template, &chat_template_size);
+  if (selected != LLAMA_DART_SUCCESS) {
+    return selected;
+  }
+
+  try {
+    const std::string value(chat_template, chat_template_size);
+    const llama_dart_result copied = copy_to_buffer(value, out_template);
+    if (copied != LLAMA_DART_SUCCESS) {
+      return copied;
+    }
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat template copy failure");
+  }
+}
+
 llama_dart_result llama_dart_model_tokenize(
     const llama_dart_model *model, const uint8_t *text_data, size_t text_size,
     int32_t *tokens, size_t tokens_capacity, size_t *out_token_count,
@@ -3222,7 +3417,12 @@ llama_dart_result llama_dart_model_apply_chat_template(
                                         contents.back().c_str()});
     }
 
-    const char *tmpl = llama_model_chat_template(model->model, nullptr);
+    const char *tmpl = nullptr;
+    const llama_dart_result selected =
+        require_effective_chat_template(model, &tmpl, nullptr);
+    if (selected != LLAMA_DART_SUCCESS) {
+      return selected;
+    }
     int32_t size = llama_chat_apply_template(
         tmpl, chat.data(), chat.size(), add_assistant_prompt != 0, nullptr, 0);
     if (size < 0) {
@@ -3278,11 +3478,11 @@ llama_dart_result llama_dart_model_get_chat_template_capabilities(
   }
 
   try {
-    common_chat_templates_ptr templates =
-        common_chat_templates_init(model->model, "");
-    if (templates == nullptr) {
-      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                  "model chat template is not available");
+    common_chat_templates_ptr templates;
+    const llama_dart_result initialized =
+        initialize_effective_chat_templates(model, &templates);
+    if (initialized != LLAMA_DART_SUCCESS) {
+      return initialized;
     }
     const std::map<std::string, bool> caps =
         common_chat_templates_get_caps(templates.get());
@@ -3378,11 +3578,11 @@ llama_dart_result llama_dart_model_create_chat_plan(
   }
 
   try {
-    common_chat_templates_ptr templates =
-        common_chat_templates_init(model->model, "");
-    if (templates == nullptr) {
-      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                  "model chat template is not available");
+    common_chat_templates_ptr templates;
+    const llama_dart_result initialized =
+        initialize_effective_chat_templates(model, &templates);
+    if (initialized != LLAMA_DART_SUCCESS) {
+      return initialized;
     }
     const std::map<std::string, bool> caps =
         common_chat_templates_get_caps(templates.get());
@@ -5079,6 +5279,7 @@ llama_dart_result llama_dart_generation_next(
       out_stats->speculative_draft_ms = generation->speculative_draft_ms;
       out_stats->speculative_verify_ms = generation->speculative_verify_ms;
     }
+    generation->terminal_delivered = generation->done;
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   } catch (const std::bad_alloc &) {
@@ -5094,16 +5295,24 @@ void llama_dart_generation_free(llama_dart_generation *generation) {
   if (generation == nullptr) {
     return;
   }
+  llama_dart_context *context = generation->context;
+  const bool reset_incomplete = !generation->terminal_delivered;
   if (generation->sampler != nullptr) {
     llama_sampler_free(generation->sampler);
   }
-  if (generation->context != nullptr &&
-      generation->context->active_generations > 0) {
-    generation->context->cancel_requested.store(false,
-                                                std::memory_order_relaxed);
-    generation->context->active_generations -= 1;
+  if (context != nullptr && context->active_generations > 0) {
+    context->active_generations -= 1;
   }
   delete generation;
+
+  if (context != nullptr && reset_incomplete &&
+      context->active_generations == 0) {
+    if (llama_dart_context_reset(context) != LLAMA_DART_SUCCESS) {
+      return;
+    }
+  } else if (context != nullptr) {
+    context->cancel_requested.store(false, std::memory_order_relaxed);
+  }
   last_error.clear();
 }
 

@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 36u
+#define LLAMA_DART_ABI_VERSION 37u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -137,6 +137,8 @@ typedef struct llama_dart_model_load_config {
   uint8_t use_mlock;
   uint8_t check_tensors;
   uint32_t gpu_backend;
+  const uint8_t *chat_template_data;
+  size_t chat_template_size;
 } llama_dart_model_load_config;
 
 typedef struct llama_dart_model_info {
@@ -372,6 +374,10 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_metadata_get(
     size_t key_buffer_size, size_t *out_key_size, char *value_buffer,
     size_t value_buffer_size, size_t *out_value_size);
 
+/* Copies the caller override or model-provided default chat template. */
+LLAMA_DART_EXPORT llama_dart_result llama_dart_model_get_chat_template(
+    const llama_dart_model *model, llama_dart_buffer *out_template);
+
 LLAMA_DART_EXPORT llama_dart_result llama_dart_model_tokenize(
     const llama_dart_model *model, const uint8_t *text_data, size_t text_size,
     int32_t *tokens, size_t tokens_capacity, size_t *out_token_count,
@@ -457,7 +463,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
     llama_dart_generation *generation, llama_dart_buffer *out_text,
     llama_dart_completion_stats *out_stats, uint8_t *out_done);
 
-/* Releases a generation returned by llama_dart_generation_start. */
+/* Releases a generation returned by llama_dart_generation_start. If the
+ * generation has not reached a terminal step, its context is reset so partial
+ * prompt/decode state cannot leak into the next request. */
 LLAMA_DART_EXPORT void
 llama_dart_generation_free(llama_dart_generation *generation);
 

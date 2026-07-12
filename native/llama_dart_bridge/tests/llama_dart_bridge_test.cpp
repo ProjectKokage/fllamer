@@ -288,6 +288,46 @@ int main() {
   assert(llama_dart_model_load(&invalid_model_config, &model) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(model == nullptr);
+  const uint8_t chat_template_byte[] = {'x'};
+  invalid_model_config = config;
+  invalid_model_config.chat_template_size = sizeof(chat_template_byte);
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
+  invalid_model_config = config;
+  invalid_model_config.chat_template_data = chat_template_byte;
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
+  const uint8_t blank_chat_template[] = {' ', '\t', '\n'};
+  invalid_model_config = config;
+  invalid_model_config.chat_template_data = blank_chat_template;
+  invalid_model_config.chat_template_size = sizeof(blank_chat_template);
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
+  const uint8_t nul_chat_template[] = {'x', '\0', 'y'};
+  invalid_model_config = config;
+  invalid_model_config.chat_template_data = nul_chat_template;
+  invalid_model_config.chat_template_size = sizeof(nul_chat_template);
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
+  const uint8_t invalid_utf8_chat_template[] = {0xf0, 0x28, 0x8c, 0x28};
+  invalid_model_config = config;
+  invalid_model_config.chat_template_data = invalid_utf8_chat_template;
+  invalid_model_config.chat_template_size =
+      sizeof(invalid_utf8_chat_template);
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
+  invalid_model_config = config;
+  invalid_model_config.chat_template_data = chat_template_byte;
+  invalid_model_config.chat_template_size =
+      std::numeric_limits<size_t>::max();
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
   invalid_model_config = config;
   invalid_model_config.use_mmap = 2;
   assert(llama_dart_model_load(&invalid_model_config, &model) ==
@@ -434,6 +474,15 @@ int main() {
   assert(stale_adapter == nullptr);
   llama_dart_buffer stale_buffer{
       reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1)), 123};
+  assert(llama_dart_model_get_chat_template(nullptr, &stale_buffer) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stale_buffer.data == nullptr);
+  assert(stale_buffer.size == 0);
+  assert(llama_dart_model_get_chat_template(nullptr, nullptr) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  stale_buffer.data =
+      reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1));
+  stale_buffer.size = 123;
   assert(llama_dart_model_apply_chat_template(nullptr, nullptr, 0, 0,
                                               &stale_buffer) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
@@ -752,8 +801,61 @@ int main() {
   fixture_config.use_mlock = 0;
   fixture_config.check_tensors = 1;
 
+  llama_dart_model *template_less_model = nullptr;
+  assert(llama_dart_model_load(&fixture_config, &template_less_model) ==
+         LLAMA_DART_SUCCESS);
+  assert(template_less_model != nullptr);
+  llama_dart_buffer missing_template{};
+  assert(llama_dart_model_get_chat_template(template_less_model,
+                                            &missing_template) ==
+         LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(missing_template.data == nullptr);
+  assert(missing_template.size == 0);
+  const uint8_t missing_template_text[] = {'h', 'e', 'l', 'l', 'o'};
+  const uint8_t missing_template_role[] = {'u', 's', 'e', 'r'};
+  llama_dart_chat_message missing_template_message{};
+  missing_template_message.struct_size = sizeof(missing_template_message);
+  missing_template_message.role_data = missing_template_role;
+  missing_template_message.role_size = sizeof(missing_template_role);
+  missing_template_message.content_data = missing_template_text;
+  missing_template_message.content_size = sizeof(missing_template_text);
+  assert(llama_dart_model_apply_chat_template(
+             template_less_model, &missing_template_message, 1, 1,
+             &missing_template) == LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(missing_template.data == nullptr);
+  assert(missing_template.size == 0);
+  llama_dart_chat_template_capabilities missing_template_capabilities{};
+  missing_template_capabilities.struct_size =
+      sizeof(missing_template_capabilities);
+  assert(llama_dart_model_get_chat_template_capabilities(
+             template_less_model, &missing_template_capabilities) ==
+         LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(missing_template_capabilities.supports_tools == 0);
+  assert(missing_template_capabilities.supports_tool_calls == 0);
+  assert(missing_template_capabilities.supports_parallel_tool_calls == 0);
+  const char missing_template_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true})";
+  assert(llama_dart_model_create_chat_plan(
+             template_less_model,
+             reinterpret_cast<const uint8_t *>(missing_template_request),
+             std::strlen(missing_template_request), &missing_template) ==
+         LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(missing_template.data == nullptr);
+  assert(missing_template.size == 0);
+  llama_dart_model_free(template_less_model);
+
+  const uint8_t explicit_chat_template[] = {'c', 'h', 'a', 't', 'm', 'l'};
+  fixture_config.chat_template_data = explicit_chat_template;
+  fixture_config.chat_template_size = sizeof(explicit_chat_template);
   assert(llama_dart_model_load(&fixture_config, &model) == LLAMA_DART_SUCCESS);
   assert(model != nullptr);
+  llama_dart_buffer effective_template{};
+  assert(llama_dart_model_get_chat_template(model, &effective_template) ==
+         LLAMA_DART_SUCCESS);
+  assert(effective_template.size == sizeof(explicit_chat_template));
+  assert(std::memcmp(effective_template.data, explicit_chat_template,
+                     sizeof(explicit_chat_template)) == 0);
+  llama_dart_buffer_free(effective_template.data);
 
   llama_dart_model_info info{};
   info.struct_size = sizeof(info);
@@ -951,10 +1053,18 @@ int main() {
   tool_fixture_config.model_path_data =
       reinterpret_cast<const uint8_t *>(tool_fixture_model_path);
   tool_fixture_config.model_path_size = std::strlen(tool_fixture_model_path);
+  tool_fixture_config.chat_template_data = nullptr;
+  tool_fixture_config.chat_template_size = 0;
   llama_dart_model *tool_model = nullptr;
   assert(llama_dart_model_load(&tool_fixture_config, &tool_model) ==
          LLAMA_DART_SUCCESS);
   assert(tool_model != nullptr);
+  effective_template = {};
+  assert(llama_dart_model_get_chat_template(tool_model, &effective_template) ==
+         LLAMA_DART_SUCCESS);
+  assert(effective_template.data != nullptr);
+  assert(effective_template.size > 0);
+  llama_dart_buffer_free(effective_template.data);
   chat_capabilities = {};
   chat_capabilities.struct_size = sizeof(chat_capabilities);
   assert(llama_dart_model_get_chat_template_capabilities(
@@ -1569,6 +1679,11 @@ int main() {
              LLAMA_DART_ERROR_INVALID_ARGUMENT);
       llama_dart_generation_free(generation);
       assert(std::strlen(llama_dart_last_error_message()) == 0);
+      context_info = {};
+      context_info.struct_size = sizeof(context_info);
+      assert(llama_dart_context_get_info(context, &context_info) ==
+             LLAMA_DART_SUCCESS);
+      assert(context_info.used_tokens == 0);
       generation = nullptr;
       llama_dart_generation *next_generation = nullptr;
       const llama_dart_result next_generation_result =

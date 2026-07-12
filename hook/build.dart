@@ -7,6 +7,7 @@ const _libraryName = 'llama_dart_bridge';
 const _assetName = 'llama_dart_bridge';
 const _cmakeBuildType = 'RelWithDebInfo';
 const minimumIosVersion = 15;
+const maximumDefaultBuildJobs = 4;
 
 Future<void> main(List<String> args) async {
   await build(args, (input, output) async {
@@ -43,6 +44,7 @@ Future<void> main(List<String> args) async {
       '--target',
       _libraryName,
       '--parallel',
+      '${cmakeBuildParallelism()}',
     ]);
 
     final builtFile = await builtLibraryForCmakeOutput(buildDir, outputName);
@@ -154,14 +156,29 @@ String androidAbiForNativeAssetsBuild(Architecture architecture) {
 }
 
 String iosDeploymentTargetForNativeAssetsBuild(int targetVersion) {
-  if (targetVersion < minimumIosVersion) {
-    throw BuildError(
-      message:
-          'iOS $minimumIosVersion.0 or newer is required because the bundled '
-          'Metal backend uses APIs introduced in iOS $minimumIosVersion.0.',
-    );
+  final effectiveVersion = targetVersion < minimumIosVersion
+      ? minimumIosVersion
+      : targetVersion;
+  return '$effectiveVersion.0';
+}
+
+int cmakeBuildParallelism({
+  Map<String, String>? environment,
+  int? processorCount,
+}) {
+  final configured = int.tryParse(
+    (environment ?? Platform.environment)['FLLAMER_BUILD_JOBS'] ?? '',
+  );
+  if (configured != null && configured > 0) {
+    return configured;
   }
-  return '$targetVersion.0';
+  final available = processorCount ?? Platform.numberOfProcessors;
+  if (available <= 0) {
+    return 1;
+  }
+  return available > maximumDefaultBuildJobs
+      ? maximumDefaultBuildJobs
+      : available;
 }
 
 String _appleArch(Architecture architecture) {
@@ -342,14 +359,12 @@ bool _isCmakeConfigurationOutput(String path, String configuration) {
 }
 
 Future<void> _run(String executable, List<String> args) async {
-  final result = await Process.run(executable, args);
-  if (result.exitCode != 0) {
-    throw BuildError(
-      message: [
-        'Command failed: $executable ${args.join(' ')}',
-        if ((result.stdout as String).isNotEmpty) result.stdout as String,
-        if ((result.stderr as String).isNotEmpty) result.stderr as String,
-      ].join('\n'),
-    );
+  final process = await Process.start(executable, args);
+  final output = stdout.addStream(process.stdout);
+  final errors = stderr.addStream(process.stderr);
+  final exitCode = await process.exitCode;
+  await Future.wait<void>([output, errors]);
+  if (exitCode != 0) {
+    throw BuildError(message: 'Command failed: $executable ${args.join(' ')}');
   }
 }

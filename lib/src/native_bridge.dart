@@ -11,12 +11,14 @@ import 'package:ffi/ffi.dart';
 import 'config.dart';
 import 'errors.dart';
 import 'ffi/generated_bindings.dart';
+import 'ffi/native_asset_lookup.dart';
 import 'model_info.dart';
 
 const _addSpecialNever = 0;
 const _addSpecialAlways = 1;
 const _addSpecialIfContextEmpty = 2;
 const _maxModelDescriptionBytes = 1024 * 1024;
+const _maxChatTemplateBytes = 16 * 1024 * 1024;
 const _maxModelMetadataEntries = 65536;
 const _maxModelMetadataKeyBytes = 4096;
 const _maxModelMetadataValueBytes = 16 * 1024 * 1024;
@@ -40,9 +42,7 @@ final class NativeLlamaBridge {
     }
 
     try {
-      final bridge = NativeLlamaBridge._(
-        LlamaDartBridgeBindings(_openLibrary(nativeLibraryPath)),
-      );
+      final bridge = NativeLlamaBridge._(_openBindings(nativeLibraryPath));
       bridge._ensureAbiVersion();
       return bridge;
     } on ArgumentError {
@@ -58,6 +58,10 @@ final class NativeLlamaBridge {
 
   static Future<Map<String, String>> modelMetadata(LlamaModelConfig config) {
     return Isolate.run(() => _modelMetadataInWorker(config));
+  }
+
+  static Future<String> chatTemplate(LlamaModelConfig config) {
+    return Isolate.run(() => _chatTemplateInWorker(config));
   }
 
   static Future<List<int>> tokenize(
@@ -365,6 +369,10 @@ final class NativeLlamaBridge {
     return _withLoadedModel(config, _readModelMetadata);
   }
 
+  String _chatTemplateModel(LlamaModelConfig config) {
+    return _withLoadedModel(config, _readChatTemplate);
+  }
+
   List<int> _tokenizeModel(
     LlamaModelConfig config,
     String text, {
@@ -606,13 +614,23 @@ final class NativeLlamaBridge {
     bool vocabOnly = true,
   }) {
     final modelPath = utf8.encode(config.modelPath);
+    final chatTemplate = config.chatTemplate == null
+        ? const <int>[]
+        : utf8.encode(config.chatTemplate!);
     final pathPointer = calloc<ffi.Uint8>(modelPath.length);
+    ffi.Pointer<ffi.Uint8> chatTemplatePointer = ffi.nullptr;
     final loadConfig = calloc<llama_dart_model_load_config>();
     final outModel = calloc<ffi.Pointer<llama_dart_model>>();
 
     ffi.Pointer<llama_dart_model> model = ffi.nullptr;
     try {
       pathPointer.asTypedList(modelPath.length).setAll(0, modelPath);
+      if (chatTemplate.isNotEmpty) {
+        chatTemplatePointer = calloc<ffi.Uint8>(chatTemplate.length);
+        chatTemplatePointer
+            .asTypedList(chatTemplate.length)
+            .setAll(0, chatTemplate);
+      }
 
       loadConfig.ref
         ..struct_size = ffi.sizeOf<llama_dart_model_load_config>()
@@ -623,7 +641,9 @@ final class NativeLlamaBridge {
         ..use_mmap = config.useMmap ? 1 : 0
         ..use_mlock = config.useMlock ? 1 : 0
         ..check_tensors = config.checkTensors ? 1 : 0
-        ..gpu_backend = _gpuBackend(config);
+        ..gpu_backend = _gpuBackend(config)
+        ..chat_template_data = chatTemplatePointer
+        ..chat_template_size = chatTemplate.length;
 
       _check(_bindings.llama_dart_model_load(loadConfig, outModel));
       model = outModel.value;
@@ -638,6 +658,9 @@ final class NativeLlamaBridge {
       }
       calloc.free(outModel);
       calloc.free(loadConfig);
+      if (chatTemplatePointer != ffi.nullptr) {
+        calloc.free(chatTemplatePointer);
+      }
       calloc.free(pathPointer);
     }
   }
@@ -649,6 +672,7 @@ final class NativeLlamaBridge {
       _check(_bindings.llama_dart_model_get_info(model, info));
       return LlamaModelInfo(
         description: _readDescription(model),
+        chatTemplate: _tryReadChatTemplate(model),
         vocabType: info.ref.vocab_type,
         vocabSize: info.ref.n_vocab,
         trainingContextSize: info.ref.n_ctx_train,
@@ -713,6 +737,44 @@ final class NativeLlamaBridge {
         calloc.free(outSize);
         calloc.free(buffer);
       }
+    }
+  }
+
+  String _readChatTemplate(ffi.Pointer<llama_dart_model> model) {
+    final out = calloc<llama_dart_buffer>();
+    try {
+      _check(_bindings.llama_dart_model_get_chat_template(model, out));
+      final data = out.ref.data;
+      final size = out.ref.size;
+      if (data == ffi.nullptr || size == 0) {
+        throw const NativeBridgeException(
+          'Native bridge returned an empty chat template.',
+        );
+      }
+      if (size > _maxChatTemplateBytes) {
+        throw const UnsupportedFeatureException(
+          'Model chat template exceeds the 16 MiB safety limit.',
+        );
+      }
+      try {
+        return utf8.decode(data.asTypedList(size));
+      } on FormatException catch (error) {
+        throw UnsupportedFeatureException(
+          'Model chat template is not valid UTF-8.',
+          cause: error,
+        );
+      }
+    } finally {
+      _bindings.llama_dart_buffer_free(out.ref.data);
+      calloc.free(out);
+    }
+  }
+
+  String? _tryReadChatTemplate(ffi.Pointer<llama_dart_model> model) {
+    try {
+      return _readChatTemplate(model);
+    } on UnsupportedFeatureException {
+      return null;
     }
   }
 
@@ -912,6 +974,14 @@ final class NativeLlamaBridge {
     return bridge._modelMetadata(config);
   }
 
+  static String _chatTemplateInWorker(LlamaModelConfig config) {
+    final bridge = tryOpen(config.nativeLibraryPath);
+    if (bridge == null) {
+      throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    }
+    return bridge._chatTemplateModel(config);
+  }
+
   static List<int> _tokenizeInWorker(
     LlamaModelConfig config,
     String text, {
@@ -1099,24 +1169,17 @@ final class NativeLlamaBridge {
     }
   }
 
-  static ffi.DynamicLibrary _openLibrary(String? nativeLibraryPath) {
+  static LlamaDartBridgeBindings _openBindings(String? nativeLibraryPath) {
     final explicitPath = nativeLibraryPath;
     if (explicitPath != null && explicitPath.trim().isNotEmpty) {
-      return ffi.DynamicLibrary.open(explicitPath);
+      return LlamaDartBridgeBindings(ffi.DynamicLibrary.open(explicitPath));
     }
 
     final envPath = nativeLibraryPathFromEnvironment(Platform.environment);
     if (envPath != null) {
-      return ffi.DynamicLibrary.open(envPath);
+      return LlamaDartBridgeBindings(ffi.DynamicLibrary.open(envPath));
     }
-
-    if (Platform.isMacOS || Platform.isIOS) {
-      return ffi.DynamicLibrary.open('libllama_dart_bridge.dylib');
-    }
-    if (Platform.isWindows) {
-      return ffi.DynamicLibrary.open('llama_dart_bridge.dll');
-    }
-    return ffi.DynamicLibrary.open('libllama_dart_bridge.so');
+    return LlamaDartBridgeBindings.fromLookup(lookupLlamaDartNativeAssetSymbol);
   }
 
   static void _validateLibraryPathText(String path, String name) {
@@ -1137,6 +1200,9 @@ final class NativeLlamaBridge {
     EmbeddingPooling pooling = EmbeddingPooling.model,
   }) {
     final modelPath = utf8.encode(config.modelPath);
+    final chatTemplate = config.chatTemplate == null
+        ? const <int>[]
+        : utf8.encode(config.chatTemplate!);
     final mmprojPath = config.mmprojPath == null
         ? const <int>[]
         : utf8.encode(config.mmprojPath!);
@@ -1144,6 +1210,7 @@ final class NativeLlamaBridge {
         ? const <int>[]
         : utf8.encode(_speculativeModelPath(config) ?? '');
     final pathPointer = calloc<ffi.Uint8>(modelPath.length);
+    ffi.Pointer<ffi.Uint8> chatTemplatePointer = ffi.nullptr;
     ffi.Pointer<ffi.Uint8> mmprojPathPointer = ffi.nullptr;
     ffi.Pointer<ffi.Uint8> speculativeModelPathPointer = ffi.nullptr;
     final loadConfig = calloc<llama_dart_model_load_config>();
@@ -1155,6 +1222,12 @@ final class NativeLlamaBridge {
     ffi.Pointer<llama_dart_context> context = ffi.nullptr;
     try {
       pathPointer.asTypedList(modelPath.length).setAll(0, modelPath);
+      if (chatTemplate.isNotEmpty) {
+        chatTemplatePointer = calloc<ffi.Uint8>(chatTemplate.length);
+        chatTemplatePointer
+            .asTypedList(chatTemplate.length)
+            .setAll(0, chatTemplate);
+      }
       if (mmprojPath.isNotEmpty) {
         mmprojPathPointer = calloc<ffi.Uint8>(mmprojPath.length);
         mmprojPathPointer.asTypedList(mmprojPath.length).setAll(0, mmprojPath);
@@ -1176,7 +1249,9 @@ final class NativeLlamaBridge {
         ..use_mmap = config.useMmap ? 1 : 0
         ..use_mlock = config.useMlock ? 1 : 0
         ..check_tensors = config.checkTensors ? 1 : 0
-        ..gpu_backend = _gpuBackend(config);
+        ..gpu_backend = _gpuBackend(config)
+        ..chat_template_data = chatTemplatePointer
+        ..chat_template_size = chatTemplate.length;
 
       _check(_bindings.llama_dart_model_load(loadConfig, outModel));
       model = outModel.value;
@@ -1239,6 +1314,9 @@ final class NativeLlamaBridge {
       calloc.free(contextConfig);
       calloc.free(outModel);
       calloc.free(loadConfig);
+      if (chatTemplatePointer != ffi.nullptr) {
+        calloc.free(chatTemplatePointer);
+      }
       if (mmprojPathPointer != ffi.nullptr) {
         calloc.free(mmprojPathPointer);
       }
@@ -1836,7 +1914,10 @@ final class NativeLlamaEngineSession {
   final _EngineWorkerLifecycle _lifecycle;
   final Object _finalizerDetach = Object();
   int _nextStreamId = 1;
+  int? _activeStreamId;
   bool _closed = false;
+
+  bool get hasActiveGeneration => _activeStreamId != null;
 
   Future<
     ({
@@ -1950,6 +2031,14 @@ final class NativeLlamaEngineSession {
     var paused = false;
     var waitingForWorker = false;
     var terminalResponseReceived = false;
+    var slotClaimed = false;
+
+    void releaseSlot() {
+      if (slotClaimed && _activeStreamId == streamId) {
+        _activeStreamId = null;
+      }
+      slotClaimed = false;
+    }
 
     void stopLifecycleListening() {
       final subscription = lifecycleSubscription;
@@ -1967,6 +2056,7 @@ final class NativeLlamaEngineSession {
       waitingForWorker = false;
       reply?.close();
       stopLifecycleListening();
+      releaseSlot();
       if (!controller.isClosed) {
         controller.addError(failure.error.toException());
         unawaited(controller.close());
@@ -2003,22 +2093,35 @@ final class NativeLlamaEngineSession {
               controller.close();
               return;
             }
-            streamId = _nextStreamId;
-            _nextStreamId += 1;
-            reply = ReceivePort();
-            lifecycleSubscription = _lifecycle.failures.listen(
-              handleWorkerFailure,
-            );
             final existingFailure = _lifecycle.failure;
             if (existingFailure != null) {
               handleWorkerFailure(existingFailure);
               return;
             }
+            if (_activeStreamId != null) {
+              terminalResponseReceived = true;
+              controller.addError(
+                const GenerationException(
+                  'Another generation is already active on this engine.',
+                ),
+              );
+              controller.close();
+              return;
+            }
+            streamId = _nextStreamId;
+            _nextStreamId += 1;
+            _activeStreamId = streamId;
+            slotClaimed = true;
+            reply = ReceivePort();
+            lifecycleSubscription = _lifecycle.failures.listen(
+              handleWorkerFailure,
+            );
             reply!.listen((message) {
               waitingForWorker = false;
               if (message is _EngineWorkerStreamChunk) {
                 if (message.isDone) {
                   terminalResponseReceived = true;
+                  releaseSlot();
                 }
                 if (!controller.isClosed &&
                     (message.text.isNotEmpty || message.isDone)) {
@@ -2042,6 +2145,7 @@ final class NativeLlamaEngineSession {
                 terminalResponseReceived = true;
                 reply?.close();
                 stopLifecycleListening();
+                releaseSlot();
                 if (!controller.isClosed) {
                   controller.addError(message.error.toException());
                   controller.close();
@@ -2050,6 +2154,7 @@ final class NativeLlamaEngineSession {
                 terminalResponseReceived = true;
                 reply?.close();
                 stopLifecycleListening();
+                releaseSlot();
                 if (!controller.isClosed) {
                   controller.addError(
                     NativeBridgeException(
@@ -2070,16 +2175,47 @@ final class NativeLlamaEngineSession {
             paused = false;
             requestNext();
           },
-          onCancel: () {
-            if (!terminalResponseReceived) {
-              requestCancel();
-              terminalResponseReceived = true;
-              if (streamId != 0) {
-                _commands.send(_EngineWorkerStreamDispose(streamId));
-              }
+          onCancel: () async {
+            if (terminalResponseReceived || !slotClaimed || streamId == 0) {
+              reply?.close();
+              stopLifecycleListening();
+              return;
             }
+
+            terminalResponseReceived = true;
+            waitingForWorker = false;
             reply?.close();
             stopLifecycleListening();
+
+            (Object, StackTrace)? cancellationFailure;
+            try {
+              requestCancel();
+            } catch (error, stackTrace) {
+              cancellationFailure = (error, stackTrace);
+            }
+
+            final disposeReply = ReceivePort();
+            try {
+              _commands.send(
+                _EngineWorkerStreamDispose(streamId, disposeReply.sendPort),
+              );
+              final message = await _lifecycle.receive(disposeReply);
+              if (message is _EngineWorkerFailure) {
+                throw message.error.toException();
+              }
+              if (message != null) {
+                throw NativeBridgeException(
+                  'Unexpected engine worker stream-dispose response: $message',
+                );
+              }
+            } finally {
+              releaseSlot();
+            }
+
+            final failure = cancellationFailure;
+            if (failure != null) {
+              Error.throwWithStackTrace(failure.$1, failure.$2);
+            }
           },
         );
     return controller.stream;
@@ -2110,6 +2246,54 @@ final class NativeLlamaEngineSession {
     final message = await _lifecycle.receive(reply);
     if (message == null) {
       return;
+    }
+    if (message is _EngineWorkerFailure) {
+      throw message.error.toException();
+    }
+    throw NativeBridgeException('Unexpected engine worker response: $message');
+  }
+
+  Future<LlamaModelInfo> modelInfo() async {
+    if (_closed) {
+      throw const ResourceDisposedException('LlamaEngine is closed.');
+    }
+    final reply = ReceivePort();
+    _commands.send(_EngineWorkerModelInfo(reply.sendPort));
+    final message = await _lifecycle.receive(reply);
+    if (message is LlamaModelInfo) {
+      return message;
+    }
+    if (message is _EngineWorkerFailure) {
+      throw message.error.toException();
+    }
+    throw NativeBridgeException('Unexpected engine worker response: $message');
+  }
+
+  Future<Map<String, String>> modelMetadata() async {
+    if (_closed) {
+      throw const ResourceDisposedException('LlamaEngine is closed.');
+    }
+    final reply = ReceivePort();
+    _commands.send(_EngineWorkerModelMetadata(reply.sendPort));
+    final message = await _lifecycle.receive(reply);
+    if (message is Map<String, String>) {
+      return Map<String, String>.unmodifiable(message);
+    }
+    if (message is _EngineWorkerFailure) {
+      throw message.error.toException();
+    }
+    throw NativeBridgeException('Unexpected engine worker response: $message');
+  }
+
+  Future<String> chatTemplate() async {
+    if (_closed) {
+      throw const ResourceDisposedException('LlamaEngine is closed.');
+    }
+    final reply = ReceivePort();
+    _commands.send(_EngineWorkerChatTemplate(reply.sendPort));
+    final message = await _lifecycle.receive(reply);
+    if (message is String) {
+      return message;
     }
     if (message is _EngineWorkerFailure) {
       throw message.error.toException();
@@ -2604,6 +2788,12 @@ final class _NativeEngineHandles {
   void warmUp() {
     bridge._check(bridge._bindings.llama_dart_context_warm_up(context));
   }
+
+  LlamaModelInfo modelInfo() => bridge._readModelInfo(model);
+
+  Map<String, String> modelMetadata() => bridge._readModelMetadata(model);
+
+  String chatTemplate() => bridge._readChatTemplate(model);
 
   List<int> tokenize(
     String text, {
@@ -3582,6 +3772,24 @@ final class _EngineWorkerWarmUp {
   final SendPort reply;
 }
 
+final class _EngineWorkerModelInfo {
+  const _EngineWorkerModelInfo(this.reply);
+
+  final SendPort reply;
+}
+
+final class _EngineWorkerModelMetadata {
+  const _EngineWorkerModelMetadata(this.reply);
+
+  final SendPort reply;
+}
+
+final class _EngineWorkerChatTemplate {
+  const _EngineWorkerChatTemplate(this.reply);
+
+  final SendPort reply;
+}
+
 final class _EngineWorkerTokenize {
   const _EngineWorkerTokenize(
     this.text,
@@ -3754,9 +3962,10 @@ final class _EngineWorkerStreamNext {
 }
 
 final class _EngineWorkerStreamDispose {
-  const _EngineWorkerStreamDispose(this.id);
+  const _EngineWorkerStreamDispose(this.id, this.reply);
 
   final int id;
+  final SendPort reply;
 }
 
 final class _EngineWorkerLoadLora {
@@ -3813,6 +4022,9 @@ SendPort? _engineWorkerReply(Object? message) {
   return switch (message) {
     _EngineWorkerReset(:final reply) => reply,
     _EngineWorkerWarmUp(:final reply) => reply,
+    _EngineWorkerModelInfo(:final reply) => reply,
+    _EngineWorkerModelMetadata(:final reply) => reply,
+    _EngineWorkerChatTemplate(:final reply) => reply,
     _EngineWorkerTokenize(:final reply) => reply,
     _EngineWorkerCountTokens(:final reply) => reply,
     _EngineWorkerDetokenize(:final reply) => reply,
@@ -4053,51 +4265,33 @@ void _engineWorkerMain(_EngineWorkerStart start) {
   _NativeStreamingGeneration? streamingGeneration;
   SendPort? streamingReply;
   var streamingId = 0;
-  final deferredMessages = <Object?>[];
-  var deferredDrainScheduled = false;
   late void Function(Object? message) handleMessage;
 
-  Object? closeStreamingGeneration() {
+  Object? closeStreamingGeneration({bool resetContext = false}) {
     final generation = streamingGeneration;
     streamingGeneration = null;
     streamingReply = null;
     streamingId = 0;
-    if (generation == null) {
-      return null;
-    }
-    try {
-      generation.close();
-      return null;
-    } catch (error) {
-      return error;
-    }
-  }
-
-  void failDeferredMessages() {
-    const failure = _EngineWorkerFailure(
-      _NativeError('disposed', 'LlamaEngine is closed.'),
-    );
-    for (final message in deferredMessages) {
-      _engineWorkerReply(message)?.send(failure);
-    }
-    deferredMessages.clear();
-  }
-
-  void scheduleDeferredDrain() {
-    if (deferredDrainScheduled ||
-        streamingGeneration != null ||
-        deferredMessages.isEmpty) {
-      return;
-    }
-    deferredDrainScheduled = true;
-    scheduleMicrotask(() {
-      deferredDrainScheduled = false;
-      if (streamingGeneration != null || deferredMessages.isEmpty) {
-        return;
+    Object? cleanupError;
+    if (generation != null) {
+      try {
+        generation.close();
+      } catch (error) {
+        cleanupError = error;
       }
-      handleMessage(deferredMessages.removeAt(0));
-      scheduleDeferredDrain();
-    });
+    }
+    if (resetContext) {
+      try {
+        final active = handles;
+        if (active == null) {
+          throw const ResourceDisposedException('LlamaEngine is closed.');
+        }
+        active.reset();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    return cleanupError;
   }
 
   void stepStreamingGeneration(int id) {
@@ -4109,8 +4303,10 @@ void _engineWorkerMain(_EngineWorkerStart start) {
     try {
       final chunk = generation.next();
       if (chunk.isDone) {
-        final closeError = closeStreamingGeneration();
+        Object? closeError = closeStreamingGeneration();
         if (closeError != null) {
+          closeError =
+              closeStreamingGeneration(resetContext: true) ?? closeError;
           reply.send(_EngineWorkerFailure(_NativeError.from(closeError)));
         } else {
           reply.send(
@@ -4122,21 +4318,18 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             ),
           );
         }
-        scheduleDeferredDrain();
       } else {
         reply.send(_EngineWorkerStreamChunk(chunk.text, false, null, null));
       }
     } catch (error) {
-      final closeError = closeStreamingGeneration();
+      final closeError = closeStreamingGeneration(resetContext: true);
       reply.send(_EngineWorkerFailure(_NativeError.from(closeError ?? error)));
-      scheduleDeferredDrain();
     }
   }
 
   handleMessage = (message) {
     if (message is _EngineWorkerFinalize) {
       closeStreamingGeneration();
-      failDeferredMessages();
       try {
         handles?.close();
       } catch (_) {
@@ -4153,7 +4346,6 @@ void _engineWorkerMain(_EngineWorkerStart start) {
           _NativeError('cancelled', 'generation cancelled'),
         ),
       );
-      failDeferredMessages();
       try {
         handles?.close();
       } catch (error) {
@@ -4187,6 +4379,36 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         }
         active.warmUp();
         message.reply.send(null);
+      } catch (error) {
+        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
+      }
+    } else if (message is _EngineWorkerModelInfo) {
+      try {
+        final active = handles;
+        if (active == null) {
+          throw const ResourceDisposedException('LlamaEngine is closed.');
+        }
+        message.reply.send(active.modelInfo());
+      } catch (error) {
+        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
+      }
+    } else if (message is _EngineWorkerModelMetadata) {
+      try {
+        final active = handles;
+        if (active == null) {
+          throw const ResourceDisposedException('LlamaEngine is closed.');
+        }
+        message.reply.send(active.modelMetadata());
+      } catch (error) {
+        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
+      }
+    } else if (message is _EngineWorkerChatTemplate) {
+      try {
+        final active = handles;
+        if (active == null) {
+          throw const ResourceDisposedException('LlamaEngine is closed.');
+        }
+        message.reply.send(active.chatTemplate());
       } catch (error) {
         message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
       }
@@ -4390,9 +4612,10 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         streamingReply = message.reply;
         stepStreamingGeneration(message.id);
       } catch (error) {
-        closeStreamingGeneration();
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-        scheduleDeferredDrain();
+        final closeError = closeStreamingGeneration(resetContext: true);
+        message.reply.send(
+          _EngineWorkerFailure(_NativeError.from(closeError ?? error)),
+        );
       }
     } else if (message is _EngineWorkerStreamPrompt) {
       try {
@@ -4408,16 +4631,32 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         streamingReply = message.reply;
         stepStreamingGeneration(message.id);
       } catch (error) {
-        closeStreamingGeneration();
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-        scheduleDeferredDrain();
+        final closeError = closeStreamingGeneration(resetContext: true);
+        message.reply.send(
+          _EngineWorkerFailure(_NativeError.from(closeError ?? error)),
+        );
       }
     } else if (message is _EngineWorkerStreamNext) {
       stepStreamingGeneration(message.id);
     } else if (message is _EngineWorkerStreamDispose) {
-      if (streamingGeneration != null && streamingId == message.id) {
-        closeStreamingGeneration();
-        scheduleDeferredDrain();
+      if (streamingGeneration != null && streamingId != message.id) {
+        message.reply.send(
+          const _EngineWorkerFailure(
+            _NativeError(
+              'generation',
+              'Cannot dispose a generation owned by another stream.',
+            ),
+          ),
+        );
+      } else {
+        final cleanupError = closeStreamingGeneration(resetContext: true);
+        if (cleanupError == null) {
+          message.reply.send(null);
+        } else {
+          message.reply.send(
+            _EngineWorkerFailure(_NativeError.from(cleanupError)),
+          );
+        }
       }
     } else if (message is _EngineWorkerLoadLora) {
       try {
@@ -4470,7 +4709,14 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         message is! _EngineWorkerStreamDispose &&
         message is! _EngineWorkerClose &&
         message is! _EngineWorkerFinalize) {
-      deferredMessages.add(message);
+      _engineWorkerReply(message)?.send(
+        const _EngineWorkerFailure(
+          _NativeError(
+            'generation',
+            'Another generation is already active on this engine.',
+          ),
+        ),
+      );
       return;
     }
     handleMessage(message);

@@ -13,6 +13,7 @@ enum FlashAttentionMode { auto, disabled, enabled }
 
 const _maxInt32 = 0x7FFFFFFF;
 const _maxUint32 = 0xFFFFFFFF;
+const _maxChatTemplateBytes = 16 * 1024 * 1024;
 
 const llamaJsonGrammar = r'''
 root   ::= object
@@ -118,6 +119,7 @@ final class LlamaModelConfig {
     required this.modelPath,
     this.nativeLibraryPath,
     this.mmprojPath,
+    this.chatTemplate,
     this.contextSize = 4096,
     this.batchSize = 512,
     this.ubatchSize,
@@ -134,6 +136,12 @@ final class LlamaModelConfig {
   final String modelPath;
   final String? nativeLibraryPath;
   final String? mmprojPath;
+
+  /// Explicit llama.cpp chat template used instead of GGUF metadata.
+  ///
+  /// Leave this null to require the model's embedded default template. Chat
+  /// APIs fail with [UnsupportedFeatureException] when neither is available.
+  final String? chatTemplate;
   final int contextSize;
   final int batchSize;
   final int? ubatchSize;
@@ -155,6 +163,30 @@ final class LlamaModelConfig {
     final mmprojPath = this.mmprojPath;
     if (mmprojPath != null) {
       _validatePathText(mmprojPath, 'mmprojPath');
+    }
+    final chatTemplate = this.chatTemplate;
+    if (chatTemplate != null) {
+      if (chatTemplate.trim().isEmpty) {
+        throw ArgumentError.value(
+          chatTemplate,
+          'chatTemplate',
+          'must not be blank',
+        );
+      }
+      if (chatTemplate.contains('\u0000')) {
+        throw ArgumentError.value(
+          chatTemplate,
+          'chatTemplate',
+          'must not contain NUL',
+        );
+      }
+      if (utf8.encode(chatTemplate).length > _maxChatTemplateBytes) {
+        throw ArgumentError.value(
+          chatTemplate,
+          'chatTemplate',
+          'must not exceed 16 MiB as UTF-8',
+        );
+      }
     }
     if (contextSize <= 0) {
       throw ArgumentError.value(contextSize, 'contextSize', 'must be positive');

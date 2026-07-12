@@ -1,0 +1,42 @@
+name: LlamaDartNativeAssetBindings
+description: Native-asset symbol addresses for the llama.dart C bridge.
+output: lib/src/ffi/generated_native_asset_bindings.dart
+preamble: |
+  // Regenerate with: dart run ffigen --config ffigen.native_assets.yaml
+ffi-native:
+  asset-id: package:fllamer/llama_dart_bridge
+headers:
+  entry-points:
+    - native/llama_dart_bridge/include/llama_dart.h
+functions:
+  include:
+    - llama_dart_.*
+  symbol-address:
+    include:
+      - llama_dart_.*
+structs:
+  include:
+    - llama_dart_.*
+enums:
+  include:
+    - llama_dart_.*
+  # `ffi.Native.addressOf` requires the annotated external declaration itself.
+  # Integer enums avoid generated Dart wrapper functions around C enum returns.
+  as-int:
+    include:
+      - llama_dart_.*
+compiler-opts:
+  - -Inative/llama_dart_bridge/include
+macros:
+  include:
+    - LLAMA_DART_ABI_VERSION
+globals:
+  exclude:
+    - .*
+typedefs:
+  exclude:
+    - .*
+unions:
+  exclude:
+    - .*
+silence-enum-warning: true

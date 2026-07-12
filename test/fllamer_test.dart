@@ -19,8 +19,10 @@ final _throwsUnsupportedFeature = throwsA(isA<UnsupportedFeatureException>());
 
 void main() {
   group('runtime capabilities', () {
-    test('reports native features as unavailable until the bridge exists', () {
-      final capabilities = LlamaRuntime.currentCapabilities();
+    test('reports native features as unavailable for a missing override', () {
+      final capabilities = LlamaRuntime.currentCapabilities(
+        nativeLibraryPath: '/missing/fllamer/native/bridge',
+      );
 
       expect(capabilities.nativeBridgeAvailable, isFalse);
       expect(capabilities.bridgeAbiVersion, LlamaRuntime.bridgeAbiVersion);
@@ -50,6 +52,21 @@ void main() {
             LlamaRuntime.currentCapabilities(nativeLibraryPath: 'bridge\u0000'),
         throwsArgumentError,
       );
+    });
+
+    test('resolves the bundled native asset without a path override', () {
+      if (Platform.isWindows) {
+        markTestSkipped(
+          'The native-assets hook is not configured for Windows.',
+        );
+      }
+
+      final capabilities = LlamaRuntime.currentCapabilities();
+
+      expect(capabilities.nativeBridgeAvailable, isTrue);
+      expect(capabilities.bridgeAbiVersion, LlamaRuntime.bridgeAbiVersion);
+      expect(capabilities.modelLoading, isTrue);
+      expect(capabilities.textGeneration, isTrue);
     });
 
     test('can read native capabilities from a built bridge', () {
@@ -304,6 +321,38 @@ void main() {
       }
     });
 
+    test('Flutter notices include every bundled native license', () {
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      for (final path in const <String>[
+        'third_party/llama.cpp/LICENSE',
+        'third_party/llama.cpp/AUTHORS',
+        'third_party/llama.cpp/licenses/LICENSE-jsonhpp',
+        'third_party/llama.cpp/licenses/LICENSE-miniaudio',
+        'third_party/llama.cpp/licenses/LICENSE-stb',
+        'third_party/llama.cpp/vendor/cpp-httplib/LICENSE',
+      ]) {
+        expect(File(path).existsSync(), isTrue, reason: path);
+        expect(pubspec, contains('- $path'));
+      }
+    });
+
+    test('native-asset lookup covers every generated bridge symbol', () {
+      final generated = File(
+        'lib/src/ffi/generated_native_asset_bindings.dart',
+      ).readAsStringSync();
+      final lookup = File(
+        'lib/src/ffi/native_asset_lookup.dart',
+      ).readAsStringSync();
+      final symbols = RegExp(
+        r'get\s+(llama_dart_[a-z0-9_]+)\s*=>',
+      ).allMatches(generated).map((match) => match.group(1)!).toSet();
+
+      expect(symbols, isNotEmpty);
+      for (final symbol in symbols) {
+        expect(lookup, contains("'$symbol'"), reason: symbol);
+      }
+    });
+
     test('build hook emits a bundled native code asset', () async {
       if (Platform.isWindows) {
         markTestSkipped(
@@ -408,19 +457,34 @@ void main() {
       );
     });
 
-    test('build hook enforces the Metal-compatible iOS minimum', () {
+    test('build hook applies the Metal-compatible iOS minimum', () {
       expect(build_hook.minimumIosVersion, 15);
       expect(build_hook.iosDeploymentTargetForNativeAssetsBuild(15), '15.0');
       expect(build_hook.iosDeploymentTargetForNativeAssetsBuild(18), '18.0');
+      expect(build_hook.iosDeploymentTargetForNativeAssetsBuild(13), '15.0');
+    });
+
+    test('build hook bounds default CMake parallelism', () {
       expect(
-        () => build_hook.iosDeploymentTargetForNativeAssetsBuild(14),
-        throwsA(
-          isA<hooks.BuildError>().having(
-            (error) => error.message,
-            'message',
-            allOf(contains('iOS 15.0'), contains('Metal')),
-          ),
+        build_hook.cmakeBuildParallelism(
+          environment: const <String, String>{},
+          processorCount: 32,
         ),
+        build_hook.maximumDefaultBuildJobs,
+      );
+      expect(
+        build_hook.cmakeBuildParallelism(
+          environment: const <String, String>{'FLLAMER_BUILD_JOBS': '2'},
+          processorCount: 32,
+        ),
+        2,
+      );
+      expect(
+        build_hook.cmakeBuildParallelism(
+          environment: const <String, String>{'FLLAMER_BUILD_JOBS': 'bad'},
+          processorCount: 2,
+        ),
+        2,
       );
     });
 
@@ -770,82 +834,88 @@ void main() {
       }
     });
 
-    test('streaming coalesces tokens and honors pause backpressure', () async {
-      final fixture = await _buildStreamingCaptureBridge();
-      if (fixture == null) {
-        markTestSkipped('C compiler is not available for fake bridge build');
-        return;
-      }
+    test(
+      'streaming coalesces tokens and rejects context work while paused',
+      () async {
+        final fixture = await _buildStreamingCaptureBridge();
+        if (fixture == null) {
+          markTestSkipped('C compiler is not available for fake bridge build');
+          return;
+        }
 
-      final engine = await LlamaEngine.load(
-        LlamaModelConfig(
-          modelPath: fixture.markerPath,
-          nativeLibraryPath: fixture.libraryPath,
-        ),
-      );
-      try {
-        final chunks = <GenerationChunk>[];
-        final firstChunk = Completer<void>();
-        final done = Completer<void>();
-        late final StreamSubscription<GenerationChunk> subscription;
-        subscription = engine
-            .complete(
-              prompt: 'go',
-              config: const GenerationConfig(
-                maxTokens: 6,
-                temperature: 0,
-                streamChunkTokens: 2,
-              ),
-            )
-            .listen(
-              (chunk) {
-                chunks.add(chunk);
-                if (chunks.length == 1) {
-                  subscription.pause();
-                  firstChunk.complete();
-                }
-              },
-              onError: (Object error, StackTrace stackTrace) {
-                if (!done.isCompleted) {
-                  done.completeError(error, stackTrace);
-                }
-              },
-              onDone: () {
-                if (!done.isCompleted) {
-                  done.complete();
-                }
-              },
-            );
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: fixture.markerPath,
+            nativeLibraryPath: fixture.libraryPath,
+            chatTemplate: 'custom-template',
+          ),
+        );
+        try {
+          expect(await engine.chatTemplate(), 'custom-template');
+          final chunks = <GenerationChunk>[];
+          final firstChunk = Completer<void>();
+          final done = Completer<void>();
+          late final StreamSubscription<GenerationChunk> subscription;
+          subscription = engine
+              .complete(
+                prompt: 'go',
+                config: const GenerationConfig(
+                  maxTokens: 6,
+                  temperature: 0,
+                  streamChunkTokens: 2,
+                ),
+              )
+              .listen(
+                (chunk) {
+                  chunks.add(chunk);
+                  if (chunks.length == 1) {
+                    subscription.pause();
+                    firstChunk.complete();
+                  }
+                },
+                onError: (Object error, StackTrace stackTrace) {
+                  if (!done.isCompleted) {
+                    done.completeError(error, stackTrace);
+                  }
+                },
+                onDone: () {
+                  if (!done.isCompleted) {
+                    done.complete();
+                  }
+                },
+              );
 
-        await firstChunk.future;
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        expect(await File(fixture.markerPath).length(), 2);
-        expect(chunks.single.text, 'ab');
+          await firstChunk.future;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          expect(await File(fixture.markerPath).length(), 2);
+          expect(chunks.single.text, 'ab');
 
-        var contextInfoCompleted = false;
-        final contextInfo = engine.contextInfo().then((info) {
-          contextInfoCompleted = true;
-          return info;
-        });
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        expect(contextInfoCompleted, isFalse);
+          await expectLater(
+            engine.contextInfo(),
+            throwsA(isA<GenerationException>()),
+          );
 
-        subscription.resume();
-        await done.future;
-        expect(chunks.map((chunk) => chunk.text), <String>['ab', 'cd', 'ef']);
-        expect(chunks.map((chunk) => chunk.isDone), <bool>[false, false, true]);
-        expect(chunks.last.telemetry?.promptTokens, 2);
-        expect(chunks.last.telemetry?.generatedTokens, 6);
-        expect(await File(fixture.markerPath).length(), 6);
-        expect((await contextInfo).usedTokens, 6);
-        await subscription.cancel();
-        expect((await engine.contextInfo()).usedTokens, 6);
-      } finally {
-        await engine.close();
-      }
-    });
+          subscription.resume();
+          await done.future;
+          expect(chunks.map((chunk) => chunk.text), <String>['ab', 'cd', 'ef']);
+          expect(chunks.map((chunk) => chunk.isDone), <bool>[
+            false,
+            false,
+            true,
+          ]);
+          expect(chunks.last.telemetry?.promptTokens, 2);
+          expect(chunks.last.telemetry?.generatedTokens, 6);
+          expect(await File(fixture.markerPath).length(), 6);
+          expect((await engine.contextInfo()).usedTokens, 6);
+          await subscription.cancel();
+          expect((await engine.contextInfo()).usedTokens, 6);
+        } finally {
+          await engine.close();
+        }
+      },
+    );
 
-    test('cancelled paused streams release queued context work', () async {
+    test('stream cancellation awaits reset and permits recovery', () async {
       final fixture = await _buildStreamingCaptureBridge();
       if (fixture == null) {
         markTestSkipped('C compiler is not available for fake bridge build');
@@ -878,16 +948,38 @@ void main() {
             });
 
         await firstChunk.future;
-        await subscription.cancel();
+        var cancellationCompleted = false;
+        final cancellation = subscription.cancel().then((_) {
+          cancellationCompleted = true;
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(cancellationCompleted, isFalse);
+        await cancellation;
+        expect(cancellationCompleted, isTrue);
         final info = await engine.contextInfo();
-        expect(info.usedTokens, 2);
+        expect(info.usedTokens, 0);
         expect(await File(fixture.markerPath).length(), 2);
+
+        final recovered = await engine
+            .complete(
+              prompt: 'again',
+              config: const GenerationConfig(
+                maxTokens: 2,
+                temperature: 0,
+                streamChunkTokens: 1,
+              ),
+            )
+            .toList();
+        expect(recovered.map((chunk) => chunk.text).join(), 'ab');
+        expect(recovered.last.isDone, isTrue);
+        expect((await engine.contextInfo()).usedTokens, 2);
+        expect(await File(fixture.markerPath).readAsString(), 'abab');
       } finally {
         await engine.close();
       }
     });
 
-    test('closing a paused stream fails queued context work', () async {
+    test('closing a paused stream rejects concurrent context work', () async {
       final fixture = await _buildStreamingCaptureBridge();
       if (fixture == null) {
         markTestSkipped('C compiler is not available for fake bridge build');
@@ -920,13 +1012,11 @@ void main() {
             }, onError: (Object _) {});
 
         await firstChunk.future;
-        final queuedInfo = engine.contextInfo();
-        final queuedInfoExpectation = expectLater(
-          queuedInfo,
-          throwsA(isA<ResourceDisposedException>()),
+        await expectLater(
+          engine.contextInfo(),
+          throwsA(isA<GenerationException>()),
         );
         await engine.close();
-        await queuedInfoExpectation;
         await subscription.cancel();
         expect(await File(fixture.markerPath).length(), 2);
       } finally {
@@ -934,7 +1024,107 @@ void main() {
       }
     });
 
-    test('parallel streams serialize on one native context', () async {
+    test(
+      'a rejected stream cannot cancel or delay the active generation',
+      () async {
+        final fixture = await _buildStreamingCaptureBridge();
+        if (fixture == null) {
+          markTestSkipped('C compiler is not available for fake bridge build');
+          return;
+        }
+
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: fixture.markerPath,
+            nativeLibraryPath: fixture.libraryPath,
+          ),
+        );
+        try {
+          final pendingSecond = engine.complete(
+            prompt: 'two',
+            config: const GenerationConfig(
+              maxTokens: 2,
+              temperature: 0,
+              streamChunkTokens: 1,
+            ),
+          );
+          final pendingCancelled = engine.complete(
+            prompt: 'cancel-rejected',
+            config: const GenerationConfig(
+              maxTokens: 2,
+              temperature: 0,
+              streamChunkTokens: 1,
+            ),
+          );
+          final firstChunk = Completer<void>();
+          final firstDone = Completer<void>();
+          late final StreamSubscription<GenerationChunk> firstSubscription;
+          firstSubscription = engine
+              .complete(
+                prompt: 'one',
+                config: const GenerationConfig(
+                  maxTokens: 6,
+                  temperature: 0,
+                  streamChunkTokens: 2,
+                ),
+              )
+              .listen(
+                (chunk) {
+                  if (!firstChunk.isCompleted) {
+                    firstSubscription.pause();
+                    firstChunk.complete();
+                  }
+                },
+                onError: (Object error, StackTrace stackTrace) {
+                  if (!firstDone.isCompleted) {
+                    firstDone.completeError(error, stackTrace);
+                  }
+                },
+                onDone: () {
+                  if (!firstDone.isCompleted) {
+                    firstDone.complete();
+                  }
+                },
+              );
+
+          await firstChunk.future;
+          await expectLater(
+            pendingSecond.toList(),
+            throwsA(isA<GenerationException>()),
+          );
+
+          final rejected = pendingCancelled.listen(
+            null,
+            onError: (Object _) {},
+          );
+          await rejected.cancel();
+          expect(await File(fixture.markerPath).length(), 2);
+
+          firstSubscription.resume();
+          await firstDone.future;
+          expect(await File(fixture.markerPath).readAsString(), 'abcdef');
+
+          final nextChunks = await engine
+              .complete(
+                prompt: 'after',
+                config: const GenerationConfig(
+                  maxTokens: 2,
+                  temperature: 0,
+                  streamChunkTokens: 1,
+                ),
+              )
+              .toList();
+          expect(nextChunks.map((chunk) => chunk.text).join(), 'ab');
+          expect(nextChunks.last.isDone, isTrue);
+          expect(await File(fixture.markerPath).readAsString(), 'abcdefab');
+          await firstSubscription.cancel();
+        } finally {
+          await engine.close();
+        }
+      },
+    );
+
+    test('concurrent close callers await the same native cleanup', () async {
       final fixture = await _buildStreamingCaptureBridge();
       if (fixture == null) {
         markTestSkipped('C compiler is not available for fake bridge build');
@@ -947,68 +1137,16 @@ void main() {
           nativeLibraryPath: fixture.libraryPath,
         ),
       );
-      try {
-        final firstChunk = Completer<void>();
-        final firstDone = Completer<void>();
-        late final StreamSubscription<GenerationChunk> firstSubscription;
-        firstSubscription = engine
-            .complete(
-              prompt: 'one',
-              config: const GenerationConfig(
-                maxTokens: 6,
-                temperature: 0,
-                streamChunkTokens: 2,
-              ),
-            )
-            .listen(
-              (chunk) {
-                if (!firstChunk.isCompleted) {
-                  firstSubscription.pause();
-                  firstChunk.complete();
-                }
-              },
-              onError: (Object error, StackTrace stackTrace) {
-                if (!firstDone.isCompleted) {
-                  firstDone.completeError(error, stackTrace);
-                }
-              },
-              onDone: () {
-                if (!firstDone.isCompleted) {
-                  firstDone.complete();
-                }
-              },
-            );
+      var completed = false;
+      final first = engine.close();
+      final second = engine.close();
+      expect(identical(first, second), isTrue);
+      unawaited(first.then((_) => completed = true));
 
-        await firstChunk.future;
-        var secondCompleted = false;
-        final second = engine
-            .complete(
-              prompt: 'two',
-              config: const GenerationConfig(
-                maxTokens: 2,
-                temperature: 0,
-                streamChunkTokens: 1,
-              ),
-            )
-            .toList()
-            .then((chunks) {
-              secondCompleted = true;
-              return chunks;
-            });
-        await Future<void>.delayed(const Duration(milliseconds: 30));
-        expect(secondCompleted, isFalse);
-        expect(await File(fixture.markerPath).length(), 2);
-
-        firstSubscription.resume();
-        await firstDone.future;
-        final secondChunks = await second;
-        expect(secondChunks.map((chunk) => chunk.text).join(), 'ab');
-        expect(secondChunks.last.isDone, isTrue);
-        expect(await File(fixture.markerPath).readAsString(), 'abcdefab');
-        await firstSubscription.cancel();
-      } finally {
-        await engine.close();
-      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(completed, isFalse);
+      await Future.wait(<Future<void>>[first, second]);
+      expect(completed, isTrue);
     });
 
     test('engine close reports native context free failures', () async {
@@ -1301,6 +1439,7 @@ void main() {
       expect(info.nextnLayerCount, greaterThanOrEqualTo(0));
       expect(info.hasMtpLayers, info.nextnLayerCount > 0);
       expect(info.fileTypeName, isNotEmpty);
+      expect(info.chatTemplate, isNull);
     });
 
     test('reads GGUF metadata with a tiny vocab fixture', () async {
@@ -1378,6 +1517,7 @@ void main() {
             LlamaModelConfig(
               modelPath: modelPath,
               nativeLibraryPath: bridgePath,
+              chatTemplate: 'chatml',
               contextSize: 128,
               batchSize: 16,
               ubatchSize: 8,
@@ -1386,6 +1526,11 @@ void main() {
             ),
           );
           final contextInfo = await engine.contextInfo();
+          final loadedModelInfo = await engine.modelInfo();
+          final loadedMetadata = await engine.modelMetadata();
+          expect(loadedModelInfo.chatTemplate, 'chatml');
+          expect(loadedMetadata['general.architecture'], isNotEmpty);
+          expect(await engine.chatTemplate(), 'chatml');
           expect(contextInfo.contextSize, greaterThan(0));
           expect(contextInfo.batchSize, greaterThan(0));
           expect(contextInfo.ubatchSize, greaterThan(0));
@@ -1473,6 +1618,18 @@ void main() {
           );
           await expectLater(
             engine.tokenize('hello'),
+            throwsA(isA<ResourceDisposedException>()),
+          );
+          await expectLater(
+            engine.modelInfo(),
+            throwsA(isA<ResourceDisposedException>()),
+          );
+          await expectLater(
+            engine.modelMetadata(),
+            throwsA(isA<ResourceDisposedException>()),
+          );
+          await expectLater(
+            engine.chatTemplate(),
             throwsA(isA<ResourceDisposedException>()),
           );
           await expectLater(
@@ -2950,7 +3107,7 @@ void main() {
       }
     });
 
-    test('formats chat with the upstream template helper', () async {
+    test('requires or explicitly selects a chat template', () async {
       final bridgePath = _nativeBridgePath;
       if (!File(bridgePath).existsSync()) {
         markTestSkipped('native bridge has not been built at $bridgePath');
@@ -2960,11 +3117,32 @@ void main() {
         markTestSkipped('vocab fixture is missing at $modelPath');
       }
 
-      final prompt = await LlamaChatTemplate.format(
-        LlamaModelConfig(modelPath: modelPath, nativeLibraryPath: bridgePath),
-        <ChatMessage>[ChatMessage.user('hello')],
+      final withoutTemplate = LlamaModelConfig(
+        modelPath: modelPath,
+        nativeLibraryPath: bridgePath,
+      );
+      await expectLater(
+        LlamaModel.chatTemplate(withoutTemplate),
+        throwsA(isA<UnsupportedFeatureException>()),
+      );
+      await expectLater(
+        LlamaChatTemplate.format(withoutTemplate, <ChatMessage>[
+          ChatMessage.user('hello'),
+        ]),
+        throwsA(isA<UnsupportedFeatureException>()),
       );
 
+      final config = LlamaModelConfig(
+        modelPath: modelPath,
+        nativeLibraryPath: bridgePath,
+        chatTemplate: 'chatml',
+      );
+      final prompt = await LlamaChatTemplate.format(config, <ChatMessage>[
+        ChatMessage.user('hello'),
+      ]);
+
+      expect(await LlamaModel.chatTemplate(config), 'chatml');
+      expect((await LlamaModel.inspect(config)).chatTemplate, 'chatml');
       expect(prompt, contains('hello'));
       expect(prompt, contains('assistant'));
     });
@@ -3023,6 +3201,7 @@ void main() {
       final config = LlamaModelConfig(
         modelPath: modelPath,
         nativeLibraryPath: bridgePath,
+        chatTemplate: 'chatml',
       );
 
       final capabilities = await LlamaChatTemplate.capabilities(config);
@@ -3107,7 +3286,11 @@ void main() {
 
       final messages = <ChatMessage>[ChatMessage.user('hello')];
       final prompt = LlamaChatTemplate.format(
-        LlamaModelConfig(modelPath: modelPath, nativeLibraryPath: bridgePath),
+        LlamaModelConfig(
+          modelPath: modelPath,
+          nativeLibraryPath: bridgePath,
+          chatTemplate: 'chatml',
+        ),
         messages,
       );
       messages[0] = ChatMessage.user('bad\u0000');
@@ -3126,7 +3309,11 @@ void main() {
       }
 
       final count = await LlamaChatTemplate.countTokens(
-        LlamaModelConfig(modelPath: modelPath, nativeLibraryPath: bridgePath),
+        LlamaModelConfig(
+          modelPath: modelPath,
+          nativeLibraryPath: bridgePath,
+          chatTemplate: 'chatml',
+        ),
         <ChatMessage>[ChatMessage.user('hello')],
       );
 
@@ -3199,6 +3386,30 @@ void main() {
           checkTensors: false,
         ).validate(),
         returnsNormally,
+      );
+    });
+
+    test('validates explicit chat template overrides', () {
+      expect(
+        () => const LlamaModelConfig(
+          modelPath: 'model.gguf',
+          chatTemplate: 'chatml',
+        ).validate(),
+        returnsNormally,
+      );
+      expect(
+        () => const LlamaModelConfig(
+          modelPath: 'model.gguf',
+          chatTemplate: ' \n\t',
+        ).validate(),
+        throwsArgumentError,
+      );
+      expect(
+        () => const LlamaModelConfig(
+          modelPath: 'model.gguf',
+          chatTemplate: 'bad\u0000template',
+        ).validate(),
+        throwsArgumentError,
       );
     });
 
@@ -8579,12 +8790,14 @@ _buildStreamingCaptureBridge() async {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const char *last_error = "";
 static uintptr_t fake_model_storage;
 static uintptr_t fake_context_storage;
 static uintptr_t fake_generation_storage;
 static char marker_path[4096];
+static char selected_chat_template[256];
 static uint32_t generated_tokens;
 static uint32_t generation_limit;
 static int generation_active;
@@ -8608,6 +8821,19 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
   }
   memcpy(marker_path, config->model_path_data, config->model_path_size);
   marker_path[config->model_path_size] = '\0';
+  const char *embedded_template = "fake-embedded-template";
+  const size_t template_size = config->chat_template_size == 0
+      ? strlen(embedded_template)
+      : config->chat_template_size;
+  if (template_size >= sizeof(selected_chat_template)) {
+    return fail(LLAMA_DART_ERROR_MODEL_LOAD, "chat template is too large");
+  }
+  memcpy(selected_chat_template,
+         config->chat_template_size == 0
+             ? (const uint8_t *)embedded_template
+             : config->chat_template_data,
+         template_size);
+  selected_chat_template[template_size] = '\0';
   *out_model = (llama_dart_model *)&fake_model_storage;
   last_error = "";
   return LLAMA_DART_SUCCESS;
@@ -8616,6 +8842,20 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
 LLAMA_DART_EXPORT void llama_dart_model_free(llama_dart_model *model) {
   (void)model;
   last_error = "";
+}
+
+LLAMA_DART_EXPORT llama_dart_result llama_dart_model_get_chat_template(
+    const llama_dart_model *model, llama_dart_buffer *out_template) {
+  (void)model;
+  const size_t size = strlen(selected_chat_template);
+  out_template->data = (uint8_t *)malloc(size);
+  if (out_template->data == NULL) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  }
+  memcpy(out_template->data, selected_chat_template, size);
+  out_template->size = size;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
 }
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_context_create(
@@ -8633,9 +8873,24 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_context_create(
 
 LLAMA_DART_EXPORT void llama_dart_context_free(llama_dart_context *context) {
   (void)context;
+  usleep(50000);
   generation_active = 0;
   cancelled = 0;
   last_error = "";
+}
+
+LLAMA_DART_EXPORT llama_dart_result llama_dart_context_reset(
+    llama_dart_context *context) {
+  (void)context;
+  if (generation_active) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "generation is still active");
+  }
+  usleep(50000);
+  generated_tokens = 0;
+  cancelled = 0;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
 }
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_context_cancel(
@@ -8854,6 +9109,16 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_context_create(
 LLAMA_DART_EXPORT void llama_dart_context_free(llama_dart_context *context) {
   (void)context;
   last_error = "";
+}
+
+LLAMA_DART_EXPORT llama_dart_result llama_dart_context_reset(
+    llama_dart_context *context) {
+  (void)context;
+  cancelled = 0;
+  used_tokens = 0;
+  prefill_calls = 0;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
 }
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_context_cancel(

@@ -72,6 +72,7 @@ final class LlamaChatTemplateCapabilities {
 final class LlamaModelInfo {
   const LlamaModelInfo({
     required this.description,
+    this.chatTemplate,
     required this.vocabType,
     required this.vocabSize,
     required this.trainingContextSize,
@@ -104,6 +105,9 @@ final class LlamaModelInfo {
   });
 
   final String description;
+
+  /// Effective caller-supplied or GGUF-provided chat template, when valid.
+  final String? chatTemplate;
   final int vocabType;
   final int vocabSize;
   final int trainingContextSize;
