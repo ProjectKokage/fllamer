@@ -280,6 +280,14 @@ final class PrefillTelemetry {
       _tokensPerSecond(promptTokens, promptEvalMs);
 }
 
+enum GenerationStopReason {
+  unknown,
+  endOfGeneration,
+  stopSequence,
+  stopToken,
+  maxTokens,
+}
+
 final class GenerationTelemetry {
   const GenerationTelemetry({
     required this.promptTokens,
@@ -292,6 +300,7 @@ final class GenerationTelemetry {
     this.speculativeAcceptedTokens = 0,
     this.speculativeDraftMs = 0.0,
     this.speculativeVerifyMs = 0.0,
+    this.stopReason = GenerationStopReason.unknown,
   });
 
   final int promptTokens;
@@ -304,6 +313,7 @@ final class GenerationTelemetry {
   final int speculativeAcceptedTokens;
   final double speculativeDraftMs;
   final double speculativeVerifyMs;
+  final GenerationStopReason stopReason;
 
   double get promptEvalTokensPerSecond =>
       _tokensPerSecond(promptTokens, promptEvalMs);

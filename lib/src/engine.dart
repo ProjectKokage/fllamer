@@ -501,12 +501,16 @@ final class GenerationChunk {
     this.isDone = false,
     this.telemetry,
     this.assistantMessage,
+    this.stopReason,
   });
 
   final String text;
   final bool isDone;
   final GenerationTelemetry? telemetry;
   final ChatMessage? assistantMessage;
+
+  /// Why a terminal chunk ended. Non-terminal chunks have no stop reason.
+  final GenerationStopReason? stopReason;
 }
 
 final class LlamaEngine {
@@ -544,6 +548,7 @@ final class LlamaEngine {
             isDone: chunk.isDone,
             telemetry: chunk.telemetry,
             assistantMessage: chunk.assistantMessage,
+            stopReason: chunk.isDone ? chunk.telemetry?.stopReason : null,
           ),
         );
   }
@@ -572,6 +577,7 @@ final class LlamaEngine {
             text: chunk.text,
             isDone: chunk.isDone,
             telemetry: chunk.telemetry,
+            stopReason: chunk.isDone ? chunk.telemetry?.stopReason : null,
           ),
         );
   }
@@ -600,6 +606,7 @@ final class LlamaEngine {
             text: chunk.text,
             isDone: chunk.isDone,
             telemetry: chunk.telemetry,
+            stopReason: chunk.isDone ? chunk.telemetry?.stopReason : null,
           ),
         );
   }

@@ -970,6 +970,7 @@ void main() {
           ]);
           expect(chunks.last.telemetry?.promptTokens, 2);
           expect(chunks.last.telemetry?.generatedTokens, 6);
+          expect(chunks.last.stopReason, GenerationStopReason.maxTokens);
           expect(await File(fixture.markerPath).length(), 6);
           expect((await engine.contextInfo()).usedTokens, 6);
           await subscription.cancel();
@@ -5587,6 +5588,66 @@ void main() {
       );
     });
 
+    test('tool definitions validate parsed arguments against their schema', () {
+      const tool = LlamaToolDefinition(
+        name: 'record_probe',
+        description: 'Record a local probe.',
+        parametersSchema: <String, Object?>{
+          'type': 'object',
+          'properties': <String, Object?>{
+            'sentinel': <String, Object?>{
+              'type': 'string',
+              'enum': <Object?>['EXPECTED_SENTINEL'],
+            },
+            'samples': <String, Object?>{
+              'type': 'array',
+              'items': <String, Object?>{'\$ref': '#/\$defs/sample'},
+              'minItems': 1,
+            },
+          },
+          'required': <Object?>['sentinel'],
+          'additionalProperties': false,
+          '\$defs': <String, Object?>{
+            'sample': <String, Object?>{
+              'type': 'integer',
+              'minimum': 0,
+              'maximum': 10,
+            },
+          },
+        },
+      );
+
+      expect(
+        () => tool.validateArguments(<String, Object?>{
+          'sentinel': 'EXPECTED_SENTINEL',
+          'samples': <Object?>[0, 10],
+        }),
+        returnsNormally,
+      );
+      expect(
+        () => tool.validateArguments(<String, Object?>{
+          'sentinel': 'EXPECTED_SENTINEL',
+          'markdown': '**reasoning**',
+        }),
+        throwsArgumentError,
+      );
+      expect(
+        () => tool.validateArguments(<String, Object?>{}),
+        throwsArgumentError,
+      );
+      expect(
+        () => tool.validateArguments(<String, Object?>{'sentinel': 'wrong'}),
+        throwsArgumentError,
+      );
+      expect(
+        () => tool.validateArguments(<String, Object?>{
+          'sentinel': 'EXPECTED_SENTINEL',
+          'samples': <Object?>[11],
+        }),
+        throwsArgumentError,
+      );
+    });
+
     test('typed tool messages snapshot calls and expose result metadata', () {
       final arguments = <String, Object?>{'query': 'alpha'};
       final calls = <LlamaToolCall>[
@@ -9122,6 +9183,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
   out_stats->prompt_tokens = 2;
   out_stats->generated_tokens = generated_tokens;
   *out_done = generated_tokens >= generation_limit ? 1 : 0;
+  if (*out_done != 0) {
+    out_stats->stop_reason = LLAMA_DART_STOP_REASON_MAX_TOKENS;
+  }
   last_error = "";
   return LLAMA_DART_SUCCESS;
 }

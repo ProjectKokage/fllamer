@@ -1,3 +1,17 @@
+## Unreleased
+
+- Derived Gemma 4 tool-argument grammar from each declared parameter schema
+  instead of accepting arbitrary dictionary keys and value types. Terminal
+  tool calls are also validated against their matching schema before exposure,
+  so missing, extra, mistyped, or otherwise invalid arguments fail with a
+  typed generation error.
+- Added `GenerationStopReason` to terminal chunks and generation telemetry,
+  distinguishing end-of-generation, stop sequences, stop tokens, and maximum
+  token exhaustion. Truncated chat/tool output now reports the token limit
+  explicitly instead of only surfacing the downstream PEG parse failure.
+- Bumped the bridge ABI to 38 for native stop-reason telemetry and regenerated
+  both committed FFI binding variants. Custom native bridges must be rebuilt.
+
 ## 0.2.1
 
 - Added a legacy-first Jinja chat-template fallback for ordinary chat, so

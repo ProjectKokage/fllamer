@@ -2072,6 +2072,19 @@ final class LlamaToolDefinition {
     _validateJsonValue(parametersSchema, 'parametersSchema');
   }
 
+  /// Validates parsed tool [arguments] against [parametersSchema].
+  ///
+  /// This is applied automatically to model-generated calls before they are
+  /// exposed by `LlamaEngine.chat`. Apps may also use it before replaying
+  /// externally supplied tool-call history.
+  void validateArguments(Map<String, Object?> arguments) {
+    validate();
+    final error = _ToolArgumentsValidator(parametersSchema).validate(arguments);
+    if (error != null) {
+      throw ArgumentError.value(arguments, 'arguments', error);
+    }
+  }
+
   Map<String, Object?> toJson() {
     validate();
     return Map<String, Object?>.unmodifiable(<String, Object?>{
@@ -2083,6 +2096,369 @@ final class LlamaToolDefinition {
       }),
     });
   }
+}
+
+final class _ToolArgumentsValidator {
+  _ToolArgumentsValidator(this.rootSchema);
+
+  final Map<String, Object?> rootSchema;
+
+  String? validate(Object? value) => _validate(value, rootSchema, r'$');
+
+  String? _validate(Object? value, Object? schemaValue, String path) {
+    if (schemaValue is bool) {
+      return schemaValue ? null : '$path is rejected by the schema';
+    }
+    final schema = _schemaMap(schemaValue);
+    if (schema == null) {
+      return '$path has an invalid schema';
+    }
+
+    if (schema['\$ref'] case final String reference) {
+      final resolved = _resolveReference(reference);
+      if (resolved == null) {
+        return '$path uses unsupported or unresolved schema reference $reference';
+      }
+      final error = _validate(value, resolved, path);
+      if (error != null) {
+        return error;
+      }
+    }
+
+    if (schema['allOf'] case final List<Object?> schemas) {
+      for (final child in schemas) {
+        final error = _validate(value, child, path);
+        if (error != null) {
+          return error;
+        }
+      }
+    }
+    if (schema['anyOf'] case final List<Object?> schemas) {
+      if (!schemas.any((child) => _validate(value, child, path) == null)) {
+        return '$path does not match any allowed schema';
+      }
+    }
+    if (schema['oneOf'] case final List<Object?> schemas) {
+      final matches = schemas
+          .where((child) => _validate(value, child, path) == null)
+          .length;
+      if (matches != 1) {
+        return '$path must match exactly one allowed schema';
+      }
+    }
+    if (schema.containsKey('not') &&
+        _validate(value, schema['not'], path) == null) {
+      return '$path matches a disallowed schema';
+    }
+
+    if (schema.containsKey('const') &&
+        !_jsonValuesEqual(value, schema['const'])) {
+      return '$path must equal ${jsonEncode(schema['const'])}';
+    }
+    if (schema['enum'] case final List<Object?> values) {
+      if (!values.any((candidate) => _jsonValuesEqual(value, candidate))) {
+        return '$path is not one of the allowed values';
+      }
+    }
+
+    final declaredType = schema['type'];
+    if (declaredType is String) {
+      final error = _validateType(value, declaredType, path);
+      if (error != null) {
+        return error;
+      }
+    } else if (declaredType is List<Object?>) {
+      final types = declaredType.whereType<String>().toList(growable: false);
+      if (types.length != declaredType.length ||
+          !types.any((type) => _validateType(value, type, path) == null)) {
+        return '$path does not match any declared type';
+      }
+    } else if (declaredType != null) {
+      return '$path has an invalid schema type';
+    }
+
+    if (value is Map<Object?, Object?>) {
+      final object = <String, Object?>{};
+      for (final entry in value.entries) {
+        if (entry.key is! String) {
+          return '$path contains a non-string property name';
+        }
+        object[entry.key! as String] = entry.value;
+      }
+      final error = _validateObject(object, schema, path);
+      if (error != null) {
+        return error;
+      }
+    } else if (value is List<Object?>) {
+      final error = _validateArray(value, schema, path);
+      if (error != null) {
+        return error;
+      }
+    } else if (value is String) {
+      final error = _validateString(value, schema, path);
+      if (error != null) {
+        return error;
+      }
+    } else if (value is num) {
+      final error = _validateNumber(value, schema, path);
+      if (error != null) {
+        return error;
+      }
+    }
+    return null;
+  }
+
+  String? _validateType(Object? value, String type, String path) {
+    final matches = switch (type) {
+      'object' => value is Map<Object?, Object?>,
+      'array' => value is List<Object?>,
+      'string' => value is String,
+      'number' => value is num && value.isFinite,
+      'integer' =>
+        value is int ||
+            (value is double && value.isFinite && value == value.truncate()),
+      'boolean' => value is bool,
+      'null' => value == null,
+      _ => false,
+    };
+    return matches ? null : '$path must be $type';
+  }
+
+  String? _validateObject(
+    Map<String, Object?> value,
+    Map<String, Object?> schema,
+    String path,
+  ) {
+    if (schema['minProperties'] case final int minimum) {
+      if (value.length < minimum) {
+        return '$path must contain at least $minimum properties';
+      }
+    }
+    if (schema['maxProperties'] case final int maximum) {
+      if (value.length > maximum) {
+        return '$path must contain at most $maximum properties';
+      }
+    }
+
+    final properties = _schemaMap(schema['properties']) ?? const {};
+    if (schema['required'] case final List<Object?> required) {
+      for (final name in required.whereType<String>()) {
+        if (!value.containsKey(name)) {
+          return '$path.$name is required';
+        }
+      }
+    }
+
+    for (final entry in value.entries) {
+      final propertyPath = _propertyPath(path, entry.key);
+      if (properties.containsKey(entry.key)) {
+        final error = _validate(
+          entry.value,
+          properties[entry.key],
+          propertyPath,
+        );
+        if (error != null) {
+          return error;
+        }
+        continue;
+      }
+      final additional = schema.containsKey('additionalProperties')
+          ? schema['additionalProperties']
+          : true;
+      if (additional == false) {
+        return '$propertyPath is not declared by the tool schema';
+      }
+      if (additional is Map<Object?, Object?> || additional is bool) {
+        final error = _validate(entry.value, additional, propertyPath);
+        if (error != null) {
+          return error;
+        }
+      }
+    }
+    return null;
+  }
+
+  String? _validateArray(
+    List<Object?> value,
+    Map<String, Object?> schema,
+    String path,
+  ) {
+    if (schema['minItems'] case final int minimum) {
+      if (value.length < minimum) {
+        return '$path must contain at least $minimum items';
+      }
+    }
+    if (schema['maxItems'] case final int maximum) {
+      if (value.length > maximum) {
+        return '$path must contain at most $maximum items';
+      }
+    }
+    if (schema['uniqueItems'] == true) {
+      for (var i = 0; i < value.length; i += 1) {
+        for (var j = i + 1; j < value.length; j += 1) {
+          if (_jsonValuesEqual(value[i], value[j])) {
+            return '$path must contain unique items';
+          }
+        }
+      }
+    }
+
+    final prefixItems = schema['prefixItems'] is List<Object?>
+        ? schema['prefixItems']! as List<Object?>
+        : const <Object?>[];
+    for (var i = 0; i < value.length; i += 1) {
+      final Object? itemSchema;
+      if (i < prefixItems.length) {
+        itemSchema = prefixItems[i];
+      } else if (schema.containsKey('items')) {
+        itemSchema = schema['items'];
+      } else {
+        continue;
+      }
+      final error = _validate(value[i], itemSchema, '$path[$i]');
+      if (error != null) {
+        return error;
+      }
+    }
+    return null;
+  }
+
+  String? _validateString(
+    String value,
+    Map<String, Object?> schema,
+    String path,
+  ) {
+    final length = value.runes.length;
+    if (schema['minLength'] case final int minimum) {
+      if (length < minimum) {
+        return '$path must contain at least $minimum characters';
+      }
+    }
+    if (schema['maxLength'] case final int maximum) {
+      if (length > maximum) {
+        return '$path must contain at most $maximum characters';
+      }
+    }
+    if (schema['pattern'] case final String pattern) {
+      try {
+        if (!RegExp(pattern, unicode: true).hasMatch(value)) {
+          return '$path does not match the required pattern';
+        }
+      } on FormatException {
+        return '$path uses an invalid schema pattern';
+      }
+    }
+    if (schema['format'] case final String format) {
+      final valid = switch (format) {
+        'date' => RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value),
+        'time' => RegExp(
+          r'^\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$',
+        ).hasMatch(value),
+        'date-time' => DateTime.tryParse(value) != null && value.contains('T'),
+        'uuid' => RegExp(
+          r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+        ).hasMatch(value),
+        _ => true,
+      };
+      if (!valid) {
+        return '$path is not a valid $format value';
+      }
+    }
+    return null;
+  }
+
+  String? _validateNumber(num value, Map<String, Object?> schema, String path) {
+    if (!value.isFinite) {
+      return '$path must be finite';
+    }
+    if (schema['minimum'] case final num minimum) {
+      if (value < minimum) {
+        return '$path must be at least $minimum';
+      }
+    }
+    if (schema['maximum'] case final num maximum) {
+      if (value > maximum) {
+        return '$path must be at most $maximum';
+      }
+    }
+    if (schema['exclusiveMinimum'] case final num minimum) {
+      if (value <= minimum) {
+        return '$path must be greater than $minimum';
+      }
+    }
+    if (schema['exclusiveMaximum'] case final num maximum) {
+      if (value >= maximum) {
+        return '$path must be less than $maximum';
+      }
+    }
+    if (schema['multipleOf'] case final num factor) {
+      if (factor <= 0 || !factor.isFinite) {
+        return '$path uses an invalid multipleOf constraint';
+      }
+      final quotient = value / factor;
+      if ((quotient - quotient.round()).abs() > 1e-9) {
+        return '$path must be a multiple of $factor';
+      }
+    }
+    return null;
+  }
+
+  Object? _resolveReference(String reference) {
+    if (reference == '#') {
+      return rootSchema;
+    }
+    if (!reference.startsWith('#/')) {
+      return null;
+    }
+    Object? current = rootSchema;
+    for (final encoded in reference.substring(2).split('/')) {
+      final segment = encoded.replaceAll('~1', '/').replaceAll('~0', '~');
+      final map = _schemaMap(current);
+      if (map == null || !map.containsKey(segment)) {
+        return null;
+      }
+      current = map[segment];
+    }
+    return current;
+  }
+
+  Map<String, Object?>? _schemaMap(Object? value) {
+    if (value is Map<String, Object?>) {
+      return value;
+    }
+    if (value is Map<Object?, Object?> &&
+        value.keys.every((key) => key is String)) {
+      return value.cast<String, Object?>();
+    }
+    return null;
+  }
+
+  String _propertyPath(String path, String property) {
+    if (RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$').hasMatch(property)) {
+      return '$path.$property';
+    }
+    return '$path[${jsonEncode(property)}]';
+  }
+}
+
+bool _jsonValuesEqual(Object? left, Object? right) {
+  if (left is num && right is num) {
+    return left == right;
+  }
+  if (left is List<Object?> && right is List<Object?>) {
+    return left.length == right.length &&
+        List<bool>.generate(
+          left.length,
+          (index) => _jsonValuesEqual(left[index], right[index]),
+        ).every((matches) => matches);
+  }
+  if (left is Map<Object?, Object?> && right is Map<Object?, Object?>) {
+    if (left.length != right.length || !left.keys.every(right.containsKey)) {
+      return false;
+    }
+    return left.keys.every((key) => _jsonValuesEqual(left[key], right[key]));
+  }
+  return left == right;
 }
 
 final class LlamaToolCallingConfig {

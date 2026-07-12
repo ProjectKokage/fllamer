@@ -925,20 +925,23 @@ void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena,
 
 static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
+    const auto rule_is = [&](const std::string & prefix) {
+        return node.rule == prefix || string_starts_with(node.rule, prefix + "-");
+    };
 
     if (node.text.empty()) {
         return "";
     }
 
-    if (node.rule == "gemma4-number" || node.rule == "gemma4-bool" || node.rule == "gemma4-null") {
+    if (rule_is("gemma4-number") || rule_is("gemma4-bool") || rule_is("gemma4-null")) {
         return std::string(node.text);
     }
 
-    if (node.rule == "gemma4-string-content") {
+    if (rule_is("gemma4-string-content")) {
         return escape_json_string_inner(std::string(node.text));
     }
 
-    if (node.rule == "gemma4-string") {
+    if (rule_is("gemma4-string")) {
         std::string result = "\"";
         if (!node.children.empty()) {
             result += gemma4_to_json(arena, node.children[0]);
@@ -949,7 +952,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-array") {
+    if (rule_is("gemma4-array")) {
         std::string result = "[";
 
         bool add_comma = false;
@@ -967,11 +970,11 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-dict-key-name") {
+    if (rule_is("gemma4-dict-key-name")) {
         return std::string(node.text);
     }
 
-    if (node.rule == "gemma4-dict-key") {
+    if (rule_is("gemma4-dict-key")) {
         std::string result = "\"";
         if (!node.children.empty()) {
             result += escape_json_string_inner(gemma4_to_json(arena, node.children[0]));
@@ -982,7 +985,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-dict-kv") {
+    if (rule_is("gemma4-dict-kv")) {
         std::string result;
         for (auto child_id : node.children) {
             result += gemma4_to_json(arena, child_id);
@@ -990,7 +993,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-dict") {
+    if (rule_is("gemma4-dict")) {
         std::string result = "{";
 
         bool add_comma = false;
@@ -1008,7 +1011,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-value") {
+    if (rule_is("gemma4-value")) {
         if (!node.children.empty()) {
             return gemma4_to_json(arena, node.children[0]);
         }

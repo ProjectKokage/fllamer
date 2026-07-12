@@ -927,6 +927,14 @@ sealed class llama_dart_add_special_mode {
   static const LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY = 2;
 }
 
+sealed class llama_dart_stop_reason {
+  static const LLAMA_DART_STOP_REASON_UNKNOWN = 0;
+  static const LLAMA_DART_STOP_REASON_END_OF_GENERATION = 1;
+  static const LLAMA_DART_STOP_REASON_STOP_SEQUENCE = 2;
+  static const LLAMA_DART_STOP_REASON_STOP_TOKEN = 3;
+  static const LLAMA_DART_STOP_REASON_MAX_TOKENS = 4;
+}
+
 sealed class llama_dart_kv_cache_type {
   static const LLAMA_DART_KV_CACHE_DEFAULT = 0;
   static const LLAMA_DART_KV_CACHE_F32 = 1;
@@ -1361,6 +1369,9 @@ final class llama_dart_completion_stats extends ffi.Struct {
 
   @ffi.Double()
   external double speculative_verify_ms;
+
+  @ffi.Uint32()
+  external int stop_reason;
 }
 
 final class llama_dart_buffer extends ffi.Struct {
@@ -1439,4 +1450,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 37;
+const int LLAMA_DART_ABI_VERSION = 38;

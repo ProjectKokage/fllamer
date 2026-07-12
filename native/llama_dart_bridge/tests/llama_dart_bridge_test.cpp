@@ -1106,6 +1106,50 @@ int main() {
   assert(plain_gemma4_chat_plan.find("hello") != std::string::npos);
   llama_dart_buffer_free(chat_plan.data);
 
+  const char required_tool_chat_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","description":"Look up local data","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}}],"tool_choice":"required","parallel_tool_calls":true,"add_generation_prompt":true})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(required_tool_chat_request),
+             std::strlen(required_tool_chat_request), &chat_plan) ==
+         LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  const std::string gemma4_tool_chat_plan(
+      reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
+  assert(gemma4_tool_chat_plan.find("query") != std::string::npos);
+
+  const char valid_gemma4_call[] =
+      R"(<|tool_call>call:lookup{query: <|"|>alpha<|"|>}<tool_call|>)";
+  assistant_message = {};
+  assert(llama_dart_chat_parse_output(
+             chat_plan.data, chat_plan.size,
+             reinterpret_cast<const uint8_t *>(valid_gemma4_call),
+             std::strlen(valid_gemma4_call), &assistant_message) ==
+         LLAMA_DART_SUCCESS);
+  const std::string valid_gemma4_message(
+      reinterpret_cast<const char *>(assistant_message.data),
+      assistant_message.size);
+  assert(valid_gemma4_message.find("{\\\"query\\\":\\\"alpha\\\"}") !=
+         std::string::npos);
+  llama_dart_buffer_free(assistant_message.data);
+
+  for (const char *invalid_gemma4_call : {
+           R"(<|tool_call>call:lookup{markdown: <|"|>alpha<|"|>}<tool_call|>)",
+           R"(<|tool_call>call:lookup{query: 42}<tool_call|>)",
+           R"(<|tool_call>call:lookup{}<tool_call|>)",
+       }) {
+    assistant_message = {};
+    const llama_dart_result invalid_result = llama_dart_chat_parse_output(
+        chat_plan.data, chat_plan.size,
+        reinterpret_cast<const uint8_t *>(invalid_gemma4_call),
+        std::strlen(invalid_gemma4_call), &assistant_message);
+    assert(invalid_result == LLAMA_DART_ERROR_GENERATION);
+    assert(assistant_message.data == nullptr);
+    assert(assistant_message.size == 0);
+  }
+  llama_dart_buffer_free(chat_plan.data);
+
   const char marker_chat_request[] =
       R"({"messages":[{"role":"user","content":"before<__media__>middle<__media__>after"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true})";
   chat_plan = {};

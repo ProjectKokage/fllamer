@@ -18,12 +18,18 @@ When syncing, export the selected paths from the exact commit, remove upstream
 ignore files, then run the native, Dart, Flutter, and publish checks before
 updating the commit and date above.
 
-The curated snapshot currently carries one package-local backend safety delta:
-Metal `supports_op` uses source-type allowlists matching its compiled
-`MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS` kernels. This prevents missing
-pipelines, notably for TQ1_0/TQ2_0, from being advertised to the scheduler.
-Re-evaluate and preferably drop this delta when the pinned upstream version
-gains those kernels or equivalent fail-closed capability checks.
+The curated snapshot currently carries two package-local safety deltas:
+
+- Metal `supports_op` uses source-type allowlists matching its compiled
+  `MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS` kernels. This prevents missing
+  pipelines, notably for TQ1_0/TQ2_0, from being advertised to the scheduler.
+- Gemma 4 tool-call PEG/GBNF rules derive strict object keys, required fields,
+  nested value types, arrays, and literals from each function parameter
+  schema. The pinned upstream generic `gemma4-dict` otherwise ignores the
+  schema and permits arbitrary argument keys.
+
+Re-evaluate and preferably drop each delta when the pinned upstream version
+gains an equivalent fail-closed implementation.
 
 Current bridge integration uses these public upstream C APIs:
 
@@ -147,6 +153,10 @@ data, which cannot be allowed across the bridge C ABI.
 ABI 37 adds an optional validated chat-template override to model loading and
 an effective-template getter. Plain and tool-aware chat paths now reject a
 missing template before upstream's generic ChatML fallback can apply.
+
+ABI 38 adds a stable native generation stop-reason enum and reports it in
+completion statistics. Dart terminal chunks distinguish end-of-generation,
+stop sequences, stop tokens, and maximum-token exhaustion.
 
 Note: pinned upstream documents `llama_state_get_size()` as a save-only sizing
 helper. Do not use it to preflight `llama_state_set_data()` restores; it can be

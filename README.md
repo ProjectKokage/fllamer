@@ -139,9 +139,10 @@ void main() async {
   target-only snapshots remain readable by non-model-backed contexts.
 - Worker-isolate raw prompt and chat completion using upstream decode and
   sampler APIs, streaming decoded chunks with stop-string holdback and custom
-  stop-token termination, plus final-chunk telemetry for token counts, time to
-  first token, elapsed time, and tok/s rates, speculative draft/accepted token
-  counts, and draft/verification timings. Prompt evaluation adds model special
+  stop-token termination, plus typed terminal stop reasons and final-chunk
+  telemetry for token counts, time to first token, elapsed time, and tok/s
+  rates, speculative draft/accepted token counts, and draft/verification
+  timings. Prompt evaluation adds model special
   tokens only when the context is empty; chat-template text parses trusted
   model control tokens. `continueCompletion()` samples directly from a
   prefetched or restored non-empty context, with prior-session sampler penalty
@@ -199,10 +200,11 @@ void main() async {
 - Experimental end-to-end function/tool calling through pinned upstream chat
   templates: model-specific capability inspection, typed definitions and
   history, auto/required/none/named choice, lazy grammar triggers, additional
-  stops, parsed terminal assistant messages, parallel-call gating, and stable
-  generated call IDs. An opt-in checksum-pinned official Qwen2.5 fixture covers
-  real weighted call generation and result consumption. Tool execution remains
-  app-owned. See
+  stops, schema-derived Gemma 4 argument constraints, post-parse schema
+  validation, parsed terminal assistant messages, parallel-call gating, and
+  stable generated call IDs. An opt-in checksum-pinned official Qwen2.5
+  fixture covers real weighted call generation and result consumption. Tool
+  execution remains app-owned. See
   [tool calling](doc/tool_calling.md).
 - Experimental pooled text embeddings returning `Float32List`; batch calls use
   a row-major `EmbeddingBatch` with one flat `Float32List` and zero-copy vector

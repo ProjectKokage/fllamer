@@ -22,6 +22,7 @@
 #include <functional>
 
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1374,16 +1375,257 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             });
 
             auto tool_choice = p.choice();
+            int  schema_rule_id = 0;
+
+            std::function<common_peg_parser(const json &)> gemma4_literal;
+            std::function<common_peg_parser(const json &)> gemma4_schema;
+
+            auto next_schema_rule = [&](const std::string & kind) {
+                return "gemma4-" + kind + "-schema-" + std::to_string(schema_rule_id++);
+            };
+
+            gemma4_literal = [&](const json & value) -> common_peg_parser {
+                if (value.is_string()) {
+                    const auto content_rule = next_schema_rule("string-content");
+                    const auto string_rule  = next_schema_rule("string");
+                    p.rule(content_rule, p.literal(value.get<std::string>()));
+                    return p.rule(string_rule,
+                                  p.literal("<|\"|>") + p.ref(content_rule) + p.literal("<|\"|>"));
+                }
+                if (value.is_boolean()) {
+                    return p.rule(next_schema_rule("bool"), p.literal(value.get<bool>() ? "true" : "false"));
+                }
+                if (value.is_null()) {
+                    return p.rule(next_schema_rule("null"), p.literal("null"));
+                }
+                if (value.is_number()) {
+                    return p.rule(next_schema_rule("number"), p.literal(value.dump()));
+                }
+                if (value.is_array()) {
+                    std::vector<common_peg_parser> elements;
+                    for (const auto & item : value) {
+                        if (!elements.empty()) {
+                            elements.push_back(p.literal(",") + p.space());
+                        }
+                        elements.push_back(gemma4_literal(item));
+                    }
+                    return p.rule(next_schema_rule("array"),
+                                  p.literal("[") + p.space() + p.sequence(elements) + p.space() + p.literal("]"));
+                }
+                if (value.is_object()) {
+                    std::vector<common_peg_parser> members;
+                    for (const auto & [name, item] : value.items()) {
+                        if (!members.empty()) {
+                            members.push_back(p.literal(",") + p.space());
+                        }
+                        const auto key_name_rule = next_schema_rule("dict-key-name");
+                        const auto key_rule      = next_schema_rule("dict-key");
+                        const auto member_rule   = next_schema_rule("dict-kv");
+                        p.rule(key_name_rule, p.literal(name));
+                        p.rule(key_rule, p.ref(key_name_rule) + p.literal(":"));
+                        members.push_back(p.rule(member_rule,
+                                                 p.ref(key_rule) + p.space() + gemma4_literal(item)));
+                    }
+                    return p.rule(next_schema_rule("dict"),
+                                  p.literal("{") + p.space() + p.sequence(members) + p.space() + p.literal("}"));
+                }
+                throw std::runtime_error("Gemma 4 tool schema contains an unsupported literal");
+            };
+
+            gemma4_schema = [&](const json & schema) -> common_peg_parser {
+                if (!schema.is_object()) {
+                    throw std::runtime_error("Gemma 4 tool parameter schema must be an object");
+                }
+                if (schema.contains("const")) {
+                    return gemma4_literal(schema.at("const"));
+                }
+                if (schema.contains("enum")) {
+                    const auto & values = schema.at("enum");
+                    if (!values.is_array() || values.empty()) {
+                        throw std::runtime_error("Gemma 4 tool schema enum must be a non-empty array");
+                    }
+                    std::vector<common_peg_parser> choices;
+                    for (const auto & value : values) {
+                        choices.push_back(gemma4_literal(value));
+                    }
+                    return p.choice(choices);
+                }
+                for (const char * composition : {"anyOf", "oneOf"}) {
+                    if (schema.contains(composition)) {
+                        const auto & alternatives = schema.at(composition);
+                        if (!alternatives.is_array() || alternatives.empty()) {
+                            throw std::runtime_error(std::string("Gemma 4 tool schema ") + composition +
+                                                     " must be a non-empty array");
+                        }
+                        std::vector<common_peg_parser> choices;
+                        for (const auto & alternative : alternatives) {
+                            choices.push_back(gemma4_schema(alternative));
+                        }
+                        return p.choice(choices);
+                    }
+                }
+
+                if (schema.contains("type") && schema.at("type").is_array()) {
+                    std::vector<common_peg_parser> choices;
+                    for (const auto & type : schema.at("type")) {
+                        if (!type.is_string()) {
+                            throw std::runtime_error("Gemma 4 tool schema type array must contain strings");
+                        }
+                        json typed = schema;
+                        typed["type"] = type;
+                        choices.push_back(gemma4_schema(typed));
+                    }
+                    if (choices.empty()) {
+                        throw std::runtime_error("Gemma 4 tool schema type array must not be empty");
+                    }
+                    return p.choice(choices);
+                }
+
+                std::string type;
+                if (schema.contains("type")) {
+                    if (!schema.at("type").is_string()) {
+                        throw std::runtime_error("Gemma 4 tool schema type must be a string");
+                    }
+                    type = schema.at("type").get<std::string>();
+                } else if (schema.contains("properties") || schema.contains("required") ||
+                           schema.contains("additionalProperties")) {
+                    type = "object";
+                } else if (schema.contains("items") || schema.contains("prefixItems")) {
+                    type = "array";
+                }
+
+                if (type.empty()) {
+                    return p.ref("gemma4-value");
+                }
+                if (type == "string") {
+                    return p.ref("gemma4-string");
+                }
+                if (type == "number" || type == "integer") {
+                    return p.ref("gemma4-number");
+                }
+                if (type == "boolean") {
+                    return p.ref("gemma4-bool");
+                }
+                if (type == "null") {
+                    return p.ref("gemma4-null");
+                }
+                if (type == "array") {
+                    std::vector<common_peg_parser> prefix_items;
+                    if (schema.contains("prefixItems")) {
+                        const auto & items = schema.at("prefixItems");
+                        if (!items.is_array()) {
+                            throw std::runtime_error("Gemma 4 tool schema prefixItems must be an array");
+                        }
+                        for (const auto & item : items) {
+                            prefix_items.push_back(gemma4_schema(item));
+                        }
+                    }
+                    if (!prefix_items.empty()) {
+                        std::vector<common_peg_parser> elements;
+                        for (const auto & item : prefix_items) {
+                            if (!elements.empty()) {
+                                elements.push_back(p.literal(",") + p.space());
+                            }
+                            elements.push_back(item);
+                        }
+                        return p.rule(next_schema_rule("array"),
+                                      p.literal("[") + p.space() + p.sequence(elements) + p.space() + p.literal("]"));
+                    }
+
+                    const auto item = schema.contains("items") ? gemma4_schema(schema.at("items"))
+                                                               : p.ref("gemma4-value");
+                    int min_items = schema.value("minItems", 0);
+                    int max_items = schema.value("maxItems", -1);
+                    if (min_items < 0 || max_items < -1 || (max_items >= 0 && min_items > max_items)) {
+                        throw std::runtime_error("Gemma 4 tool schema has invalid array bounds");
+                    }
+                    const auto tail = p.literal(",") + p.space() + item;
+                    common_peg_parser elements = p.eps();
+                    if (max_items != 0) {
+                        if (min_items == 0) {
+                            elements = p.optional(item + p.repeat(tail, 0, max_items < 0 ? -1 : max_items - 1));
+                        } else {
+                            elements = item + p.repeat(tail, min_items - 1,
+                                                       max_items < 0 ? -1 : max_items - 1);
+                        }
+                    }
+                    return p.rule(next_schema_rule("array"),
+                                  p.literal("[") + p.space() + elements + p.space() + p.literal("]"));
+                }
+                if (type == "object") {
+                    const bool strict = schema.contains("additionalProperties") &&
+                                        schema.at("additionalProperties").is_boolean() &&
+                                        !schema.at("additionalProperties").get<bool>();
+                    if (!strict) {
+                        return p.ref("gemma4-dict");
+                    }
+
+                    json properties = schema.value("properties", json::object());
+                    if (!properties.is_object()) {
+                        throw std::runtime_error("Gemma 4 tool schema properties must be an object");
+                    }
+                    std::set<std::string> required;
+                    if (schema.contains("required")) {
+                        const auto & required_json = schema.at("required");
+                        if (!required_json.is_array()) {
+                            throw std::runtime_error("Gemma 4 tool schema required must be an array");
+                        }
+                        for (const auto & name : required_json) {
+                            if (!name.is_string()) {
+                                throw std::runtime_error("Gemma 4 tool schema required must contain strings");
+                            }
+                            required.insert(name.get<std::string>());
+                        }
+                    }
+
+                    struct gemma4_member {
+                        common_peg_parser parser;
+                        bool              required;
+                    };
+                    std::vector<gemma4_member> members;
+                    for (const auto & [name, property_schema] : properties.items()) {
+                        const auto key_name_rule = next_schema_rule("dict-key-name");
+                        const auto key_rule      = next_schema_rule("dict-key");
+                        const auto member_rule   = next_schema_rule("dict-kv");
+                        p.rule(key_name_rule, p.literal(name));
+                        p.rule(key_rule, p.ref(key_name_rule) + p.literal(":"));
+                        members.push_back({
+                            p.rule(member_rule,
+                                   p.ref(key_rule) + p.space() + gemma4_schema(property_schema)),
+                            required.find(name) != required.end(),
+                        });
+                        required.erase(name);
+                    }
+                    if (!required.empty()) {
+                        throw std::runtime_error("Gemma 4 tool schema requires an undeclared property");
+                    }
+
+                    std::function<common_peg_parser(size_t, bool)> tail;
+                    tail = [&](size_t index, bool has_previous) -> common_peg_parser {
+                        if (index == members.size()) {
+                            return p.eps();
+                        }
+                        const auto present = (has_previous ? p.literal(",") + p.space() : p.eps()) +
+                                             members[index].parser + tail(index + 1, true);
+                        if (members[index].required) {
+                            return present;
+                        }
+                        return p.choice({present, tail(index + 1, has_previous)});
+                    };
+                    return p.rule(next_schema_rule("dict"),
+                                  p.literal("{") + p.space() + tail(0, false) + p.space() + p.literal("}"));
+                }
+                throw std::runtime_error("Unsupported Gemma 4 tool schema type: " + type);
+            };
 
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
-                // const auto & params   = function.at("parameters");
+                const auto & params   = function.at("parameters");
 
                 tool_choice |= p.rule("tool-" + name, p.tool(p.sequence({
                     p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
-                    p.tool_args(p.ref("gemma4-dict")),
+                    p.tool_args(gemma4_schema(params)),
                 })));
             });
 

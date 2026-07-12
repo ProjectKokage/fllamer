@@ -1329,6 +1329,28 @@ enum llama_dart_add_special_mode {
   };
 }
 
+enum llama_dart_stop_reason {
+  LLAMA_DART_STOP_REASON_UNKNOWN(0),
+  LLAMA_DART_STOP_REASON_END_OF_GENERATION(1),
+  LLAMA_DART_STOP_REASON_STOP_SEQUENCE(2),
+  LLAMA_DART_STOP_REASON_STOP_TOKEN(3),
+  LLAMA_DART_STOP_REASON_MAX_TOKENS(4);
+
+  final int value;
+  const llama_dart_stop_reason(this.value);
+
+  static llama_dart_stop_reason fromValue(int value) => switch (value) {
+    0 => LLAMA_DART_STOP_REASON_UNKNOWN,
+    1 => LLAMA_DART_STOP_REASON_END_OF_GENERATION,
+    2 => LLAMA_DART_STOP_REASON_STOP_SEQUENCE,
+    3 => LLAMA_DART_STOP_REASON_STOP_TOKEN,
+    4 => LLAMA_DART_STOP_REASON_MAX_TOKENS,
+    _ => throw ArgumentError(
+      'Unknown value for llama_dart_stop_reason: $value',
+    ),
+  };
+}
+
 enum llama_dart_kv_cache_type {
   LLAMA_DART_KV_CACHE_DEFAULT(0),
   LLAMA_DART_KV_CACHE_F32(1),
@@ -1795,6 +1817,9 @@ final class llama_dart_completion_stats extends ffi.Struct {
 
   @ffi.Double()
   external double speculative_verify_ms;
+
+  @ffi.Uint32()
+  external int stop_reason;
 }
 
 final class llama_dart_buffer extends ffi.Struct {
@@ -1873,4 +1898,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 37;
+const int LLAMA_DART_ABI_VERSION = 38;

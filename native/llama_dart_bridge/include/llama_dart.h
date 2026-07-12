@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 37u
+#define LLAMA_DART_ABI_VERSION 38u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -98,6 +98,14 @@ typedef enum llama_dart_add_special_mode {
   LLAMA_DART_ADD_SPECIAL_ALWAYS = 1,
   LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY = 2,
 } llama_dart_add_special_mode;
+
+typedef enum llama_dart_stop_reason {
+  LLAMA_DART_STOP_REASON_UNKNOWN = 0,
+  LLAMA_DART_STOP_REASON_END_OF_GENERATION = 1,
+  LLAMA_DART_STOP_REASON_STOP_SEQUENCE = 2,
+  LLAMA_DART_STOP_REASON_STOP_TOKEN = 3,
+  LLAMA_DART_STOP_REASON_MAX_TOKENS = 4,
+} llama_dart_stop_reason;
 
 typedef enum llama_dart_kv_cache_type {
   LLAMA_DART_KV_CACHE_DEFAULT = 0,
@@ -283,6 +291,8 @@ typedef struct llama_dart_completion_stats {
   uint32_t speculative_accepted_tokens;
   double speculative_draft_ms;
   double speculative_verify_ms;
+  /* A llama_dart_stop_reason value. */
+  uint32_t stop_reason;
 } llama_dart_completion_stats;
 
 typedef struct llama_dart_buffer {

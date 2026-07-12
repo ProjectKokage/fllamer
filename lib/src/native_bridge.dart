@@ -1730,7 +1730,9 @@ final class NativeLlamaBridge {
           'Model returned tool calls when tool choice was none.',
         );
       }
-      final allowed = <String>{for (final tool in toolCalling.tools) tool.name};
+      final allowed = <String, LlamaToolDefinition>{
+        for (final tool in toolCalling.tools) tool.name: tool,
+      };
       final usedIds = <String>{...plan.usedToolCallIds};
       for (final call in calls) {
         final id = call.id;
@@ -1742,7 +1744,8 @@ final class NativeLlamaBridge {
       }
       final normalizedCalls = <LlamaToolCall>[];
       for (final call in calls) {
-        if (!allowed.contains(call.name)) {
+        final tool = allowed[call.name];
+        if (tool == null) {
           throw GenerationException(
             'Model returned an unknown tool call: ${call.name}.',
           );
@@ -1753,6 +1756,15 @@ final class NativeLlamaBridge {
               'Model returned ${call.name} when $name was required.',
             );
           }
+        }
+        try {
+          tool.validateArguments(call.arguments);
+        } on ArgumentError catch (error) {
+          throw GenerationException(
+            'Model returned invalid arguments for ${call.name}: '
+            '${error.message ?? error}.',
+            cause: error,
+          );
         }
         var id = call.id;
         if (id == null) {
@@ -3263,7 +3275,13 @@ final class _NativeEngineHandles {
               : utf8.decode(data.asTypedList(size), allowMalformed: true);
           final assistantMessage = chatPlan == null || !chatPlan.parseOutput
               ? null
-              : bridge._parseChatOutput(chatPlan, text, config.toolCalling);
+              : _parseTerminalChatOutput(
+                  bridge,
+                  chatPlan,
+                  text,
+                  config.toolCalling,
+                  telemetry.stopReason,
+                );
           return (
             text: text,
             telemetry: telemetry,
@@ -3679,17 +3697,20 @@ final class _NativeStreamingGeneration {
       }
       if (isDone) {
         _terminal = true;
+        final telemetry = _telemetryFromStats(_stats.ref);
         final assistantMessage = chatPlan == null || !chatPlan!.parseOutput
             ? null
-            : bridge._parseChatOutput(
+            : _parseTerminalChatOutput(
+                bridge,
                 chatPlan!,
                 _generated.toString(),
                 toolCalling,
+                telemetry.stopReason,
               );
         return (
           text: chunk.toString(),
           isDone: true,
-          telemetry: _telemetryFromStats(_stats.ref),
+          telemetry: telemetry,
           assistantMessage: assistantMessage,
         );
       }
@@ -4175,7 +4196,35 @@ GenerationTelemetry _telemetryFromStats(llama_dart_completion_stats stats) {
     speculativeAcceptedTokens: stats.speculative_accepted_tokens,
     speculativeDraftMs: stats.speculative_draft_ms,
     speculativeVerifyMs: stats.speculative_verify_ms,
+    stopReason: switch (stats.stop_reason) {
+      1 => GenerationStopReason.endOfGeneration,
+      2 => GenerationStopReason.stopSequence,
+      3 => GenerationStopReason.stopToken,
+      4 => GenerationStopReason.maxTokens,
+      _ => GenerationStopReason.unknown,
+    },
   );
+}
+
+ChatMessage _parseTerminalChatOutput(
+  NativeLlamaBridge bridge,
+  _NativeChatPlan plan,
+  String output,
+  LlamaToolCallingConfig toolCalling,
+  GenerationStopReason stopReason,
+) {
+  try {
+    return bridge._parseChatOutput(plan, output, toolCalling);
+  } on GenerationException catch (error) {
+    if (stopReason == GenerationStopReason.maxTokens &&
+        error.message.startsWith('failed to parse chat output:')) {
+      throw GenerationException(
+        'Maximum token limit was reached before the chat or tool call was complete.',
+        cause: error,
+      );
+    }
+    rethrow;
+  }
 }
 
 final class _Utf8ChunkDecoder {

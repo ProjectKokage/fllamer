@@ -111,6 +111,7 @@ struct llama_dart_generation {
   size_t stop_holdback = 0;
   bool done = false;
   bool terminal_delivered = false;
+  uint32_t stop_reason = LLAMA_DART_STOP_REASON_UNKNOWN;
 };
 
 struct llama_dart_lora_adapter {
@@ -1673,13 +1674,20 @@ llama_dart_result commit_sampled_completion_token(
     llama_dart_context *context, const llama_vocab *vocab, llama_token token,
     const std::vector<std::string> &stop_sequences,
     const std::vector<llama_token> &stop_tokens, std::string *generated,
-    uint32_t *produced_tokens, bool *done) {
+    uint32_t *produced_tokens, bool *done, uint32_t *stop_reason) {
   *produced_tokens = 0;
   *done = false;
-  if (llama_vocab_is_eog(vocab, token) ||
-      std::find(stop_tokens.begin(), stop_tokens.end(), token) !=
-          stop_tokens.end()) {
+  *stop_reason = LLAMA_DART_STOP_REASON_UNKNOWN;
+  if (llama_vocab_is_eog(vocab, token)) {
     *done = true;
+    *stop_reason = LLAMA_DART_STOP_REASON_END_OF_GENERATION;
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  }
+  if (std::find(stop_tokens.begin(), stop_tokens.end(), token) !=
+      stop_tokens.end()) {
+    *done = true;
+    *stop_reason = LLAMA_DART_STOP_REASON_STOP_TOKEN;
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   }
@@ -1698,6 +1706,9 @@ llama_dart_result commit_sampled_completion_token(
   context->position += 1;
   *produced_tokens = 1;
   *done = stopped;
+  if (stopped) {
+    *stop_reason = LLAMA_DART_STOP_REASON_STOP_SEQUENCE;
+  }
   last_error.clear();
   return LLAMA_DART_SUCCESS;
 }
@@ -1706,7 +1717,7 @@ llama_dart_result decode_single_completion_token(
     llama_dart_context *context, const llama_vocab *vocab,
     llama_sampler *sampler, const std::vector<std::string> &stop_sequences,
     const std::vector<llama_token> &stop_tokens, std::string *generated,
-    uint32_t *produced_tokens, bool *done) {
+    uint32_t *produced_tokens, bool *done, uint32_t *stop_reason) {
   if (is_cancelled(context)) {
     return fail_cancelled(context);
   }
@@ -1714,7 +1725,7 @@ llama_dart_result decode_single_completion_token(
       sample_and_accept_completion_token(sampler, context->context, -1);
   return commit_sampled_completion_token(
       context, vocab, token, stop_sequences, stop_tokens, generated,
-      produced_tokens, done);
+      produced_tokens, done, stop_reason);
 }
 
 llama_dart_result decode_ngram_completion_tokens(
@@ -1892,6 +1903,7 @@ llama_dart_result decode_model_backed_completion_tokens(
   *accepted_draft_tokens = 0;
   *draft_ms = 0.0;
   *verify_ms = 0.0;
+  uint32_t ignored_stop_reason = LLAMA_DART_STOP_REASON_UNKNOWN;
   if (is_cancelled(context)) {
     return fail_cancelled(context);
   }
@@ -1920,7 +1932,8 @@ llama_dart_result decode_model_backed_completion_tokens(
                                    context_size - context->position - 1)))));
   if (max_draft == 0) {
     return commit_sampled_completion_token(context, vocab, token, {}, {},
-                                           generated, produced_tokens, done);
+                                           generated, produced_tokens, done,
+                                           &ignored_stop_reason);
   }
 
   llama_memory_t speculative_memory =
@@ -1951,7 +1964,8 @@ llama_dart_result decode_model_backed_completion_tokens(
   }
   if (draft.empty()) {
     return commit_sampled_completion_token(context, vocab, token, {}, {},
-                                           generated, produced_tokens, done);
+                                           generated, produced_tokens, done,
+                                           &ignored_stop_reason);
   }
 
   std::vector<llama_token> batch_tokens;
@@ -2041,12 +2055,14 @@ llama_dart_result decode_completion_token(
     llama_sampler *sampler, const std::vector<std::string> &stop_sequences,
     const std::vector<llama_token> &stop_tokens, uint32_t max_tokens,
     std::string *generated, uint32_t *produced_tokens, bool *done,
+    uint32_t *stop_reason,
     uint32_t *draft_tokens, uint32_t *accepted_draft_tokens, double *draft_ms,
     double *verify_ms) {
   *draft_tokens = 0;
   *accepted_draft_tokens = 0;
   *draft_ms = 0.0;
   *verify_ms = 0.0;
+  *stop_reason = LLAMA_DART_STOP_REASON_UNKNOWN;
   const bool model_backed =
       is_model_backed_speculation(context->speculative_type);
   if (model_backed && context->speculative != nullptr &&
@@ -2054,7 +2070,7 @@ llama_dart_result decode_completion_token(
       stop_tokens.empty()) {
     const llama_dart_result result = decode_single_completion_token(
         context, vocab, sampler, stop_sequences, stop_tokens, generated,
-        produced_tokens, done);
+        produced_tokens, done, stop_reason);
     if (result == LLAMA_DART_SUCCESS && *produced_tokens > 0) {
       context->speculative_needs_warmup = false;
     }
@@ -2062,20 +2078,28 @@ llama_dart_result decode_completion_token(
   }
   if (model_backed && context->speculative != nullptr &&
       stop_sequences.empty() && stop_tokens.empty()) {
-    return decode_model_backed_completion_tokens(
+    const llama_dart_result result = decode_model_backed_completion_tokens(
         context, vocab, sampler, max_tokens, generated, produced_tokens, done,
         draft_tokens, accepted_draft_tokens, draft_ms, verify_ms);
+    if (result == LLAMA_DART_SUCCESS && *done) {
+      *stop_reason = LLAMA_DART_STOP_REASON_END_OF_GENERATION;
+    }
+    return result;
   }
   if (is_ngram_speculation(context->speculative_type) &&
       context->speculative != nullptr && stop_sequences.empty() &&
       stop_tokens.empty()) {
-    return decode_ngram_completion_tokens(
+    const llama_dart_result result = decode_ngram_completion_tokens(
         context, vocab, sampler, max_tokens, generated, produced_tokens, done,
         draft_tokens, accepted_draft_tokens, draft_ms, verify_ms);
+    if (result == LLAMA_DART_SUCCESS && *done) {
+      *stop_reason = LLAMA_DART_STOP_REASON_END_OF_GENERATION;
+    }
+    return result;
   }
   return decode_single_completion_token(context, vocab, sampler, stop_sequences,
                                         stop_tokens, generated,
-                                        produced_tokens, done);
+                                        produced_tokens, done, stop_reason);
 }
 
 llama_dart_result validate_completion_request(
@@ -4952,6 +4976,7 @@ llama_dart_result llama_dart_context_complete(
     uint32_t generated_tokens = 0;
     uint32_t speculative_draft_tokens = 0;
     uint32_t speculative_accepted_tokens = 0;
+    uint32_t stop_reason = LLAMA_DART_STOP_REASON_UNKNOWN;
     double speculative_draft_ms = 0.0;
     double speculative_verify_ms = 0.0;
     parsed_chat_plan chat_plan;
@@ -5033,6 +5058,7 @@ llama_dart_result llama_dart_context_complete(
       const llama_dart_result decoded = decode_completion_token(
           context, vocab, sampler, stop_sequences, stop_tokens,
           config->max_tokens - generated_tokens, &generated, &produced, &done,
+          &stop_reason,
           &drafted, &accepted, &draft_ms, &verify_ms);
       if (decoded != LLAMA_DART_SUCCESS) {
         llama_sampler_free(sampler);
@@ -5051,6 +5077,10 @@ llama_dart_result llama_dart_context_complete(
       if (done) {
         break;
       }
+    }
+    if (stop_reason == LLAMA_DART_STOP_REASON_UNKNOWN &&
+        generated_tokens >= config->max_tokens) {
+      stop_reason = LLAMA_DART_STOP_REASON_MAX_TOKENS;
     }
     const steady_clock::time_point decode_end = steady_clock::now();
     decode_ms = elapsed_ms(decode_start, decode_end);
@@ -5071,6 +5101,7 @@ llama_dart_result llama_dart_context_complete(
       out_stats->speculative_accepted_tokens = speculative_accepted_tokens;
       out_stats->speculative_draft_ms = speculative_draft_ms;
       out_stats->speculative_verify_ms = speculative_verify_ms;
+      out_stats->stop_reason = stop_reason;
     }
     context->cancel_requested.store(false, std::memory_order_relaxed);
     last_error.clear();
@@ -5238,7 +5269,8 @@ llama_dart_result llama_dart_generation_next(
           generation->context, generation->vocab, generation->sampler,
           generation->stop_sequences, generation->stop_tokens,
           generation->max_tokens - generation->generated_tokens,
-          &generation->generated, &produced, &done, &drafted, &accepted,
+          &generation->generated, &produced, &done,
+          &generation->stop_reason, &drafted, &accepted,
           &draft_ms, &verify_ms);
       if (decoded != LLAMA_DART_SUCCESS) {
         return decoded;
@@ -5256,8 +5288,15 @@ llama_dart_result llama_dart_generation_next(
       }
       generation->done =
           done || generation->generated_tokens >= generation->max_tokens;
+      if (!done &&
+          generation->generated_tokens >= generation->max_tokens) {
+        generation->stop_reason = LLAMA_DART_STOP_REASON_MAX_TOKENS;
+      }
     } else {
       generation->done = true;
+      if (generation->stop_reason == LLAMA_DART_STOP_REASON_UNKNOWN) {
+        generation->stop_reason = LLAMA_DART_STOP_REASON_MAX_TOKENS;
+      }
     }
 
     size_t safe_size = generation->generated.size();
@@ -5297,6 +5336,7 @@ llama_dart_result llama_dart_generation_next(
           generation->speculative_accepted_tokens;
       out_stats->speculative_draft_ms = generation->speculative_draft_ms;
       out_stats->speculative_verify_ms = generation->speculative_verify_ms;
+      out_stats->stop_reason = generation->stop_reason;
     }
     generation->terminal_delivered = generation->done;
     last_error.clear();
