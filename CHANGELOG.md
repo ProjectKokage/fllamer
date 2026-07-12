@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.2
 
 - Derived Gemma 4 tool-argument grammar from each declared parameter schema
   instead of accepting arbitrary dictionary keys and value types. Terminal
