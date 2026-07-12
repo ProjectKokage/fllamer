@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - Fixed default bundled-bridge lookup by resolving the native code-asset ID,
   including Flutter's Apple framework packaging, while preserving explicit

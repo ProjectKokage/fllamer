@@ -18,7 +18,7 @@ Add the package to the application:
 
 ```yaml
 dependencies:
-  fllamer: ^0.1.1
+  fllamer: ^0.2.0
 ```
 
 Source checkouts include the pinned `llama.cpp` source needed by the native
