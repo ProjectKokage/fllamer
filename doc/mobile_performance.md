@@ -3,10 +3,12 @@
 Defaults are conservative except for available GPU offload: `useMmap` true,
 `useMlock` false, `checkTensors` true, `contextSize` 4096, `batchSize` 512,
 `ubatchSize` matching `batchSize`, and `GpuConfig.auto()` offloading all layers
-when a compiled GPU backend is available. KV cache defaults are F16 keys and
-values, automatic Flash Attention, KV offload enabled, full-size SWA enabled,
-and unified-cache mode disabled. Use `GpuConfig.cpu()` for a deterministic CPU
-baseline and tune explicit layer counts per model and device.
+when a compiled GPU backend is available. Apple Simulator targets are the
+exception: automatic selection resolves to explicit CPU with zero GPU layers.
+KV cache defaults are F16 keys and values, automatic Flash Attention, KV
+offload requested when the effective backend supports it, full-size SWA
+enabled, and unified-cache mode disabled. Use `GpuConfig.cpu()` for a
+deterministic CPU baseline and tune explicit layer counts per model and device.
 
 Measure at least:
 
@@ -120,6 +122,9 @@ loaded model. The same context report exposes the configured K/V cache types,
 effective KV offload, Flash Attention mode, full-size SWA mode, and
 unified-cache mode. `GpuConfig.cpu()` forces both context operation offload and
 KV offload off, even when `KvCacheConfig.offload` retains its portable default.
+On Apple Simulator targets, compiled Metal capability may still report true,
+but `GpuConfig.auto()` selects CPU and disables effective offload. Explicit
+Metal remains a diagnostic request there, not a supported performance path.
 
 Quantized cache types can reduce context memory but are model- and backend-
 dependent. Quantized V caches require Flash Attention; `KvCacheConfig`

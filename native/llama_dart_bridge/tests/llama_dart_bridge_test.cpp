@@ -1,4 +1,5 @@
 #include "llama_dart.h"
+#include "gpu_policy.h"
 #include "speculative.h"
 #include "state_snapshot.h"
 
@@ -17,6 +18,49 @@
 
 int main() {
   using namespace llama_dart_bridge_internal;
+
+  const gpu_load_policy simulator_auto = resolve_gpu_load_policy(
+      LLAMA_DART_GPU_BACKEND_AUTO, -1, true);
+  assert(simulator_auto.backend == LLAMA_DART_GPU_BACKEND_CPU);
+  assert(simulator_auto.n_gpu_layers == 0);
+  assert(simulator_auto.simulator_auto_cpu);
+  assert(!resolve_mmproj_use_gpu(true, simulator_auto.simulator_auto_cpu));
+  const gpu_load_policy simulator_bounded_auto = resolve_gpu_load_policy(
+      LLAMA_DART_GPU_BACKEND_AUTO, 4, true);
+  assert(simulator_bounded_auto.backend == LLAMA_DART_GPU_BACKEND_CPU);
+  assert(simulator_bounded_auto.n_gpu_layers == 0);
+  assert(simulator_bounded_auto.simulator_auto_cpu);
+  const gpu_load_policy simulator_explicit_metal = resolve_gpu_load_policy(
+      LLAMA_DART_GPU_BACKEND_METAL, -1, true);
+  assert(simulator_explicit_metal.backend == LLAMA_DART_GPU_BACKEND_METAL);
+  assert(simulator_explicit_metal.n_gpu_layers == -1);
+  assert(!simulator_explicit_metal.simulator_auto_cpu);
+  const gpu_load_policy simulator_explicit_cpu = resolve_gpu_load_policy(
+      LLAMA_DART_GPU_BACKEND_CPU, 0, true);
+  assert(simulator_explicit_cpu.backend == LLAMA_DART_GPU_BACKEND_CPU);
+  assert(simulator_explicit_cpu.n_gpu_layers == 0);
+  assert(!simulator_explicit_cpu.simulator_auto_cpu);
+  assert(resolve_mmproj_use_gpu(
+      true, simulator_explicit_cpu.simulator_auto_cpu));
+  assert(!resolve_mmproj_use_gpu(
+      false, simulator_explicit_cpu.simulator_auto_cpu));
+  const gpu_load_policy device_auto = resolve_gpu_load_policy(
+      LLAMA_DART_GPU_BACKEND_AUTO, -1, false);
+  assert(device_auto.backend == LLAMA_DART_GPU_BACKEND_AUTO);
+  assert(device_auto.n_gpu_layers == -1);
+  assert(!device_auto.simulator_auto_cpu);
+
+  const gpu_load_policy target_auto =
+      resolve_gpu_load_policy(LLAMA_DART_GPU_BACKEND_AUTO, -1);
+  if (target_is_apple_simulator()) {
+    assert(target_auto.backend == LLAMA_DART_GPU_BACKEND_CPU);
+    assert(target_auto.n_gpu_layers == 0);
+    assert(target_auto.simulator_auto_cpu);
+  } else {
+    assert(target_auto.backend == LLAMA_DART_GPU_BACKEND_AUTO);
+    assert(target_auto.n_gpu_layers == -1);
+    assert(!target_auto.simulator_auto_cpu);
+  }
 
   const state_snapshot_layout snapshot_layout{
       /* .speculative_type = */ 4,

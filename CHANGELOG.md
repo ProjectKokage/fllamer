@@ -1,3 +1,10 @@
+## Unreleased
+
+- Forced automatic GPU selection to an explicit CPU device with zero offloaded
+  layers on Apple Simulator targets. Explicit Metal requests remain unchanged
+  for diagnostics, while context, KV, speculative, and multimodal projector
+  setup now inherit the resolved CPU backend.
+
 ## 0.2.2
 
 - Derived Gemma 4 tool-argument grammar from each declared parameter schema

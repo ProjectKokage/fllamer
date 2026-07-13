@@ -178,8 +178,11 @@ void main() async {
   `contextInfo()` reports the applied cache settings. Explicit CPU mode forces
   context operation and KV offload off. Apple builds embed
   Metal and support `GpuConfig.auto()`/`metal()`; `GpuConfig.cpu()` forces the
-  CPU path. Vulkan selection is runtime-gated until a Vulkan-enabled bridge is
-  supplied.
+  CPU path. On Apple Simulator targets, `GpuConfig.auto()` also resolves to an
+  explicit CPU device with zero GPU layers because Simulator Metal is not a
+  supported inference path. Explicit Metal requests remain available for
+  diagnostics. Vulkan selection is runtime-gated until a Vulkan-enabled bridge
+  is supplied.
 - Experimental GBNF grammar constraints, JSON mode, and pinned-upstream JSON
   Schema conversion for `GenerationConfig.jsonSchema`, including local
   `$defs`/`$ref`, JSON
@@ -246,9 +249,10 @@ before persistence or display.
 
 - JSON Schema features outside the pinned upstream converter, including
   external references, and video input.
-- Full iOS builds and physical-device smoke tests for the native-assets hook;
-  supported-ABI Android debug/release APK packaging passes locally, but full
-  iOS builds currently need the iOS 26.5 Xcode platform installed.
+- Physical-device iOS runtime smoke tests. A dependent Flutter app passes an
+  iOS 26.5 Simulator automatic-backend regression and an unsigned `iphoneos`
+  Debug build, but the latter is compile/package evidence rather than a Metal
+  runtime result from iPhone hardware.
 - Android API levels below 28 and 32-bit Android `armeabi-v7a`; pass
   `--target-platform android-arm64,android-x64` for Android APK validation.
 - iOS versions below 15.0. The pinned embedded Metal backend uses an event API

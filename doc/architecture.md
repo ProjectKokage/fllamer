@@ -41,10 +41,13 @@ Typed `KvCacheConfig` values are translated to pinned upstream cache types and
 context flags inside the bridge. Model-backed speculative setup copies the same
 cache type, offload, Flash Attention, SWA, and unified-cache policy to its draft
 or MTP context so the two sides do not silently use different memory settings.
-Explicit CPU selection restricts the upstream model device list to CPU and
-overrides KV plus operation offload. This prevents a Metal/Vulkan-enabled
-library from initializing an accelerator-backed context after model-layer
-offload was disabled.
+Explicit CPU selection, and automatic selection on Apple Simulator targets,
+restricts the upstream model device list to CPU and overrides operation, KV,
+and speculative offload. The Simulator automatic policy also forces the
+multimodal projector onto CPU without changing the bridge's independent
+projector choice for explicit configurations. This prevents a
+Metal/Vulkan-enabled library from initializing accidental accelerator-backed
+work after model-layer offload was disabled.
 Call `close()` when finished. Double-close is safe; use after close throws
 `ResourceDisposedException`. Context state can be saved in memory or to an
 app-owned file for prompt/session reuse.
@@ -153,6 +156,8 @@ ordinary synchronized token after restore before drafting resumes. Target-only
 snapshots from ABI 26 and earlier still restore on non-model-backed contexts.
 Native-assets packaging is experimental: the build hook exists, Android
 supported-ABI debug/release APK packaging and iOS config-only generation pass
-through the example app. Full iOS builds are currently blocked in this
-workspace by a missing local Xcode iOS platform install, and device smoke tests
-still need to pass before packaging is documented as supported.
+through the example app. A dependent Flutter app also passes an iOS 26.5
+Simulator automatic-backend runtime regression and an unsigned `iphoneos`
+Debug build. Those checks validate Simulator CPU runtime behavior and device
+compile/package output, respectively; physical-device Metal runtime testing is
+still pending.

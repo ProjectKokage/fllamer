@@ -102,7 +102,11 @@ Target notes:
   `MTLSharedEvent.waitUntilSignaledValue`, which was introduced in iOS 15. The
   hook passes `CMAKE_SYSTEM_NAME=iOS`, the target SDK and architecture, and the
   greater of the native-assets target or iOS 15.0. Xcode command line tools
-  must be available.
+  must be available. On Apple Simulator targets, automatic GPU selection is
+  normalized before model loading to an explicit CPU device with zero GPU
+  layers. This also keeps context, KV, speculative, and multimodal projector
+  work off Metal. Explicit Metal selection remains unchanged for diagnostics;
+  physical-device Metal behavior must be validated on a physical device.
 - macOS and Linux host builds are supported by the same hook. Windows is not
   configured yet.
 
@@ -423,17 +427,19 @@ Current verification:
 - A direct offline CMake cross-compile of `llama_dart_bridge` for iOS 15 arm64
   passes with the embedded Metal backend. This validates the native source and
   deployment target independently of Flutter's Xcode destination selection.
+- A clean dependent-app `flutter drive` run on an iPhone 17 Pro iOS 26.5
+  Simulator passes with `GpuConfig.auto()`: context inspection reports the CPU
+  backend with KV offload disabled, and the exact Qwen2.5 0.5B Instruct Q4_K_M
+  fixture produces the same controlled greedy response as the CPU reference.
+  A subsequent unsigned `iphoneos` Debug build passes from the same source.
+  These are Simulator CPU runtime and device compile/package results, not a
+  physical-iPhone Metal runtime result.
 
 Current limitations:
 
 - `flutter build apk --debug` without `--target-platform` still asks Flutter's
   native-assets pipeline to build `android-arm`; the hook rejects that 32-bit
   ABI because this package only supports `arm64-v8a` and `x86_64`.
-- Full iOS device and simulator builds were attempted from `example/` and are
-  blocked by local Xcode platform availability: Xcode reports that the iOS
-  26.5 platform component is not installed, even though its SDK is discoverable
-  for the direct CMake cross-compile. The passing app-level check in this
-  workspace is `flutter build ios --no-codesign --config-only`.
 - Physical-device smoke tests have not been run in this workspace.
 - Runtime loading still supports explicit `nativeLibraryPath` and
   `FLLAMER_NATIVE_LIBRARY`; app builds should verify the bundled library is

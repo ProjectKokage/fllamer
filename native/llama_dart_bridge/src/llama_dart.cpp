@@ -1,5 +1,6 @@
 #include "llama_dart.h"
 
+#include "gpu_policy.h"
 #include "ggml-backend.h"
 #include "llama.h"
 #include "chat.h"
@@ -57,6 +58,7 @@ struct llama_dart_model {
   size_t active_lora_adapters = 0;
   uint32_t gpu_backend = LLAMA_DART_GPU_BACKEND_CPU;
   int32_t n_gpu_layers = 0;
+  bool simulator_auto_cpu = false;
   bool use_mmap = true;
   bool use_mlock = false;
   bool check_tensors = true;
@@ -2906,15 +2908,18 @@ llama_dart_result llama_dart_model_load(
     handle->chat_template_override = std::move(chat_template_override);
     llama_model_params params = llama_model_default_params();
     std::vector<ggml_backend_dev_t> devices;
+    const llama_dart_bridge_internal::gpu_load_policy gpu_policy =
+        llama_dart_bridge_internal::resolve_gpu_load_policy(
+            config->gpu_backend, config->n_gpu_layers);
     uint32_t effective_backend = LLAMA_DART_GPU_BACKEND_CPU;
-    const llama_dart_result selected =
-        select_gpu_devices(config->gpu_backend, config->n_gpu_layers, &devices,
-                           &effective_backend);
+    const llama_dart_result selected = select_gpu_devices(
+        gpu_policy.backend, gpu_policy.n_gpu_layers, &devices,
+        &effective_backend);
     if (selected != LLAMA_DART_SUCCESS) {
       backend_release();
       return selected;
     }
-    params.n_gpu_layers = config->n_gpu_layers;
+    params.n_gpu_layers = gpu_policy.n_gpu_layers;
     if (!devices.empty()) {
       params.devices = devices.data();
     }
@@ -2933,6 +2938,7 @@ llama_dart_result llama_dart_model_load(
     handle->model = loaded;
     handle->gpu_backend = effective_backend;
     handle->n_gpu_layers = params.n_gpu_layers;
+    handle->simulator_auto_cpu = gpu_policy.simulator_auto_cpu;
     handle->use_mmap = params.use_mmap;
     handle->use_mlock = params.use_mlock;
     handle->check_tensors = params.check_tensors;
@@ -4249,7 +4255,8 @@ llama_dart_result llama_dart_context_create(
     }
     if (config->mmproj_path_size > 0) {
       mtmd_context_params mmproj_params = mtmd_context_params_default();
-      mmproj_params.use_gpu = config->mmproj_use_gpu != 0;
+      mmproj_params.use_gpu = llama_dart_bridge_internal::resolve_mmproj_use_gpu(
+          config->mmproj_use_gpu != 0, model->simulator_auto_cpu);
       mmproj_params.print_timings = false;
       if (config->threads > 0) {
         mmproj_params.n_threads = config->threads;
