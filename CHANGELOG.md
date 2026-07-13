@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.3
 
 - Forced automatic GPU selection to an explicit CPU device with zero offloaded
   layers on Apple Simulator targets. Explicit Metal requests remain unchanged
