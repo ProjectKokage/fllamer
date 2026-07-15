@@ -1,9 +1,11 @@
 ## Unreleased
 
-- Updated the curated `llama.cpp` snapshot to upstream build `b10015`,
-  including Q2_0 CPU/Metal kernels, Hy3 model metadata, and runtime fixes.
-  The package-local Metal capability guard now recognizes the new Q2_0
-  kernels while continuing to reject source types without compiled kernels.
+- Replaced the curated `llama.cpp` snapshot with an official submodule pinned
+  to upstream build `b10015`. Published packages still include the checked-out
+  source required for offline native builds.
+- Dropped the package-local Metal capability and Gemma 4 generation-grammar
+  patches so the submodule remains identical to upstream. Parsed tool calls
+  continue to be validated against their declared schema before exposure.
 
 ## 0.2.3
 

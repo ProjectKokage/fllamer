@@ -21,10 +21,12 @@ dependencies:
   fllamer: ^0.2.3
 ```
 
-Source checkouts include the pinned `llama.cpp` source needed by the native
-build, so setup only requires dependency resolution:
+Published packages include the pinned `llama.cpp` source needed by the native
+build. Repository checkouts must initialize the exact submodule pin before
+dependency resolution:
 
 ```sh
+git submodule update --init --checkout
 dart pub get
 ```
 
@@ -203,11 +205,11 @@ void main() async {
 - Experimental end-to-end function/tool calling through pinned upstream chat
   templates: model-specific capability inspection, typed definitions and
   history, auto/required/none/named choice, lazy grammar triggers, additional
-  stops, schema-derived Gemma 4 argument constraints, post-parse schema
-  validation, parsed terminal assistant messages, parallel-call gating, and
-  stable generated call IDs. An opt-in checksum-pinned official Qwen2.5
-  fixture covers real weighted call generation and result consumption. Tool
-  execution remains app-owned. See
+  stops, upstream Gemma 4 argument grammar, post-parse schema validation,
+  parsed terminal assistant messages, parallel-call gating, and stable
+  generated call IDs. An opt-in checksum-pinned official Qwen2.5 fixture
+  covers real weighted call generation and result consumption. Tool execution
+  remains app-owned. See
   [tool calling](doc/tool_calling.md).
 - Experimental pooled text embeddings returning `Float32List`; batch calls use
   a row-major `EmbeddingBatch` with one flat `Float32List` and zero-copy vector
@@ -289,18 +291,19 @@ ctest --test-dir build/native --output-on-failure
 
 ## Licensing
 
-`fllamer` is GPL-3.0 licensed. The published package vendors pinned `llama.cpp`
-source; keep upstream notices from `third_party/llama.cpp/LICENSE`,
+`fllamer` is GPL-3.0 licensed. The repository pins `llama.cpp` as a submodule,
+and the published package includes its required source files. Keep upstream
+notices from `third_party/llama.cpp/LICENSE`,
 `third_party/llama.cpp/AUTHORS`, and `third_party/llama.cpp/licenses/` with any
-redistribution. The package manifest registers these files plus the vendored
-cpp-httplib, stb, and miniaudio notices as Flutter additional licenses so they
-are collected into generated application notices. This does not decide whether
-a particular application is compatible with GPL-3.0; distributors still need
-to make that product/legal decision and meet the applicable source and notice
-obligations. Model files, adapters, and mmproj files are app-supplied data with
-their own licenses.
+redistribution. The package manifest registers these files plus cpp-httplib,
+stb, and miniaudio notices as Flutter additional licenses so they are collected
+into generated application notices. This does not decide whether a particular
+application is compatible with GPL-3.0; distributors still need to make that
+product/legal decision and meet the applicable source and notice obligations.
+Model files, adapters, and mmproj files are app-supplied data with their own
+licenses.
 
-The vendored upstream source is pinned at
+The upstream submodule is pinned at
 `12127defda4f41b7679cb2477a4b0d65ee6a0c8f` (`b10015`).
 
 See [doc/feature_matrix.md](doc/feature_matrix.md) and

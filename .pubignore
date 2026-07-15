@@ -20,9 +20,10 @@ build/
 AGENTS.md
 bin/
 
-# The published package vendors enough pinned llama.cpp source to reproduce the
-# native build. Upstream apps, unrelated tools, docs, benchmark data, and
-# conversion utilities are not used by fllamer's CMake target.
+# The published package includes enough source from the checked-out llama.cpp
+# submodule to reproduce the native build. Upstream apps, unrelated tools,
+# docs, benchmark data, and conversion utilities are not used by fllamer's
+# CMake target.
 third_party/llama.cpp/.clang-format
 third_party/llama.cpp/.clang-tidy
 third_party/llama.cpp/.devops/
@@ -83,7 +84,7 @@ third_party/llama.cpp/vendor/stb/*
 !third_party/llama.cpp/vendor/stb/stb_image.h
 
 # Disabled native backends are not part of the current CPU-baseline package
-# build. Keep the vendored source payload aligned with the bridge CMake flags.
+# build. Keep the published source payload aligned with the bridge CMake flags.
 third_party/llama.cpp/ggml/src/ggml-blas/
 third_party/llama.cpp/ggml/src/ggml-cann/
 third_party/llama.cpp/ggml/src/ggml-cuda/

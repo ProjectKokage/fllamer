@@ -1178,20 +1178,22 @@ int main() {
          std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
 
-  for (const char *invalid_gemma4_call : {
-           R"(<|tool_call>call:lookup{markdown: <|"|>alpha<|"|>}<tool_call|>)",
-           R"(<|tool_call>call:lookup{query: 42}<tool_call|>)",
-           R"(<|tool_call>call:lookup{}<tool_call|>)",
-       }) {
-    assistant_message = {};
-    const llama_dart_result invalid_result = llama_dart_chat_parse_output(
-        chat_plan.data, chat_plan.size,
-        reinterpret_cast<const uint8_t *>(invalid_gemma4_call),
-        std::strlen(invalid_gemma4_call), &assistant_message);
-    assert(invalid_result == LLAMA_DART_ERROR_GENERATION);
-    assert(assistant_message.data == nullptr);
-    assert(assistant_message.size == 0);
-  }
+  // The pristine upstream Gemma 4 grammar accepts generic dictionary members.
+  // The checked Dart wrapper validates this parsed call against the matching
+  // tool schema before exposing it through GenerationChunk.assistantMessage.
+  const char schema_invalid_gemma4_call[] =
+      R"(<|tool_call>call:lookup{markdown: <|"|>alpha<|"|>}<tool_call|>)";
+  assistant_message = {};
+  assert(llama_dart_chat_parse_output(
+             chat_plan.data, chat_plan.size,
+             reinterpret_cast<const uint8_t *>(schema_invalid_gemma4_call),
+             std::strlen(schema_invalid_gemma4_call), &assistant_message) ==
+         LLAMA_DART_SUCCESS);
+  const std::string schema_invalid_gemma4_message(
+      reinterpret_cast<const char *>(assistant_message.data),
+      assistant_message.size);
+  assert(schema_invalid_gemma4_message.find("markdown") != std::string::npos);
+  llama_dart_buffer_free(assistant_message.data);
   llama_dart_buffer_free(chat_plan.data);
 
   const char marker_chat_request[] =

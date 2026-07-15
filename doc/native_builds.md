@@ -14,10 +14,10 @@ Package dry run:
 dart pub publish --dry-run
 ```
 
-The latest local dry run completed online validation with zero warnings and
-assembled a 3 MiB compressed archive. The root `.pubignore` keeps local build
-state, native test fixtures, conversion helpers, and unrelated upstream source
-out of the published package.
+Initialize the submodule before running the dry run and require zero warnings.
+The root `.pubignore` keeps local build state, native test fixtures, conversion
+helpers, and unrelated upstream source out of the published package. Inspect
+the emitted file list and compressed size whenever the upstream pin changes.
 
 Generated bindings:
 
@@ -31,9 +31,11 @@ bridge paths. The second generates `@Native` symbol addresses for the bundled
 asset ID `package:fllamer/llama_dart_bridge`; both are internal implementation
 details and must be regenerated after a bridge-header change.
 
-The bridge builds against the curated, vendored `third_party/llama.cpp`
-snapshot recorded in `doc/upstream_sync.md`. Do not point published builds at
-upstream `master`.
+The bridge builds against the exact `third_party/llama.cpp` submodule gitlink
+recorded in `doc/upstream_sync.md`. Initialize repository checkouts with
+`git submodule update --init --checkout`; published packages already contain
+the required checked-out source files. Do not point builds at upstream
+`master`.
 `LLAMA_DART_NO_NETWORK=ON` is the default CMake path: it enables CMake's
 disconnected fetch mode and disables upstream's optional external LLGuidance
 project. The bridge does not require dependency or executable downloads.
@@ -111,7 +113,7 @@ Target notes:
   configured yet.
 
 Model files remain app-owned data. The hook only packages native executable
-code that is built from the vendored sources.
+code that is built from the pinned source files.
 
 ### Android model paths
 
@@ -134,9 +136,6 @@ Current verification:
   in Release builds, and an ASan/UBSan Debug build passes locally.
   Fixture-backed vocab/context checks run when
   `third_party/llama.cpp/models/ggml-vocab-gpt-2.gguf` exists.
-- Apple `ctest` asks the public Metal backend capability path about representative
-  supported types and missing-kernel types, including TQ1_0/TQ2_0, so a future
-  broad capability claim cannot silently reintroduce null-pipeline dispatch.
 - Set `LLAMA_DART_TEST_MODEL` to an app-owned weighted GGUF before `dart test`
   to run opt-in warm-up, prompt-only prefill and continuation,
   explicit/automatic context-shift continuation, and deterministic stop-token
@@ -191,7 +190,7 @@ Current verification:
   run real EAGLE-3 coverage. The target comes from
   `unsloth/Qwen3-1.7B-GGUF` revision
   `d7f544eead698dbd1f15126ef60b45a1e1933222`. The draft is converted with the
-  vendored `llama.cpp` converter from `AngelSlim/Qwen3-1.7B_eagle3` revision
+  pinned `llama.cpp` converter from `AngelSlim/Qwen3-1.7B_eagle3` revision
   `94441b48acc5804677ae12259617c83323b543a9` and target tokenizer/config files
   from `Qwen/Qwen3-1.7B` revision
   `70d244cc86ccca08cf5af4e1e306ecf908b1ad5e`:
@@ -332,7 +331,7 @@ Current verification:
   microbatch fails recoverably before upstream decode. The model repository is
   pinned at `unsloth/gemma-4-E2B-it-qat-mobile-GGUF` revision
   `ae6332216be5fea499f72bb6e484648ab3bdbb00`; the image is pinned test media
-  from the vendored llama.cpp commit.
+  from the pinned llama.cpp commit.
 
   | File | Bytes | SHA-256 |
   | --- | ---: | --- |
@@ -362,7 +361,7 @@ Current verification:
   `Qwen/Qwen3-ASR-0.6B` model and pinned at
   `ggml-org/Qwen3-ASR-0.6B-GGUF` revision
   `928ab958557df9aa2ef1c93e0e83c7ad0933fae2`. The MP3 is pinned upstream test
-  media from the vendored `llama.cpp` commit.
+  media from the pinned `llama.cpp` commit.
 
   | File | Bytes | SHA-256 |
   | --- | ---: | --- |

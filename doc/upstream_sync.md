@@ -1,36 +1,49 @@
 # Upstream sync
 
 - Upstream: `https://github.com/ggml-org/llama.cpp`
-- Local snapshot: `third_party/llama.cpp`
+- Submodule: `third_party/llama.cpp`
 - Commit: `12127defda4f41b7679cb2477a4b0d65ee6a0c8f`
 - Upstream build tag: `b10015`
 - Sync date: 2026-07-15
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
-  `third_party/llama.cpp/licenses/` with redistributed source or binaries.
+  `third_party/llama.cpp/licenses/`, plus the package-maintained notices under
+  `third_party/licenses/`, with redistributed source or binaries.
 
-The repository vendors a curated snapshot instead of a submodule so source
-installs and pub.dev archives are self-contained. The snapshot contains the
-CMake, bridge-facing runtime, CPU/Metal/Vulkan, multimodal, license, conversion,
-and native-test fixture files used by this package. Unrelated upstream apps,
-benches, documentation, server tools, and disabled native backends are omitted.
-When syncing, export the selected paths from the exact commit, remove upstream
-ignore files, then run the native, Dart, Flutter, and publish checks before
-updating the commit and date above.
+The parent repository's gitlink is the source of truth for the upstream pin.
+Initialize a repository checkout with:
 
-The curated snapshot currently carries two package-local safety deltas:
+```sh
+git submodule update --init --checkout
+```
 
-- Metal `supports_op` uses source-type allowlists matching its compiled
-  `MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS` kernels. The allowlists include the
-  Q2_0 kernels added upstream and prevent missing pipelines, notably for
-  TQ1_0/TQ2_0, from being advertised to the scheduler.
-- Gemma 4 tool-call PEG/GBNF rules derive strict object keys, required fields,
-  nested value types, arrays, and literals from each function parameter
-  schema. The pinned upstream generic `gemma4-dict` otherwise ignores the
-  schema and permits arbitrary argument keys.
+The build hook never initializes or fetches the submodule. Published archives
+instead include the checked-out source files selected by the root `.pubignore`,
+so builds from pub packages remain self-contained and require no Git or network
+access. The publish checkout must initialize the submodule before running
+`dart pub publish`.
 
-Re-evaluate and preferably drop each delta when the pinned upstream version
-gains an equivalent fail-closed implementation.
+No package-local changes are carried inside `third_party/llama.cpp`. Metal
+capability reporting and Gemma 4 generation grammar therefore match the pinned
+upstream commit. fllamer still validates parsed tool arguments against the
+declared schema before exposing them to application code.
+
+To sync upstream, fetch and inspect an explicit commit, check it out detached
+inside the submodule, and stage the updated gitlink:
+
+```sh
+git -C third_party/llama.cpp fetch --tags origin
+git -C third_party/llama.cpp checkout --detach <commit>
+git add third_party/llama.cpp
+```
+
+Do not configure a tracking branch or use `git submodule update --remote`.
+After confirming changed public APIs and behavior, update the commit, build
+tag, sync date, bridge CMake metadata, feature status, and CHANGELOG together.
+Keep the submodule worktree clean, then run the native, Dart, Flutter, and
+publish checks. Review the dry-run archive contents because `.pubignore`
+filters a full upstream checkout and new upstream paths may otherwise increase
+the package payload.
 
 Current bridge integration uses these public upstream C APIs:
 

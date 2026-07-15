@@ -199,32 +199,6 @@ if(BUILD_TESTING)
     LLAMA_DART_TEST_TOOL_VOCAB_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/ggml-vocab-gemma-4.gguf"
   )
   add_test(NAME llama_dart_bridge_test COMMAND llama_dart_bridge_test)
-  if(APPLE AND LLAMA_DART_ENABLE_METAL)
-    add_executable(
-      llama_dart_metal_supports_op_test
-      tests/metal_supports_op_test.cpp
-    )
-    target_compile_features(
-      llama_dart_metal_supports_op_test PRIVATE cxx_std_17
-    )
-    if(MSVC)
-      target_compile_options(llama_dart_metal_supports_op_test PRIVATE /UNDEBUG)
-    else()
-      target_compile_options(llama_dart_metal_supports_op_test PRIVATE -UNDEBUG)
-    endif()
-    target_include_directories(
-      llama_dart_metal_supports_op_test PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/ggml/include
-      ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/ggml/src/ggml-metal
-    )
-    target_link_libraries(
-      llama_dart_metal_supports_op_test PRIVATE ggml-metal
-    )
-    add_test(
-      NAME llama_dart_metal_supports_op_test
-      COMMAND llama_dart_metal_supports_op_test
-    )
-  endif()
   if(UNIX)
     add_test(
       NAME llama_dart_bridge_exports

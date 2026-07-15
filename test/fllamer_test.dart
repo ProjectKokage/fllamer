@@ -392,9 +392,9 @@ void main() {
         'third_party/llama.cpp/LICENSE',
         'third_party/llama.cpp/AUTHORS',
         'third_party/llama.cpp/licenses/LICENSE-jsonhpp',
-        'third_party/llama.cpp/licenses/LICENSE-miniaudio',
-        'third_party/llama.cpp/licenses/LICENSE-stb',
         'third_party/llama.cpp/vendor/cpp-httplib/LICENSE',
+        'third_party/licenses/LICENSE-miniaudio',
+        'third_party/licenses/LICENSE-stb',
       ]) {
         expect(File(path).existsSync(), isTrue, reason: path);
         expect(pubspec, contains('- $path'));

@@ -68,13 +68,13 @@ with `UnsupportedFeatureException` instead of silently omitting definitions.
 Parallel calls are enabled only when both the request and model template allow
 them. Missing model-generated call IDs receive unique per-engine IDs.
 
-Gemma 4 uses a model-specific non-JSON argument syntax. fllamer's pinned
-planner derives that grammar from each declared `parametersSchema`, including
-strict property names, required fields, nested types, arrays, compositions,
-and literal values. Regardless of model family, every parsed terminal call is
-validated again against its matching schema before `assistantMessage` is
-returned. Invalid calls fail with `GenerationException`; they are never handed
-to application tool dispatch.
+Gemma 4 uses a model-specific non-JSON argument syntax. The pinned upstream
+planner constrains its syntax with a generic dictionary grammar, but does not
+derive generation-time constraints from each declared `parametersSchema`.
+Regardless of model family, fllamer validates every parsed terminal call
+against its matching schema before `assistantMessage` is returned. Invalid
+calls fail with `GenerationException`; they are never handed to application
+tool dispatch.
 
 Active tools cannot be combined with a custom grammar or JSON Schema response
 constraint. Named tool choice is implemented by exposing only the selected
