@@ -301,7 +301,7 @@ obligations. Model files, adapters, and mmproj files are app-supplied data with
 their own licenses.
 
 The vendored upstream source is pinned at
-`4f37f519722aa3242eecb7649466b4a4a2d6d6da` (`b9967`).
+`12127defda4f41b7679cb2477a4b0d65ee6a0c8f` (`b10015`).
 
 See [doc/feature_matrix.md](doc/feature_matrix.md) and
 [doc/upstream_sync.md](doc/upstream_sync.md). Architecture, native build, and

@@ -1058,6 +1058,7 @@ bool ggml_metal_supports_mul_mat_type(enum ggml_type type) {
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -1333,6 +1334,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                            case GGML_TYPE_BF16:
                            case GGML_TYPE_Q8_0:
                            case GGML_TYPE_Q1_0:
+                           case GGML_TYPE_Q2_0:
                            case GGML_TYPE_Q4_0:
                            case GGML_TYPE_Q4_1:
                            case GGML_TYPE_Q5_0:
@@ -1360,6 +1362,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                                 return false;
                         }
                     case GGML_TYPE_Q1_0:
+                    case GGML_TYPE_Q2_0:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q5_0:
@@ -1382,7 +1385,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return ggml_metal_supports_get_rows_type(op->src[0]->type);
         case GGML_OP_SET_ROWS:
             {
-                if (op->src[0]->type != GGML_TYPE_F32 && op->src[0]->type != GGML_TYPE_F16) {
+                if (op->src[0]->type == GGML_TYPE_F16) {
+                    return op->type == GGML_TYPE_F16;
+                }
+
+                if (op->src[0]->type != GGML_TYPE_F32) {
                     return false;
                 }
 

@@ -1,3 +1,10 @@
+## Unreleased
+
+- Updated the curated `llama.cpp` snapshot to upstream build `b10015`,
+  including Q2_0 CPU/Metal kernels, Hy3 model metadata, and runtime fixes.
+  The package-local Metal capability guard now recognizes the new Q2_0
+  kernels while continuing to reject source types without compiled kernels.
+
 ## 0.2.3
 
 - Forced automatic GPU selection to an explicit CPU device with zero offloaded

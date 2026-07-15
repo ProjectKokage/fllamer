@@ -2,9 +2,9 @@
 
 - Upstream: `https://github.com/ggml-org/llama.cpp`
 - Local snapshot: `third_party/llama.cpp`
-- Commit: `4f37f519722aa3242eecb7649466b4a4a2d6d6da`
-- Upstream build tag: `b9967`
-- Sync date: 2026-07-11
+- Commit: `12127defda4f41b7679cb2477a4b0d65ee6a0c8f`
+- Upstream build tag: `b10015`
+- Sync date: 2026-07-15
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
   `third_party/llama.cpp/licenses/` with redistributed source or binaries.
@@ -21,8 +21,9 @@ updating the commit and date above.
 The curated snapshot currently carries two package-local safety deltas:
 
 - Metal `supports_op` uses source-type allowlists matching its compiled
-  `MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS` kernels. This prevents missing
-  pipelines, notably for TQ1_0/TQ2_0, from being advertised to the scheduler.
+  `MUL_MAT`, `MUL_MAT_ID`, and `GET_ROWS` kernels. The allowlists include the
+  Q2_0 kernels added upstream and prevent missing pipelines, notably for
+  TQ1_0/TQ2_0, from being advertised to the scheduler.
 - Gemma 4 tool-call PEG/GBNF rules derive strict object keys, required fields,
   nested value types, arrays, and literals from each function parameter
   schema. The pinned upstream generic `gemma4-dict` otherwise ignores the

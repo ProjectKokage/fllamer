@@ -40,7 +40,6 @@ int main() {
       GGML_TYPE_TQ1_0,
       GGML_TYPE_TQ2_0,
       GGML_TYPE_Q8_K,
-      GGML_TYPE_Q2_0,
       GGML_TYPE_NVFP4,
       GGML_TYPE_I8,
       GGML_TYPE_F64,
@@ -56,11 +55,14 @@ int main() {
   // These kernels are present on every Metal target.  This guards against an
   // accidentally over-restrictive capability filter.
   assert(ggml_metal_supports_mul_mat_type(GGML_TYPE_F32));
+  assert(ggml_metal_supports_mul_mat_type(GGML_TYPE_Q2_0));
   assert(ggml_metal_supports_mul_mat_type(GGML_TYPE_Q4_0));
   assert(ggml_metal_supports_get_rows_type(GGML_TYPE_F32));
+  assert(ggml_metal_supports_get_rows_type(GGML_TYPE_Q2_0));
   assert(ggml_metal_supports_get_rows_type(GGML_TYPE_Q4_0));
   assert(ggml_metal_supports_get_rows_type(GGML_TYPE_I32));
   assert(supports_op(device, GGML_OP_GET_ROWS, GGML_TYPE_F32));
+  assert(supports_op(device, GGML_OP_GET_ROWS, GGML_TYPE_Q2_0));
   assert(supports_op(device, GGML_OP_GET_ROWS, GGML_TYPE_Q4_0));
 
   return 0;
