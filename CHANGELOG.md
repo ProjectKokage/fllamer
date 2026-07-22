@@ -1,5 +1,19 @@
-## Unreleased
+## 0.2.4
 
+- Fixed multimodal prompt preprocessing after upstream added an explicit
+  `text_len` field to `mtmd_input_text`. The bridge now passes the complete
+  rendered prompt instead of accidentally exposing only its first byte.
+- Added an optional request-level `GenerationConfig.enableThinking` switch for
+  chat generation. Explicit values use the pinned Jinja chat-plan path and
+  forward llama.cpp's typed `enable_thinking` input without reloading the model
+  or creating a second context; `null` preserves the 0.2.3 formatter behavior.
+  Raw completion and continuation reject explicit values. Thinking-enabled chat
+  also rejects app-supplied raw grammar, JSON mode, and JSON schema so the
+  constraint cannot consume hidden reasoning; planner-owned tool grammar stays
+  supported, and typed terminal parsing keeps reasoning separate from the
+  normalized assistant value.
+- Bumped the bridge ABI to 39 so older custom bridges cannot silently ignore
+  the new chat-plan field.
 - Replaced the curated `llama.cpp` snapshot with an official submodule pinned
   to upstream build `b10015`. Published packages still include the checked-out
   source required for offline native builds.

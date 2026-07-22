@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(llama_dart_bridge VERSION 0.2.3 LANGUAGES CXX)
+project(llama_dart_bridge VERSION 0.2.4 LANGUAGES CXX)
 
 set(LLAMA_DART_UPSTREAM_COMMIT 12127defda4f41b7679cb2477a4b0d65ee6a0c8f)
 set(LLAMA_DART_UPSTREAM_BUILD_NUMBER 10015)
