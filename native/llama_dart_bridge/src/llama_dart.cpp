@@ -1263,11 +1263,11 @@ llama_dart_result decode_multimodal_prompt(
   const std::string prompt(
       reinterpret_cast<const char *>(config->prompt_data),
       config->prompt_size);
-  mtmd_input_text text{
-      prompt.c_str(),
-      completion_adds_special(context, config),
-      config->parse_special != 0,
-  };
+  mtmd_input_text text{};
+  text.text = prompt.data();
+  text.text_len = prompt.size();
+  text.add_special = completion_adds_special(context, config);
+  text.parse_special = config->parse_special != 0;
   const int32_t tokenized =
       mtmd_tokenize(context->multimodal, chunks.get(), &text, bitmaps.data(),
                     bitmaps.size());
