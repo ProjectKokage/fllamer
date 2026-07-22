@@ -4029,6 +4029,20 @@ void main() {
       expect(
         () => const GenerationConfig(
           grammar: 'root ::= "x"',
+          enableThinking: true,
+        ).validate(),
+        throwsArgumentError,
+      );
+      expect(
+        () => GenerationConfig.jsonSchema(
+          schema: const <String, Object?>{'type': 'string'},
+          enableThinking: true,
+        ).validate(),
+        throwsArgumentError,
+      );
+      expect(
+        () => const GenerationConfig(
+          grammar: 'root ::= "x"',
           grammarRoot: '',
         ).validate(),
         throwsArgumentError,

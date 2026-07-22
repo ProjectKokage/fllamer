@@ -1475,8 +1475,14 @@ llama_dart_result create_completion_sampler(
       grammar_sampler = llama_sampler_init_grammar(
           vocab, grammar.c_str(), grammar_root.c_str());
     }
+    // Planner-owned grammars describe the complete assistant stream and must
+    // consume the template's generation prefill. Request-owned grammar/JSON
+    // constraints describe generated output only; feeding an assistant prefill
+    // into those constraints can exhaust them before the first sampled token.
+    const bool planner_owned_grammar =
+        config->grammar_size == 0 && config->json_schema_size == 0;
     if (grammar_sampler != nullptr && chat_plan != nullptr &&
-        !chat_plan->generation_prompt.empty()) {
+        planner_owned_grammar && !chat_plan->generation_prompt.empty()) {
       const llama_tokens prefill = common_tokenize(
           vocab, chat_plan->generation_prompt, false, true);
       for (size_t i = 0; i < prefill.size(); ++i) {
@@ -3590,6 +3596,17 @@ llama_dart_result llama_dart_model_create_chat_plan(
     inputs.add_generation_prompt =
         request.value("add_generation_prompt", true);
     inputs.use_jinja = true;
+    if (request.contains("enable_thinking")) {
+      if (!request.at("enable_thinking").is_boolean()) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "enable_thinking must be a boolean");
+      }
+      inputs.enable_thinking = request.at("enable_thinking").get<bool>();
+      // Explicit thinking control is also an explicit privacy boundary.
+      // Ask common_chat to capture reasoning separately so parsed terminal
+      // assistant content can never contain a model's private reasoning.
+      inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    }
     inputs.grammar = request.value("grammar", "");
     if (request.contains("json_schema") &&
         !request.at("json_schema").is_null()) {

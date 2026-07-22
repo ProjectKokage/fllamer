@@ -546,8 +546,10 @@ final class NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     String? grammar,
     Map<String, Object?>? jsonSchema,
+    bool? enableThinking,
   }) {
-    if (_requiresChatPlan(messages, toolCalling)) {
+    final parseOutput = _requiresChatPlan(messages, toolCalling);
+    if (parseOutput || enableThinking != null) {
       final plan = _createChatPlan(
         model,
         messages,
@@ -555,7 +557,8 @@ final class NativeLlamaBridge {
         addAssistantPrompt: addAssistantPrompt,
         grammar: grammar,
         jsonSchema: jsonSchema,
-        parseOutput: true,
+        enableThinking: enableThinking,
+        parseOutput: parseOutput,
       );
       return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
     }
@@ -579,6 +582,7 @@ final class NativeLlamaBridge {
         addAssistantPrompt: addAssistantPrompt,
         grammar: grammar,
         jsonSchema: jsonSchema,
+        enableThinking: enableThinking,
         parseOutput: false,
       );
       return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
@@ -1580,6 +1584,7 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     String? grammar,
     Map<String, Object?>? jsonSchema,
+    bool? enableThinking,
     required bool parseOutput,
   }) {
     var tools = toolCalling.toJson();
@@ -1610,6 +1615,7 @@ final class NativeLlamaBridge {
       'add_generation_prompt': addAssistantPrompt,
       'grammar': ?grammar,
       'json_schema': ?jsonSchema,
+      'enable_thinking': ?enableThinking,
     };
     final requestBytes = utf8.encode(jsonEncode(request));
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
@@ -3309,6 +3315,7 @@ final class _NativeEngineHandles {
       toolCalling: config.toolCalling,
       grammar: config.grammar,
       jsonSchema: config.jsonSchema,
+      enableThinking: config.enableThinking,
     );
     return complete(
       rendered.prompt,
@@ -3393,6 +3400,7 @@ final class _NativeEngineHandles {
       toolCalling: config.toolCalling,
       grammar: config.grammar,
       jsonSchema: config.jsonSchema,
+      enableThinking: config.enableThinking,
     );
     return startCompletionStream(
       rendered.prompt,

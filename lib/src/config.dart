@@ -285,6 +285,7 @@ final class GenerationConfig {
     this.jsonSchema,
     this.grammarRoot = 'root',
     this.toolCalling = const LlamaToolCallingConfig(),
+    this.enableThinking,
   });
 
   const GenerationConfig.jsonMode({
@@ -307,6 +308,7 @@ final class GenerationConfig {
     this.stopTokens = const <int>[],
     this.loraScales,
     this.toolCalling = const LlamaToolCallingConfig(),
+    this.enableThinking,
   }) : grammar = llamaJsonGrammar,
        jsonSchema = null,
        grammarRoot = 'root';
@@ -332,6 +334,7 @@ final class GenerationConfig {
     List<int> stopTokens = const <int>[],
     Map<int, double>? loraScales,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
+    bool? enableThinking,
   }) {
     return GenerationConfig(
       maxTokens: maxTokens,
@@ -357,6 +360,7 @@ final class GenerationConfig {
       jsonSchema: _jsonObjectSnapshot(schema, 'schema'),
       grammarRoot: 'root',
       toolCalling: _snapshotToolCallingConfig(toolCalling),
+      enableThinking: enableThinking,
     );
   }
 
@@ -388,6 +392,12 @@ final class GenerationConfig {
   final Map<String, Object?>? jsonSchema;
   final String grammarRoot;
   final LlamaToolCallingConfig toolCalling;
+
+  /// Optional typed input for chat templates that expose `enable_thinking`.
+  ///
+  /// `null` preserves the model's default and the legacy-first formatting
+  /// path. Non-null values are applied only by [LlamaEngine.chat].
+  final bool? enableThinking;
 
   void validate() {
     if (maxTokens <= 0) {
@@ -509,6 +519,14 @@ final class GenerationConfig {
         jsonSchema,
         'jsonSchema',
         'must not be provided with grammar',
+      );
+    }
+    if (enableThinking == true && (grammar != null || jsonSchema != null)) {
+      throw ArgumentError.value(
+        enableThinking,
+        'enableThinking',
+        'thinking output cannot be combined with request-owned structured '
+            'output',
       );
     }
     if (jsonSchema != null) {

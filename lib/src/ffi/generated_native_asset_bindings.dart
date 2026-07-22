@@ -1450,4 +1450,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 38;
+const int LLAMA_DART_ABI_VERSION = 39;

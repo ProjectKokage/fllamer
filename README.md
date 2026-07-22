@@ -99,8 +99,8 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge: version, capabilities, backend init/free, model
-  load/free, context create/free, model metadata, tokenization,
+- Native ABI smoke bridge (current ABI 39): version, capabilities, backend
+  init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.
 - Worker-isolate model inspection that loads GGUF metadata with `vocab_only` and
@@ -121,6 +121,15 @@ void main() async {
   `LlamaChatTemplate` helpers use temporary vocab-only model loads.
 - Worker-isolate chat-template formatting with `llama_chat_apply_template`,
   plus capability-gated upstream Jinja rendering for tool-aware requests.
+  Chat requests can set nullable `GenerationConfig.enableThinking`: an explicit
+  value selects native Jinja chat planning and forwards the typed
+  `enable_thinking` template input without reloading the model, while `null`
+  retains the legacy formatter selection. `enableThinking: true` cannot be
+  combined with an app-supplied raw grammar, JSON mode, or JSON schema because
+  that constraint would also apply to hidden reasoning. Planner-owned tool
+  grammar remains supported, and strict terminal parsing keeps reasoning
+  separate from the normalized assistant value. Raw `complete()` and
+  `continueCompletion()` calls reject an explicit thinking value.
   Template-less models fail with `UnsupportedFeatureException` instead of
   silently inheriting llama.cpp's ChatML fallback. Apps can explicitly supply
   `LlamaModelConfig.chatTemplate`, and inspect the selected template through

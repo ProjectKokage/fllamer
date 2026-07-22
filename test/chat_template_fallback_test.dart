@@ -52,6 +52,40 @@ void main() {
       },
     );
 
+    test('explicit thinking control uses the Jinja plan', () async {
+      final active = fixture;
+      final activeCounters = counters;
+      if (active == null || activeCounters == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      activeCounters.reset();
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'thinking.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      try {
+        final chunks = await engine
+            .chat(
+              messages: <ChatMessage>[ChatMessage.user('hello')],
+              config: const GenerationConfig(
+                maxTokens: 1,
+                enableThinking: false,
+              ),
+            )
+            .toList();
+
+        expect(chunks.single.text, 'terminal');
+        expect(chunks.single.assistantMessage, isNull);
+        expect(activeCounters.applyCalls(), 0);
+        expect(activeCounters.planCalls(), 1);
+      } finally {
+        await engine.close();
+      }
+    });
+
     test('uses the Jinja plan after unsupported legacy formatting', () async {
       final active = fixture;
       final activeCounters = counters;
@@ -343,6 +377,7 @@ enum fake_mode {
   MODE_GRAMMAR = 3,
   MODE_SCHEMA = 4,
   MODE_MEDIA = 5,
+  MODE_THINKING = 6,
 };
 
 static const char *last_error = "";
@@ -421,6 +456,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
                     "legacy-error")) {
     current_mode = MODE_ERROR;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "thinking")) {
+    current_mode = MODE_THINKING;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
                            "legacy")) {
     current_mode = MODE_LEGACY;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
@@ -454,7 +492,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_apply_chat_template(
   if (messages == NULL || message_count != 1 || out_prompt == NULL) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid messages");
   }
-  if (current_mode == MODE_LEGACY) {
+  if (current_mode == MODE_LEGACY || current_mode == MODE_THINKING) {
     return copy_buffer(add_assistant_prompt != 0
         ? "legacy:assistant"
         : "legacy:no-assistant", out_prompt);
@@ -487,12 +525,18 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
   const int add_assistant =
       strstr(request, "\"add_generation_prompt\":true") != NULL;
   const int no_tools = strstr(request, "\"tools\":[]") != NULL;
+  const int thinking_disabled =
+      strstr(request, "\"enable_thinking\":false") != NULL;
   const int media_request =
       strstr(request, "left<__media__>middle<__media__>right") != NULL;
   free(request);
   if (!no_tools) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "ordinary fallback injected tool metadata");
+  }
+  if (current_mode == MODE_THINKING && !thinking_disabled) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "thinking control was not forwarded");
   }
   if (current_mode == MODE_MEDIA && !media_request) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,

@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 38u
+#define LLAMA_DART_ABI_VERSION 39u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,

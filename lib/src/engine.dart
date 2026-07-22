@@ -564,6 +564,11 @@ final class LlamaEngine {
     _validateNativeText(prompt, 'prompt');
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
+    if (checkedConfig.enableThinking != null) {
+      throw const UnsupportedFeatureException(
+        'Thinking control requires chat messages and a model chat template.',
+      );
+    }
     if (checkedConfig.toolCalling.tools.isNotEmpty ||
         checkedConfig.toolCalling.toolChoice is! LlamaAutoToolChoice) {
       throw const UnsupportedFeatureException(
@@ -593,6 +598,11 @@ final class LlamaEngine {
     _ensureOpen();
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
+    if (checkedConfig.enableThinking != null) {
+      throw const UnsupportedFeatureException(
+        'Thinking control requires chat messages and a model chat template.',
+      );
+    }
     if (checkedConfig.toolCalling.tools.isNotEmpty ||
         checkedConfig.toolCalling.toolChoice is! LlamaAutoToolChoice) {
       throw const UnsupportedFeatureException(
@@ -962,6 +972,7 @@ GenerationConfig _snapshotGenerationConfig(GenerationConfig config) {
           ),
     grammarRoot: config.grammarRoot,
     toolCalling: _snapshotToolCallingConfig(config.toolCalling),
+    enableThinking: config.enableThinking,
   );
 }
 
