@@ -2,9 +2,9 @@
 
 - Upstream: `https://github.com/ggml-org/llama.cpp`
 - Submodule: `third_party/llama.cpp`
-- Commit: `12127defda4f41b7679cb2477a4b0d65ee6a0c8f`
-- Upstream build tag: `b10015`
-- Sync date: 2026-07-15
+- Commit: `ddd4ec1428a6201e18975ea52b07c71e0f9aef26`
+- Upstream build tag: `b10217`
+- Sync date: 2026-08-01
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
   `third_party/llama.cpp/licenses/`, plus the package-maintained notices under
@@ -63,6 +63,7 @@ Current bridge integration uses these public upstream C APIs:
   `llama_vocab_sep`, `llama_vocab_nl`, `llama_vocab_pad`, `llama_vocab_mask`
 - `llama_vocab_get_add_bos`, `llama_vocab_get_add_eos`,
   `llama_vocab_get_add_sep`
+- `llama_vocab_get_suppress_tokens`
 - `llama_model_*` metadata accessors used by `llama_dart_model_info`
 - `llama_ftype_name`
 - `llama_model_n_layer_nextn`
@@ -102,6 +103,7 @@ Current bridge integration uses these public upstream C APIs:
 - `llama_sampler_init_mirostat_v2`
 - `llama_sampler_init_grammar`
 - `llama_sampler_init_grammar_lazy_patterns`
+- `llama_sampler_init_logit_bias`
 - `llama_sampler_init_greedy`
 - `llama_sampler_init_temp`
 - `llama_sampler_init_dist`
@@ -171,6 +173,30 @@ missing template before upstream's generic ChatML fallback can apply.
 ABI 38 adds a stable native generation stop-reason enum and reports it in
 completion statistics. Dart terminal chunks distinguish end-of-generation,
 stop sequences, stop tokens, and maximum-token exhaustion.
+
+ABI 39 adds request-owned nullable `enable_thinking` input to native chat
+planning. Explicit values are passed as typed Jinja-template inputs without
+changing the model-owned effective chat template.
+
+ABI 40 changes the serialized chat plan from one reasoning end tag to a
+bounded `thinking_end_tags` list and appends explicit integrated-MTP load intent
+to model configuration. The bridge maps its existing mmap/mlock booleans to
+pinned `llama_load_mode` values exactly: neither, mmap, mlock, or mmap+mlock.
+Only target models with an integrated MTP head request `load_mtp`; ordinary and
+sidecar-backed model loads retain upstream's reduced-memory default.
+When a quantized V cache is paired with Flash Attention `auto`, the bridge
+records the upstream-promoted `enabled` mode so `contextInfo()` continues to
+report the applied cache policy rather than the original request.
+
+Bounded reasoning uses pinned `common_reasoning_budget_init` with vectors of
+start and end token sequences, plus `common_reasoning_budget_get_state` and
+`common_reasoning_budget_get_end_match`. All template-provided end alternatives
+are retained. When a natural end closes reasoning, the exact matched sequence
+is replayed into deferred lazy grammar so an alternate that begins a tool call
+can activate its grammar trigger. The manual bridge sampler also reads
+`llama_vocab_get_suppress_tokens` and applies those entries through
+`llama_sampler_init_logit_bias` with negative-infinity bias, matching pinned
+`llama-common` sampling behavior.
 
 Note: pinned upstream documents `llama_state_get_size()` as a save-only sizing
 helper. Do not use it to preflight `llama_state_set_data()` restores; it can be

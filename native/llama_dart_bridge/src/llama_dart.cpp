@@ -6,9 +6,14 @@
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
+#include "kv_cache_policy.h"
+#include "load_policy.h"
 #include "log.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
+#include "reasoning-budget.h"
+#include "reasoning_sampler.h"
+#include "sampling_policy.h"
 #include "speculative.h"
 #include "state_snapshot.h"
 
@@ -20,6 +25,7 @@
 #include <charconv>
 #include <chrono>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -59,8 +65,7 @@ struct llama_dart_model {
   uint32_t gpu_backend = LLAMA_DART_GPU_BACKEND_CPU;
   int32_t n_gpu_layers = 0;
   bool simulator_auto_cpu = false;
-  bool use_mmap = true;
-  bool use_mlock = false;
+  llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
   bool check_tensors = true;
   bool vocab_only = false;
 };
@@ -199,6 +204,8 @@ uint32_t continuation_log_level = LLAMA_DART_LOG_INFO;
 constexpr size_t kMaxMediaBytes = 64u * 1024u * 1024u;
 constexpr size_t kMaxMediaInputs = 64u;
 constexpr size_t kMaxStopTokens = 1024u;
+constexpr size_t kMaxReasoningTagBytes = 1024u;
+constexpr size_t kMaxReasoningEndTags = 64u;
 constexpr size_t kMaxChatTemplateBytes = 16u * 1024u * 1024u;
 constexpr size_t kMaxCapturedLogBytes = 1024u * 1024u;
 constexpr size_t kMaxCapturedLogRecords = 4096u;
@@ -210,6 +217,9 @@ struct parsed_chat_plan {
   std::string grammar;
   bool grammar_lazy = false;
   std::string generation_prompt;
+  std::string thinking_start_tag;
+  std::vector<std::string> thinking_end_tags;
+  int32_t reasoning_budget_tokens = -1;
   std::vector<common_grammar_trigger> grammar_triggers;
   std::vector<std::string> additional_stops;
   std::string parser;
@@ -614,7 +624,7 @@ llama_dart_result parse_json_object(const uint8_t *data, size_t size,
 }
 
 nlohmann::ordered_json serialize_chat_plan(
-    const common_chat_params &params) {
+    const common_chat_params &params, int32_t reasoning_budget_tokens = -1) {
   nlohmann::ordered_json triggers = nlohmann::ordered_json::array();
   for (const common_grammar_trigger &trigger : params.grammar_triggers) {
     triggers.push_back({
@@ -629,6 +639,9 @@ nlohmann::ordered_json serialize_chat_plan(
       {"grammar", params.grammar},
       {"grammar_lazy", params.grammar_lazy},
       {"generation_prompt", params.generation_prompt},
+      {"thinking_start_tag", params.thinking_start_tag},
+      {"thinking_end_tags", params.thinking_end_tags},
+      {"reasoning_budget_tokens", reasoning_budget_tokens},
       {"grammar_triggers", std::move(triggers)},
       {"additional_stops", params.additional_stops},
       {"parser", params.parser},
@@ -655,6 +668,11 @@ llama_dart_result parse_chat_plan(const uint8_t *data, size_t size,
     value.grammar_lazy = plan.at("grammar_lazy").get<bool>();
     value.generation_prompt =
         plan.at("generation_prompt").get<std::string>();
+    value.thinking_start_tag = plan.value("thinking_start_tag", "");
+    value.thinking_end_tags =
+        plan.at("thinking_end_tags").get<std::vector<std::string>>();
+    value.reasoning_budget_tokens =
+        plan.value("reasoning_budget_tokens", -1);
     value.additional_stops =
         plan.at("additional_stops").get<std::vector<std::string>>();
     value.parser = plan.at("parser").get<std::string>();
@@ -697,6 +715,7 @@ llama_dart_result parse_chat_plan(const uint8_t *data, size_t size,
     if (value.prompt.empty() || string_contains_nul(value.prompt) ||
         string_contains_nul(value.grammar) ||
         string_contains_nul(value.generation_prompt) ||
+        string_contains_nul(value.thinking_start_tag) ||
         string_contains_nul(value.parser)) {
       return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                   "chat plan contains invalid text");
@@ -705,6 +724,39 @@ llama_dart_result parse_chat_plan(const uint8_t *data, size_t size,
         (value.grammar.empty() || value.grammar_triggers.empty())) {
       return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                   "lazy chat grammar requires grammar and triggers");
+    }
+    if (value.reasoning_budget_tokens < -1) {
+      return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                  "chat plan reasoning budget is invalid");
+    }
+    const bool has_thinking_start = !value.thinking_start_tag.empty();
+    const bool has_thinking_end = !value.thinking_end_tags.empty();
+    if (value.reasoning_budget_tokens >= 0 &&
+        (!has_thinking_start || !has_thinking_end)) {
+      return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                  "chat plan reasoning budget requires thinking tags");
+    }
+    if (value.thinking_end_tags.size() > kMaxReasoningEndTags ||
+        (has_thinking_start &&
+         (value.thinking_start_tag.size() > kMaxReasoningTagBytes ||
+          std::all_of(value.thinking_start_tag.begin(),
+                      value.thinking_start_tag.end(),
+                      [](unsigned char character) {
+                        return std::isspace(character);
+                      })))) {
+      return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                  "chat plan thinking tags are invalid");
+    }
+    for (const std::string &end_tag : value.thinking_end_tags) {
+      if (end_tag.empty() || end_tag.size() > kMaxReasoningTagBytes ||
+          string_contains_nul(end_tag) ||
+          std::all_of(end_tag.begin(), end_tag.end(),
+                      [](unsigned char character) {
+                        return std::isspace(character);
+                      })) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "chat plan thinking tags are invalid");
+      }
     }
     for (const std::string &stop : value.additional_stops) {
       if (stop.empty() || string_contains_nul(stop)) {
@@ -1415,12 +1467,42 @@ void accept_sampler_tokens(llama_sampler *sampler,
   }
 }
 
+llama_tokens tokenize_generation_prompt(
+    const llama_vocab *vocab, const std::string &generation_prompt) {
+  llama_tokens tokens =
+      common_tokenize(vocab, generation_prompt, false, true);
+  if (!tokens.empty() && !generation_prompt.empty()) {
+    const std::string first_piece =
+        common_token_to_piece(vocab, tokens.front(), true);
+    if (!first_piece.empty() &&
+        std::isspace(static_cast<unsigned char>(first_piece.front())) &&
+        !std::isspace(
+            static_cast<unsigned char>(generation_prompt.front()))) {
+      tokens.erase(tokens.begin());
+    }
+  }
+  return tokens;
+}
+
 llama_dart_result create_completion_sampler(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config, const std::string &grammar,
     const std::string &grammar_root, const parsed_chat_plan *chat_plan,
-    llama_sampler **out_sampler) {
+    llama_sampler **out_sampler, llama_sampler **out_prompt_sampler) {
   *out_sampler = nullptr;
+  *out_prompt_sampler = nullptr;
+  const bool has_reasoning_markers =
+      chat_plan != nullptr && !chat_plan->thinking_start_tag.empty() &&
+      !chat_plan->thinking_end_tags.empty();
+  const llama_tokens generation_prefill =
+      chat_plan == nullptr || chat_plan->generation_prompt.empty()
+          ? llama_tokens{}
+          : tokenize_generation_prompt(vocab,
+                                       chat_plan->generation_prompt);
+  const bool needs_reasoning_sampler =
+      has_reasoning_markers &&
+      (chat_plan->reasoning_budget_tokens >= 0 ||
+       (chat_plan->grammar_lazy && !grammar.empty()));
   llama_sampler_chain_params sampler_params =
       llama_sampler_chain_default_params();
   sampler_params.no_perf = true;
@@ -1430,6 +1512,7 @@ llama_dart_result create_completion_sampler(
   }
 
   llama_dart_result added = LLAMA_DART_SUCCESS;
+  llama_sampler *deferred_lazy_grammar = nullptr;
   if (!grammar.empty()) {
     llama_sampler *grammar_sampler = nullptr;
     if (chat_plan != nullptr && chat_plan->grammar_lazy) {
@@ -1481,28 +1564,49 @@ llama_dart_result create_completion_sampler(
     // into those constraints can exhaust them before the first sampled token.
     const bool planner_owned_grammar =
         config->grammar_size == 0 && config->json_schema_size == 0;
+    const bool defer_lazy_grammar =
+        grammar_sampler != nullptr && chat_plan != nullptr &&
+        chat_plan->grammar_lazy && has_reasoning_markers;
     if (grammar_sampler != nullptr && chat_plan != nullptr &&
         planner_owned_grammar && !chat_plan->generation_prompt.empty()) {
-      const llama_tokens prefill = common_tokenize(
-          vocab, chat_plan->generation_prompt, false, true);
-      for (size_t i = 0; i < prefill.size(); ++i) {
-        const std::string piece =
-            common_token_to_piece(vocab, prefill[i], true);
-        if (i == 0 && !piece.empty() &&
-            std::isspace(static_cast<unsigned char>(piece.front())) &&
-            !std::isspace(static_cast<unsigned char>(
-                chat_plan->generation_prompt.front()))) {
-          continue;
+      for (const llama_token token : generation_prefill) {
+        if (!defer_lazy_grammar) {
+          llama_sampler_accept(grammar_sampler, token);
         }
-        llama_sampler_accept(grammar_sampler, prefill[i]);
       }
     }
-    added = add_sampler(sampler, grammar_sampler);
+    if (defer_lazy_grammar) {
+      deferred_lazy_grammar = grammar_sampler;
+    } else {
+      added = add_sampler(sampler, grammar_sampler);
+    }
     if (added != LLAMA_DART_SUCCESS) {
+      llama_sampler_free(deferred_lazy_grammar);
       llama_sampler_free(sampler);
       return fail(LLAMA_DART_ERROR_GENERATION,
                   "failed to parse completion grammar");
     }
+  }
+  int32_t suppress_token_count = 0;
+  const llama_token *suppress_tokens =
+      llama_vocab_get_suppress_tokens(vocab, &suppress_token_count);
+  if (suppress_token_count < 0 ||
+      (suppress_token_count > 0 && suppress_tokens == nullptr)) {
+    llama_sampler_free(deferred_lazy_grammar);
+    llama_sampler_free(sampler);
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "model returned invalid suppress-token metadata");
+  }
+  if (suppress_token_count > 0) {
+    added = add_sampler(
+        sampler, llama_dart_bridge_internal::init_suppress_tokens_sampler(
+                     llama_vocab_n_tokens(vocab), suppress_tokens,
+                     suppress_token_count));
+  }
+  if (added != LLAMA_DART_SUCCESS) {
+    llama_sampler_free(deferred_lazy_grammar);
+    llama_sampler_free(sampler);
+    return added;
   }
   if (config->mirostat == 1) {
     added = add_sampler(sampler, llama_sampler_init_temp(config->temperature));
@@ -1558,6 +1662,7 @@ llama_dart_result create_completion_sampler(
     }
   }
   if (added != LLAMA_DART_SUCCESS) {
+    llama_sampler_free(deferred_lazy_grammar);
     llama_sampler_free(sampler);
     return added;
   }
@@ -1566,7 +1671,71 @@ llama_dart_result create_completion_sampler(
     accept_sampler_tokens(sampler, context->token_history);
   }
 
+  llama_sampler *prompt_sampler = sampler;
+  if (needs_reasoning_sampler) {
+    const llama_tokens start_tokens = common_tokenize(
+        vocab, chat_plan->thinking_start_tag, false, true);
+    std::vector<llama_tokens> end_token_sequences;
+    end_token_sequences.reserve(chat_plan->thinking_end_tags.size());
+    for (const std::string &end_tag : chat_plan->thinking_end_tags) {
+      llama_tokens end_tokens =
+          common_tokenize(vocab, end_tag, false, true);
+      if (end_tokens.empty()) {
+        llama_sampler_free(deferred_lazy_grammar);
+        llama_sampler_free(sampler);
+        return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                    "chat template thinking markers did not tokenize");
+      }
+      end_token_sequences.push_back(std::move(end_tokens));
+    }
+    if (start_tokens.empty() || end_token_sequences.empty()) {
+      llama_sampler_free(deferred_lazy_grammar);
+      llama_sampler_free(sampler);
+      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                  "chat template thinking markers did not tokenize");
+    }
+    const int32_t reasoning_budget_tokens =
+        chat_plan->reasoning_budget_tokens < 0
+            ? INT_MAX
+            : chat_plan->reasoning_budget_tokens;
+    llama_sampler *reasoning_budget = common_reasoning_budget_init(
+        vocab, {start_tokens}, end_token_sequences,
+        end_token_sequences.front(),
+        reasoning_budget_tokens, REASONING_BUDGET_IDLE);
+    if (reasoning_budget == nullptr) {
+      llama_sampler_free(deferred_lazy_grammar);
+      llama_sampler_free(sampler);
+      return fail(LLAMA_DART_ERROR_INTERNAL,
+                  "failed to create reasoning budget sampler");
+    }
+
+    llama_sampler *reasoning_gate =
+        llama_dart_bridge_internal::init_reasoning_gate_sampler(
+            reasoning_budget, deferred_lazy_grammar, generation_prefill);
+    // The gate takes ownership of the reasoning and grammar samplers even when
+    // construction fails.
+    deferred_lazy_grammar = nullptr;
+    if (reasoning_gate == nullptr) {
+      llama_sampler_free(sampler);
+      return fail(LLAMA_DART_ERROR_INTERNAL,
+                  "failed to create reasoning-aware grammar gate");
+    }
+    // Keep a llama.cpp chain at the top level so llama_sampler_sample() can
+    // reuse its candidate buffer instead of allocating one per token.
+    llama_sampler *outer_chain = llama_sampler_chain_init(sampler_params);
+    if (outer_chain == nullptr) {
+      llama_sampler_free(reasoning_gate);
+      llama_sampler_free(sampler);
+      return fail(LLAMA_DART_ERROR_INTERNAL,
+                  "failed to create outer sampling chain");
+    }
+    llama_sampler_chain_add(outer_chain, reasoning_gate);
+    llama_sampler_chain_add(outer_chain, sampler);
+    sampler = outer_chain;
+  }
+
   *out_sampler = sampler;
+  *out_prompt_sampler = prompt_sampler;
   last_error.clear();
   return LLAMA_DART_SUCCESS;
 }
@@ -2823,7 +2992,8 @@ llama_dart_result llama_dart_model_load(
                 "model_path_data must not be empty");
   }
   if (!valid_bool(config->vocab_only) || !valid_bool(config->use_mmap) ||
-      !valid_bool(config->use_mlock) || !valid_bool(config->check_tensors)) {
+      !valid_bool(config->use_mlock) || !valid_bool(config->check_tensors) ||
+      !valid_bool(config->load_mtp)) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "model load boolean fields must be 0 or 1");
   }
@@ -2930,9 +3100,11 @@ llama_dart_result llama_dart_model_load(
       params.devices = devices.data();
     }
     params.vocab_only = config->vocab_only != 0;
-    params.use_mmap = config->use_mmap != 0;
-    params.use_mlock = config->use_mlock != 0;
+    params.load_mode =
+        llama_dart_bridge_internal::resolve_model_load_mode(
+            config->use_mmap != 0, config->use_mlock != 0);
     params.check_tensors = config->check_tensors != 0;
+    params.load_mtp = config->load_mtp != 0;
 
     llama_model *loaded = llama_model_load_from_file(path.c_str(), params);
     if (loaded == nullptr) {
@@ -2945,8 +3117,7 @@ llama_dart_result llama_dart_model_load(
     handle->gpu_backend = effective_backend;
     handle->n_gpu_layers = params.n_gpu_layers;
     handle->simulator_auto_cpu = gpu_policy.simulator_auto_cpu;
-    handle->use_mmap = params.use_mmap;
-    handle->use_mlock = params.use_mlock;
+    handle->load_mode = params.load_mode;
     handle->check_tensors = params.check_tensors;
     handle->vocab_only = params.vocab_only;
     *out_model = handle.release();
@@ -3579,6 +3750,7 @@ llama_dart_result llama_dart_model_create_chat_plan(
   }
 
   common_chat_templates_inputs inputs;
+  int32_t reasoning_budget_tokens = -1;
   try {
     inputs.messages =
         common_chat_msgs_parse_oaicompat(request.at("messages"));
@@ -3596,15 +3768,38 @@ llama_dart_result llama_dart_model_create_chat_plan(
     inputs.add_generation_prompt =
         request.value("add_generation_prompt", true);
     inputs.use_jinja = true;
-    if (request.contains("enable_thinking")) {
+    const bool has_explicit_thinking =
+        request.contains("enable_thinking");
+    if (has_explicit_thinking) {
       if (!request.at("enable_thinking").is_boolean()) {
         return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                     "enable_thinking must be a boolean");
       }
       inputs.enable_thinking = request.at("enable_thinking").get<bool>();
-      // Explicit thinking control is also an explicit privacy boundary.
-      // Ask common_chat to capture reasoning separately so parsed terminal
-      // assistant content can never contain a model's private reasoning.
+      // Explicit thinking control requests reasoning-aware terminal parsing
+      // from the applied chat template.
+      inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    }
+    if (request.contains("reasoning_budget_tokens")) {
+      const nlohmann::ordered_json &budget =
+          request.at("reasoning_budget_tokens");
+      if (!budget.is_number_integer()) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "reasoning_budget_tokens must be an integer");
+      }
+      const int64_t value = budget.get<int64_t>();
+      if (value < 0 || value > std::numeric_limits<int32_t>::max()) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "reasoning_budget_tokens must fit non-negative int32");
+      }
+      if (has_explicit_thinking && !inputs.enable_thinking) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "reasoning_budget_tokens cannot be used with "
+                    "enable_thinking=false");
+      }
+      reasoning_budget_tokens = static_cast<int32_t>(value);
+      // A reasoning budget requests reasoning-aware terminal parsing. When
+      // enable_thinking is omitted, common_chat uses llama.cpp's default true.
       inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     }
     inputs.grammar = request.value("grammar", "");
@@ -3676,7 +3871,41 @@ llama_dart_result llama_dart_model_create_chat_plan(
     }
     const common_chat_params params =
         common_chat_templates_apply(templates.get(), inputs);
-    const std::string plan = serialize_chat_plan(params).dump();
+    const bool has_thinking_start = !params.thinking_start_tag.empty();
+    const bool has_thinking_end = !params.thinking_end_tags.empty();
+    if (reasoning_budget_tokens >= 0 &&
+        (!has_thinking_start || !has_thinking_end)) {
+      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                  "chat template does not expose thinking tags");
+    }
+    if (params.thinking_end_tags.size() > kMaxReasoningEndTags) {
+      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                  "chat template exposes too many thinking end tags");
+    }
+    if (has_thinking_start &&
+        (params.thinking_start_tag.size() > kMaxReasoningTagBytes ||
+         string_contains_nul(params.thinking_start_tag) ||
+         std::all_of(params.thinking_start_tag.begin(),
+                     params.thinking_start_tag.end(),
+                     [](unsigned char character) {
+                       return std::isspace(character);
+                     }))) {
+      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                  "chat template thinking start tag is invalid");
+    }
+    for (const std::string &end_tag : params.thinking_end_tags) {
+      if (end_tag.empty() || end_tag.size() > kMaxReasoningTagBytes ||
+          string_contains_nul(end_tag) ||
+          std::all_of(end_tag.begin(), end_tag.end(),
+                      [](unsigned char character) {
+                        return std::isspace(character);
+                      })) {
+        return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                    "chat template thinking tags are invalid");
+      }
+    }
+    const std::string plan =
+        serialize_chat_plan(params, reasoning_budget_tokens).dump();
     const llama_dart_result copied = copy_to_buffer(plan, out_plan);
     if (copied != LLAMA_DART_SUCCESS) {
       return copied;
@@ -4062,7 +4291,10 @@ llama_dart_result llama_dart_context_create(
         static_cast<enum llama_attention_type>(config->attention_type);
     params.type_k = kv_cache_type_for(config->kv_cache_key_type);
     params.type_v = kv_cache_type_for(config->kv_cache_value_type);
-    params.flash_attn_type = flash_attention_for(config->flash_attention);
+    const uint32_t flash_attention =
+        llama_dart_bridge_internal::resolve_quantized_v_flash_attention_mode(
+            config->flash_attention, ggml_is_quantized(params.type_v));
+    params.flash_attn_type = flash_attention_for(flash_attention);
     const bool context_gpu_enabled =
         model->gpu_backend != LLAMA_DART_GPU_BACKEND_CPU;
     params.offload_kqv =
@@ -4089,7 +4321,7 @@ llama_dart_result llama_dart_context_create(
     handle->speculative_ngram_m = config->speculative_ngram_m;
     handle->kv_cache_key_type = config->kv_cache_key_type;
     handle->kv_cache_value_type = config->kv_cache_value_type;
-    handle->flash_attention = config->flash_attention;
+    handle->flash_attention = flash_attention;
     handle->kv_cache_offload = params.offload_kqv;
     handle->swa_full = config->swa_full != 0;
     handle->kv_unified = config->kv_unified != 0;
@@ -4201,8 +4433,7 @@ llama_dart_result llama_dart_context_create(
       const int32_t draft_gpu_layers = model->n_gpu_layers;
       speculative_params.n_gpu_layers = draft_gpu_layers;
       speculative_params.speculative.draft.n_gpu_layers = draft_gpu_layers;
-      speculative_params.use_mmap = model->use_mmap;
-      speculative_params.use_mlock = model->use_mlock;
+      speculative_params.load_mode = model->load_mode;
       speculative_params.check_tensors = model->check_tensors;
       uint32_t effective_backend = LLAMA_DART_GPU_BACKEND_AUTO;
       const llama_dart_result devices_selected = select_gpu_devices(
@@ -5040,9 +5271,10 @@ llama_dart_result llama_dart_context_complete(
     uint32_t prompt_token_count = 0;
 
     llama_sampler *sampler = nullptr;
+    llama_sampler *prompt_sampler = nullptr;
     const llama_dart_result sampler_created = create_completion_sampler(
         context, vocab, config, grammar, grammar_root,
-        has_chat_plan ? &chat_plan : nullptr, &sampler);
+        has_chat_plan ? &chat_plan : nullptr, &sampler, &prompt_sampler);
     if (sampler_created != LLAMA_DART_SUCCESS) {
       return sampler_created;
     }
@@ -5057,7 +5289,7 @@ llama_dart_result llama_dart_context_complete(
         return decoded;
       }
       if (grammar.empty()) {
-        accept_sampler_tokens(sampler, prompt_tokens);
+        accept_sampler_tokens(prompt_sampler, prompt_tokens);
       }
       if (prompt_token_count > 0) {
         context->speculative_needs_warmup = false;
@@ -5206,9 +5438,10 @@ llama_dart_result llama_dart_generation_start(
     uint32_t prompt_token_count = 0;
 
     llama_sampler *sampler = nullptr;
+    llama_sampler *prompt_sampler = nullptr;
     const llama_dart_result sampler_created = create_completion_sampler(
         context, vocab, config, grammar, grammar_root,
-        has_chat_plan ? &chat_plan : nullptr, &sampler);
+        has_chat_plan ? &chat_plan : nullptr, &sampler, &prompt_sampler);
     if (sampler_created != LLAMA_DART_SUCCESS) {
       return sampler_created;
     }
@@ -5223,7 +5456,7 @@ llama_dart_result llama_dart_generation_start(
         return decoded;
       }
       if (grammar.empty()) {
-        accept_sampler_tokens(sampler, prompt_tokens);
+        accept_sampler_tokens(prompt_sampler, prompt_tokens);
       }
       if (prompt_token_count > 0) {
         context->speculative_needs_warmup = false;

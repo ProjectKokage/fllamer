@@ -12,10 +12,32 @@
   constraint cannot consume hidden reasoning; planner-owned tool grammar stays
   supported, and typed terminal parsing keeps reasoning separate from the
   normalized assistant value.
-- Bumped the bridge ABI to 39 so older custom bridges cannot silently ignore
-  the new chat-plan field.
+- Added `GenerationConfig.reasoningBudgetTokens` for chat requests with
+  `enableThinking: true` or llama.cpp's default-on thinking input when the flag
+  is `null`. Explicit `enableThinking: false` remains incompatible with a
+  budget. The bridge derives bounded multi-token reasoning markers from each
+  model's chat template, initializes llama.cpp's reasoning state from tokenized
+  generation prefill, and leaves `maxTokens` as the separate total output cap.
+  Lazy planner grammar is suspended only while reasoning is active, including
+  with an unlimited budget. Every upstream end-tag alternative is preserved,
+  and a matched closing sequence is replayed into lazy grammar so a tool-call
+  trigger can activate directly after reasoning. Model-free sampler tests cover
+  forced and natural multi-token closure, alternate ends, prefill, reset, clone,
+  reasoning-state grammar routing, and prompt-history isolation. A Gemma 4
+  template/tokenization fixture verifies that plan extraction is not
+  Qwen-specific.
+- Adapted model loading to upstream's `llama_load_mode` enum while preserving
+  all four public mmap/mlock combinations. Integrated MTP tensors are requested
+  only for `MtpSpeculation` without a sidecar; ordinary and separate-sidecar
+  loads retain upstream's reduced memory use. Manual bridge sampling now also
+  enforces model-provided `tokenizer.ggml.suppress_tokens`. Context inspection
+  reports Flash Attention as enabled when upstream promotes `auto` for a
+  quantized V cache.
+- Bumped the bridge ABI to 40 for the plural reasoning-end plan and explicit
+  integrated-MTP load intent. Both committed FFI binding variants were
+  regenerated.
 - Replaced the curated `llama.cpp` snapshot with an official submodule pinned
-  to upstream build `b10015`. Published packages still include the checked-out
+  to upstream build `b10217`. Published packages still include the checked-out
   source required for offline native builds.
 - Dropped the package-local Metal capability and Gemma 4 generation-grammar
   patches so the submodule remains identical to upstream. Parsed tool calls

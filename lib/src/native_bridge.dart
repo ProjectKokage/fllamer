@@ -563,9 +563,12 @@ final class NativeLlamaBridge {
     String? grammar,
     Map<String, Object?>? jsonSchema,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
   }) {
     final parseOutput = _requiresChatPlan(messages, toolCalling);
-    if (parseOutput || enableThinking != null) {
+    if (parseOutput ||
+        enableThinking != null ||
+        reasoningBudgetTokens != null) {
       final plan = _createChatPlan(
         model,
         messages,
@@ -574,6 +577,7 @@ final class NativeLlamaBridge {
         grammar: grammar,
         jsonSchema: jsonSchema,
         enableThinking: enableThinking,
+        reasoningBudgetTokens: reasoningBudgetTokens,
         parseOutput: parseOutput,
       );
       return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
@@ -599,6 +603,7 @@ final class NativeLlamaBridge {
         grammar: grammar,
         jsonSchema: jsonSchema,
         enableThinking: enableThinking,
+        reasoningBudgetTokens: reasoningBudgetTokens,
         parseOutput: false,
       );
       return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
@@ -702,7 +707,8 @@ final class NativeLlamaBridge {
         ..check_tensors = config.checkTensors ? 1 : 0
         ..gpu_backend = _gpuBackend(config)
         ..chat_template_data = chatTemplatePointer
-        ..chat_template_size = chatTemplate.length;
+        ..chat_template_size = chatTemplate.length
+        ..load_mtp = 0;
 
       _check(_bindings.llama_dart_model_load(loadConfig, outModel));
       model = outModel.value;
@@ -1318,7 +1324,8 @@ final class NativeLlamaBridge {
         ..check_tensors = config.checkTensors ? 1 : 0
         ..gpu_backend = _gpuBackend(config)
         ..chat_template_data = chatTemplatePointer
-        ..chat_template_size = chatTemplate.length;
+        ..chat_template_size = chatTemplate.length
+        ..load_mtp = _loadsEmbeddedMtp(config) ? 1 : 0;
 
       _check(_bindings.llama_dart_model_load(loadConfig, outModel));
       model = outModel.value;
@@ -1551,6 +1558,13 @@ final class NativeLlamaBridge {
     };
   }
 
+  static bool _loadsEmbeddedMtp(LlamaModelConfig config) {
+    return switch (config.speculativeDecoding) {
+      MtpSpeculation(mtpModelPath: null) => true,
+      _ => false,
+    };
+  }
+
   static int _speculativeType(LlamaModelConfig config) {
     return switch (config.speculativeDecoding) {
       NoSpeculativeDecoding() =>
@@ -1609,6 +1623,7 @@ final class NativeLlamaBridge {
     String? grammar,
     Map<String, Object?>? jsonSchema,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
     required bool parseOutput,
   }) {
     var tools = toolCalling.toJson();
@@ -1640,6 +1655,7 @@ final class NativeLlamaBridge {
       'grammar': ?grammar,
       'json_schema': ?jsonSchema,
       'enable_thinking': ?enableThinking,
+      'reasoning_budget_tokens': ?reasoningBudgetTokens,
     };
     final requestBytes = utf8.encode(jsonEncode(request));
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
@@ -1666,6 +1682,18 @@ final class NativeLlamaBridge {
       if (decoded is! Map<Object?, Object?> || decoded['prompt'] is! String) {
         throw const NativeBridgeException(
           'Native bridge returned an invalid chat plan.',
+        );
+      }
+      final thinkingEndTags = decoded['thinking_end_tags'];
+      if (reasoningBudgetTokens != null &&
+          (decoded['reasoning_budget_tokens'] != reasoningBudgetTokens ||
+              decoded['thinking_start_tag'] is! String ||
+              (decoded['thinking_start_tag']! as String).isEmpty ||
+              thinkingEndTags is! List<Object?> ||
+              thinkingEndTags.isEmpty ||
+              thinkingEndTags.any((tag) => tag is! String || tag.isEmpty))) {
+        throw const UnsupportedFeatureException(
+          'The native bridge does not support bounded reasoning.',
         );
       }
       return _NativeChatPlan(
@@ -3359,6 +3387,7 @@ final class _NativeEngineHandles {
       grammar: config.grammar,
       jsonSchema: config.jsonSchema,
       enableThinking: config.enableThinking,
+      reasoningBudgetTokens: config.reasoningBudgetTokens,
     );
     return complete(
       rendered.prompt,
@@ -3444,6 +3473,7 @@ final class _NativeEngineHandles {
       grammar: config.grammar,
       jsonSchema: config.jsonSchema,
       enableThinking: config.enableThinking,
+      reasoningBudgetTokens: config.reasoningBudgetTokens,
     );
     return startCompletionStream(
       rendered.prompt,

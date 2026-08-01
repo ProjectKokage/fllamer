@@ -40,6 +40,10 @@ When model-backed speculation is configured, it additionally owns the pinned
 upstream speculator, draft/MTP context, and optional draft model. The speculator
 is released before the draft context, and the draft context before the target
 context.
+The public mmap/mlock booleans map explicitly to upstream's none, mmap, mlock,
+and mmap+mlock load modes. Integrated MTP tensors are loaded only when the
+target model owns the requested MTP head; ordinary and sidecar-backed loads
+keep upstream's reduced-memory default.
 Typed `KvCacheConfig` values are translated to pinned upstream cache types and
 context flags inside the bridge. Model-backed speculative setup copies the same
 cache type, offload, Flash Attention, SWA, and unified-cache policy to its draft
@@ -97,7 +101,9 @@ control tokens; raw application text keeps that parsing disabled by default.
 new prompt and requires non-empty context state. Newly created unconstrained
 sampler chains first accept the bridge's committed token history, preserving
 repeat, presence, and frequency penalties across prefill and incremental
-completion requests.
+completion requests. They also apply every model-provided
+`tokenizer.ggml.suppress_tokens` entry as a negative-infinity logit bias before
+ordinary sampling.
 `LlamaEngine.warmUp()` runs pinned upstream's manual BOS/EOS fallback decode on
 the worker isolate for the target and any draft/MTP context, then clears native
 memory and performance counters. It accepts only an empty context so warm-up
@@ -119,6 +125,11 @@ and merges template stops. The worker retains raw streamed text and invokes the
 pinned parser at completion, returning a normalized assistant message with
 typed tool calls on the terminal chunk. Native pointers and tool execution
 never cross into the public API.
+When bounded reasoning is requested, the plan retains every template-provided
+reasoning end alternative. The bridge keeps planner grammar deferred only while
+reasoning is active and replays the exact naturally matched end sequence into
+that grammar, allowing an alternate end that begins a tool call to activate its
+trigger.
 
 Chat formatting always selects either `LlamaModelConfig.chatTemplate` or the
 GGUF's embedded default. The bridge validates and exposes that effective

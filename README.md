@@ -99,7 +99,7 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge (current ABI 39): version, capabilities, backend
+- Native ABI smoke bridge (current ABI 40): version, capabilities, backend
   init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.
@@ -127,12 +127,31 @@ void main() async {
   Chat requests can set nullable `GenerationConfig.enableThinking`: an explicit
   value selects native Jinja chat planning and forwards the typed
   `enable_thinking` template input without reloading the model, while `null`
-  retains the legacy formatter selection. `enableThinking: true` cannot be
-  combined with an app-supplied raw grammar, JSON mode, or JSON schema because
-  that constraint would also apply to hidden reasoning. Planner-owned tool
-  grammar remains supported, and strict terminal parsing keeps reasoning
-  separate from the normalized assistant value. Raw `complete()` and
-  `continueCompletion()` calls reject an explicit thinking value.
+  retains the legacy formatter selection unless a reasoning budget requests a
+  native plan. Thinking chat cannot be combined with an app-supplied raw
+  grammar, JSON mode, or JSON schema because that constraint would also apply
+  to reasoning. Planner-owned tool grammar remains supported. Typed terminal
+  parsing keeps reasoning separate from the normalized assistant value, but
+  streamed `GenerationChunk.text` is raw model output and can contain reasoning;
+  apps must filter it before display, history, or speech. Raw `complete()` and
+  `continueCompletion()` calls reject thinking controls.
+  Chat may also set `reasoningBudgetTokens` to cap each reasoning block
+  independently of the total `maxTokens`. A budget leaves
+  `enable_thinking` at llama.cpp's default `true` when `enableThinking` is
+  `null`, and rejects an explicit `false`.
+  Reasoning already present in the template's generation prefill counts toward
+  the budget. A budget requires paired reasoning tags exposed by the selected
+  template; otherwise chat fails with `UnsupportedFeatureException`. The bridge
+  derives bounded, potentially multi-token start and end sequences from every
+  end-tag alternative exposed by llama.cpp, uses its reasoning-budget state
+  machine, and keeps lazy planner grammar out of active reasoning even when the
+  budget is unlimited. A matched end sequence is replayed into the deferred
+  grammar so alternatives that begin a tool call still activate its trigger.
+  After budget exhaustion it completes any partial UTF-8 piece and then forces
+  the first template-provided closing sequence. This is model-family-neutral;
+  no marker spelling or token ID is hard-coded. `maxTokens` remains the separate
+  total output cap and can stop generation first, so callers must reserve enough
+  total space for model-specific markers and public output.
   Template-less models fail with `UnsupportedFeatureException` instead of
   silently inheriting llama.cpp's ChatML fallback. Apps can explicitly supply
   `LlamaModelConfig.chatTemplate`, and inspect the selected template through
@@ -168,7 +187,8 @@ void main() async {
   another request can start, so partial prompt/output state is not retained.
 - Sampling controls for temperature, top-k, top-p, min-p, typical-p,
   repetition/presence/frequency penalties, Mirostat v1/v2, seed, stop strings,
-  and model token IDs.
+  and model token IDs. The manual bridge sampler also applies every
+  `tokenizer.ggml.suppress_tokens` entry from the loaded vocabulary.
 - Experimental `ngram-simple`, `ngram-map-k`, and `ngram-map-k4v`
   self-speculation through `NGramSpeculation`, plus tuned
   `NGramModSpeculation` and request-local `NGramCacheSpeculation`. All five
@@ -184,7 +204,8 @@ void main() async {
   acceptance telemetry. A pinned Qwen3 1.7B target and upstream-converted
   EAGLE-3 draft pair covers the EAGLE-3 path. Requests with stop strings or
   custom stop tokens fall back to ordinary decoding to preserve exact stop
-  behavior. See
+  behavior. Integrated MTP heads are loaded only when `MtpSpeculation` has no
+  separate sidecar, preserving upstream's ordinary-model memory saving. See
   [speculative decoding](doc/speculative_decoding.md).
 - Runtime tuning knobs for mmap/mlock/tensor checks, context size, batch size,
   ubatch size, threads, batch threads, GPU layer count, K/V cache data types,
@@ -316,7 +337,7 @@ Model files, adapters, and mmproj files are app-supplied data with their own
 licenses.
 
 The upstream submodule is pinned at
-`12127defda4f41b7679cb2477a4b0d65ee6a0c8f` (`b10015`).
+`ddd4ec1428a6201e18975ea52b07c71e0f9aef26` (`b10217`).
 
 See [doc/feature_matrix.md](doc/feature_matrix.md) and
 [doc/upstream_sync.md](doc/upstream_sync.md). Architecture, native build, and

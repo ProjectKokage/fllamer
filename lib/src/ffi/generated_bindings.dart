@@ -1451,6 +1451,9 @@ final class llama_dart_model_load_config extends ffi.Struct {
 
   @ffi.Size()
   external int chat_template_size;
+
+  @ffi.Uint8()
+  external int load_mtp;
 }
 
 final class llama_dart_model_info extends ffi.Struct {
@@ -1898,4 +1901,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 39;
+const int LLAMA_DART_ABI_VERSION = 40;

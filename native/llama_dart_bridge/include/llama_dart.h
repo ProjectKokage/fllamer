@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 39u
+#define LLAMA_DART_ABI_VERSION 40u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -147,6 +147,7 @@ typedef struct llama_dart_model_load_config {
   uint32_t gpu_backend;
   const uint8_t *chat_template_data;
   size_t chat_template_size;
+  uint8_t load_mtp;
 } llama_dart_model_load_config;
 
 typedef struct llama_dart_model_info {

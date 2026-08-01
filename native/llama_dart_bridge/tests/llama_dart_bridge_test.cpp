@@ -1,5 +1,7 @@
 #include "llama_dart.h"
 #include "gpu_policy.h"
+#include "kv_cache_policy.h"
+#include "load_policy.h"
 #include "speculative.h"
 #include "state_snapshot.h"
 
@@ -18,6 +20,21 @@
 
 int main() {
   using namespace llama_dart_bridge_internal;
+
+  assert(resolve_model_load_mode(false, false) == LLAMA_LOAD_MODE_NONE);
+  assert(resolve_model_load_mode(true, false) == LLAMA_LOAD_MODE_MMAP);
+  assert(resolve_model_load_mode(false, true) == LLAMA_LOAD_MODE_MLOCK);
+  assert(resolve_model_load_mode(true, true) ==
+         LLAMA_LOAD_MODE_MMAP_MLOCK);
+  assert(resolve_quantized_v_flash_attention_mode(
+             LLAMA_DART_FLASH_ATTENTION_AUTO, false) ==
+         LLAMA_DART_FLASH_ATTENTION_AUTO);
+  assert(resolve_quantized_v_flash_attention_mode(
+             LLAMA_DART_FLASH_ATTENTION_AUTO, true) ==
+         LLAMA_DART_FLASH_ATTENTION_ENABLED);
+  assert(resolve_quantized_v_flash_attention_mode(
+             LLAMA_DART_FLASH_ATTENTION_ENABLED, true) ==
+         LLAMA_DART_FLASH_ATTENTION_ENABLED);
 
   const gpu_load_policy simulator_auto = resolve_gpu_load_policy(
       LLAMA_DART_GPU_BACKEND_AUTO, -1, true);
@@ -374,6 +391,11 @@ int main() {
   assert(model == nullptr);
   invalid_model_config = config;
   invalid_model_config.use_mmap = 2;
+  assert(llama_dart_model_load(&invalid_model_config, &model) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(model == nullptr);
+  invalid_model_config = config;
+  invalid_model_config.load_mtp = 2;
   assert(llama_dart_model_load(&invalid_model_config, &model) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(model == nullptr);
@@ -1092,6 +1114,39 @@ int main() {
   llama_dart_buffer_free(assistant_message.data);
   llama_dart_buffer_free(chat_plan.data);
 
+  const char reasoning_budget_without_thinking[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"reasoning_budget_tokens":8})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             model,
+             reinterpret_cast<const uint8_t *>(
+                 reasoning_budget_without_thinking),
+             std::strlen(reasoning_budget_without_thinking), &chat_plan) ==
+         LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(chat_plan.data == nullptr);
+  assert(chat_plan.size == 0);
+
+  const char non_integer_reasoning_budget[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"enable_thinking":true,"reasoning_budget_tokens":1.5})";
+  assert(llama_dart_model_create_chat_plan(
+             model,
+             reinterpret_cast<const uint8_t *>(non_integer_reasoning_budget),
+             std::strlen(non_integer_reasoning_budget), &chat_plan) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(chat_plan.data == nullptr);
+  assert(chat_plan.size == 0);
+
+  const char unsupported_reasoning_budget_template[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"enable_thinking":true,"reasoning_budget_tokens":8})";
+  assert(llama_dart_model_create_chat_plan(
+             model,
+             reinterpret_cast<const uint8_t *>(
+                 unsupported_reasoning_budget_template),
+             std::strlen(unsupported_reasoning_budget_template), &chat_plan) ==
+         LLAMA_DART_ERROR_UNSUPPORTED);
+  assert(chat_plan.data == nullptr);
+  assert(chat_plan.size == 0);
+
   const char tool_chat_request[] =
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","description":"Look up local data","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}}],"tool_choice":"auto","parallel_tool_calls":true,"add_generation_prompt":true})";
   assert(llama_dart_model_create_chat_plan(
@@ -1149,6 +1204,48 @@ int main() {
       reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
   assert(plain_gemma4_chat_plan.find("hello") != std::string::npos);
   llama_dart_buffer_free(chat_plan.data);
+
+  const char gemma4_reasoning_budget_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"reasoning_budget_tokens":8})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 gemma4_reasoning_budget_request),
+             std::strlen(gemma4_reasoning_budget_request), &chat_plan) ==
+         LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  const std::string gemma4_reasoning_chat_plan(
+      reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
+  assert(gemma4_reasoning_chat_plan.find(
+             R"("thinking_start_tag":"<|channel>thought")") !=
+         std::string::npos);
+  assert(gemma4_reasoning_chat_plan.find(
+             R"("thinking_end_tags":["<channel|>"])") !=
+         std::string::npos);
+  assert(gemma4_reasoning_chat_plan.find(
+             R"("reasoning_budget_tokens":8)") != std::string::npos);
+  llama_dart_buffer_free(chat_plan.data);
+
+  const char gemma4_thinking_start[] = "<|channel>thought";
+  size_t gemma4_thinking_start_count = 0;
+  assert(llama_dart_model_tokenize(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(gemma4_thinking_start),
+             std::strlen(gemma4_thinking_start), nullptr, 0,
+             &gemma4_thinking_start_count, 0, 1) ==
+         LLAMA_DART_ERROR_BUFFER_TOO_SMALL);
+  assert(gemma4_thinking_start_count > 1);
+  std::vector<int32_t> gemma4_thinking_start_tokens(
+      gemma4_thinking_start_count);
+  assert(llama_dart_model_tokenize(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(gemma4_thinking_start),
+             std::strlen(gemma4_thinking_start),
+             gemma4_thinking_start_tokens.data(),
+             gemma4_thinking_start_tokens.size(),
+             &gemma4_thinking_start_count, 0, 1) ==
+         LLAMA_DART_SUCCESS);
 
   const char required_tool_chat_request[] =
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","description":"Look up local data","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}}],"tool_choice":"required","parallel_tool_calls":true,"add_generation_prompt":true})";

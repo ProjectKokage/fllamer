@@ -900,6 +900,32 @@ void main() {
     });
 
     test(
+      'forwards integrated MTP tensor-load intent only for target heads',
+      () async {
+        final fixture = await _buildStreamingCaptureBridge();
+        if (fixture == null) {
+          markTestSkipped('C compiler is not available for fake bridge build');
+          return;
+        }
+
+        for (final speculation in const <SpeculativeDecodingConfig>[
+          NoSpeculativeDecoding(),
+          MtpSpeculation(),
+          MtpSpeculation(mtpModelPath: 'sidecar.gguf'),
+        ]) {
+          final engine = await LlamaEngine.load(
+            LlamaModelConfig(
+              modelPath: fixture.markerPath,
+              nativeLibraryPath: fixture.libraryPath,
+              speculativeDecoding: speculation,
+            ),
+          );
+          await engine.close();
+        }
+      },
+    );
+
+    test(
       'streaming coalesces tokens and rejects context work while paused',
       () async {
         final fixture = await _buildStreamingCaptureBridge();
@@ -1901,37 +1927,49 @@ void main() {
         expect(history, hasLength(promptTokens.length + 1));
         final sampled = history.last;
         final beforeShift = await engine.contextInfo();
-        expect(beforeShift.supportsContextShift, isTrue);
         expect(beforeShift.usedTokens, history.length);
         expect(history.length, greaterThan(2));
-        expect(await engine.shiftContext(keepTokens: 1, discardTokens: 1), 1);
-        expect(_snapshotTokenHistory(await engine.saveState()), <int>[
-          history.first,
-          ...history.skip(2),
-        ]);
-        final continued = await engine
-            .complete(
-              prompt: ' Continue',
-              config: const GenerationConfig(
-                maxTokens: 1,
-                temperature: 0,
-                seed: 42,
-              ),
-            )
-            .toList();
-        expect(continued.last.isDone, isTrue);
-        final beforeAutoShift = _snapshotTokenHistory(await engine.saveState());
-        final expectedAutoDiscard = (beforeAutoShift.length - 1) ~/ 2;
-        expect(await engine.shiftContext(keepTokens: 1), expectedAutoDiscard);
-        final afterAutoShift = _snapshotTokenHistory(await engine.saveState());
-        expect(afterAutoShift, <int>[
-          beforeAutoShift.first,
-          ...beforeAutoShift.skip(1 + expectedAutoDiscard),
-        ]);
-        expect(
-          (await engine.contextInfo()).usedTokens,
-          beforeAutoShift.length - expectedAutoDiscard,
-        );
+        if (beforeShift.supportsContextShift) {
+          expect(await engine.shiftContext(keepTokens: 1, discardTokens: 1), 1);
+          expect(_snapshotTokenHistory(await engine.saveState()), <int>[
+            history.first,
+            ...history.skip(2),
+          ]);
+          final continued = await engine
+              .complete(
+                prompt: ' Continue',
+                config: const GenerationConfig(
+                  maxTokens: 1,
+                  temperature: 0,
+                  seed: 42,
+                ),
+              )
+              .toList();
+          expect(continued.last.isDone, isTrue);
+          final beforeAutoShift = _snapshotTokenHistory(
+            await engine.saveState(),
+          );
+          final expectedAutoDiscard = (beforeAutoShift.length - 1) ~/ 2;
+          expect(await engine.shiftContext(keepTokens: 1), expectedAutoDiscard);
+          final afterAutoShift = _snapshotTokenHistory(
+            await engine.saveState(),
+          );
+          expect(afterAutoShift, <int>[
+            beforeAutoShift.first,
+            ...beforeAutoShift.skip(1 + expectedAutoDiscard),
+          ]);
+          expect(
+            (await engine.contextInfo()).usedTokens,
+            beforeAutoShift.length - expectedAutoDiscard,
+          );
+        } else {
+          await expectLater(
+            engine.shiftContext(keepTokens: 1, discardTokens: 1),
+            throwsA(isA<UnsupportedFeatureException>()),
+          );
+          expect(_snapshotTokenHistory(await engine.saveState()), history);
+          expect((await engine.contextInfo()).usedTokens, history.length);
+        }
         await expectLater(
           engine.warmUp(),
           throwsA(isA<NativeBridgeException>()),
@@ -2088,7 +2126,10 @@ void main() {
           modelConfig(const NoSpeculativeDecoding()),
         );
         late final String baseline;
+        late final bool rejectsNgramSpeculation;
         try {
+          final modelInfo = await baselineEngine.modelInfo();
+          rejectsNgramSpeculation = modelInfo.isRecurrent || modelInfo.isHybrid;
           baseline =
               (await baselineEngine
                       .complete(prompt: prompt, config: generation)
@@ -2135,6 +2176,14 @@ void main() {
               ),
               (name: 'ngram-cache', config: NGramCacheSpeculation()),
             ]) {
+          if (rejectsNgramSpeculation) {
+            await expectLater(
+              LlamaEngine.load(modelConfig(strategy.config)),
+              throwsA(isA<UnsupportedFeatureException>()),
+              reason: strategy.name,
+            );
+            continue;
+          }
           final engine = await LlamaEngine.load(modelConfig(strategy.config));
           try {
             final chunks = await engine
@@ -4063,6 +4112,45 @@ void main() {
           enableThinking: true,
         ).validate(),
         throwsArgumentError,
+      );
+      expect(
+        () => const GenerationConfig(
+          maxTokens: 16,
+          enableThinking: true,
+          reasoningBudgetTokens: -1,
+        ).validate(),
+        throwsArgumentError,
+      );
+      expect(
+        () => const GenerationConfig(
+          maxTokens: 16,
+          reasoningBudgetTokens: 8,
+        ).validate(),
+        returnsNormally,
+      );
+      expect(
+        () => const GenerationConfig(
+          maxTokens: 16,
+          enableThinking: false,
+          reasoningBudgetTokens: 8,
+        ).validate(),
+        throwsArgumentError,
+      );
+      expect(
+        () => const GenerationConfig(
+          maxTokens: 16,
+          enableThinking: true,
+          reasoningBudgetTokens: 16,
+        ).validate(),
+        returnsNormally,
+      );
+      expect(
+        () => const GenerationConfig(
+          maxTokens: 16,
+          enableThinking: true,
+          reasoningBudgetTokens: 8,
+        ).validate(),
+        returnsNormally,
       );
       expect(
         () => GenerationConfig.jsonSchema(
@@ -9072,6 +9160,7 @@ static uint32_t generated_tokens;
 static uint32_t generation_limit;
 static int generation_active;
 static int cancelled;
+static uint8_t requested_load_mtp;
 
 static llama_dart_result fail(llama_dart_result result, const char *message) {
   last_error = message;
@@ -9104,6 +9193,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
              : config->chat_template_data,
          template_size);
   selected_chat_template[template_size] = '\0';
+  requested_load_mtp = config->load_mtp;
   *out_model = (llama_dart_model *)&fake_model_storage;
   last_error = "";
   return LLAMA_DART_SUCCESS;
@@ -9132,9 +9222,17 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_context_create(
     llama_dart_model *model, const llama_dart_context_config *config,
     llama_dart_context **out_context) {
   (void)model;
-  (void)config;
   if (out_context == NULL) {
     return fail(LLAMA_DART_ERROR_CONTEXT_CREATE, "missing context output");
+  }
+  const uint8_t expected_load_mtp =
+      config->speculative_type == LLAMA_DART_SPECULATIVE_MTP &&
+              config->speculative_model_path_size == 0
+          ? 1
+          : 0;
+  if (requested_load_mtp != expected_load_mtp) {
+    return fail(LLAMA_DART_ERROR_CONTEXT_CREATE,
+                "integrated MTP load intent was not forwarded");
   }
   *out_context = (llama_dart_context *)&fake_context_storage;
   last_error = "";

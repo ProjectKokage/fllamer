@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(llama_dart_bridge VERSION 0.2.4 LANGUAGES CXX)
 
-set(LLAMA_DART_UPSTREAM_COMMIT 12127defda4f41b7679cb2477a4b0d65ee6a0c8f)
-set(LLAMA_DART_UPSTREAM_BUILD_NUMBER 10015)
+set(LLAMA_DART_UPSTREAM_COMMIT ddd4ec1428a6201e18975ea52b07c71e0f9aef26)
+set(LLAMA_DART_UPSTREAM_BUILD_NUMBER 10217)
 
 option(
   LLAMA_DART_ENABLE_METAL
@@ -130,6 +130,17 @@ add_subdirectory(
   EXCLUDE_FROM_ALL
 )
 
+add_library(
+  llama_dart_bridge_reasoning STATIC
+  src/reasoning_sampler.cpp
+)
+target_compile_features(llama_dart_bridge_reasoning PRIVATE cxx_std_17)
+target_include_directories(
+  llama_dart_bridge_reasoning PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(llama_dart_bridge_reasoning PUBLIC llama-common)
+
 add_library(llama_dart_bridge SHARED src/llama_dart.cpp)
 target_compile_features(llama_dart_bridge PRIVATE cxx_std_17)
 target_compile_definitions(
@@ -150,7 +161,12 @@ set_target_properties(
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN ON
 )
-target_link_libraries(llama_dart_bridge PRIVATE llama-common mtmd)
+target_link_libraries(
+  llama_dart_bridge PRIVATE
+  llama_dart_bridge_reasoning
+  llama-common
+  mtmd
+)
 
 if(APPLE)
   set(
@@ -181,10 +197,16 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   add_executable(llama_dart_bridge_test tests/llama_dart_bridge_test.cpp)
+  add_executable(
+    llama_dart_reasoning_sampler_test
+    tests/reasoning_sampler_test.cpp
+  )
   if(MSVC)
     target_compile_options(llama_dart_bridge_test PRIVATE /UNDEBUG)
+    target_compile_options(llama_dart_reasoning_sampler_test PRIVATE /UNDEBUG)
   else()
     target_compile_options(llama_dart_bridge_test PRIVATE -UNDEBUG)
+    target_compile_options(llama_dart_reasoning_sampler_test PRIVATE -UNDEBUG)
   endif()
   target_include_directories(
     llama_dart_bridge_test PRIVATE
@@ -193,12 +215,20 @@ if(BUILD_TESTING)
   target_link_libraries(
     llama_dart_bridge_test PRIVATE llama_dart_bridge llama-common
   )
+  target_link_libraries(
+    llama_dart_reasoning_sampler_test PRIVATE
+    llama_dart_bridge_reasoning
+  )
   target_compile_definitions(
     llama_dart_bridge_test PRIVATE
     LLAMA_DART_TEST_VOCAB_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/ggml-vocab-gpt-2.gguf"
     LLAMA_DART_TEST_TOOL_VOCAB_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/ggml-vocab-gemma-4.gguf"
   )
   add_test(NAME llama_dart_bridge_test COMMAND llama_dart_bridge_test)
+  add_test(
+    NAME llama_dart_reasoning_sampler_test
+    COMMAND llama_dart_reasoning_sampler_test
+  )
   if(UNIX)
     add_test(
       NAME llama_dart_bridge_exports

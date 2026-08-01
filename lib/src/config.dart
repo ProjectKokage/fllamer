@@ -286,6 +286,7 @@ final class GenerationConfig {
     this.grammarRoot = 'root',
     this.toolCalling = const LlamaToolCallingConfig(),
     this.enableThinking,
+    this.reasoningBudgetTokens,
   });
 
   const GenerationConfig.jsonMode({
@@ -311,7 +312,8 @@ final class GenerationConfig {
     this.enableThinking,
   }) : grammar = llamaJsonGrammar,
        jsonSchema = null,
-       grammarRoot = 'root';
+       grammarRoot = 'root',
+       reasoningBudgetTokens = null;
 
   factory GenerationConfig.jsonSchema({
     required Map<String, Object?> schema,
@@ -395,9 +397,20 @@ final class GenerationConfig {
 
   /// Optional typed input for chat templates that expose `enable_thinking`.
   ///
-  /// `null` preserves the model's default and the legacy-first formatting
-  /// path. Non-null values are applied only by [LlamaEngine.chat].
+  /// `null` preserves the legacy-first formatting path unless
+  /// [reasoningBudgetTokens] requests native chat planning. On that planning
+  /// path, llama.cpp supplies its default `enable_thinking` value (`true`).
+  /// Non-null values are applied only by [LlamaEngine.chat].
   final bool? enableThinking;
+
+  /// Maximum tokens counted inside each chat-template reasoning block.
+  ///
+  /// Reasoning already present in a template's generation prefill also counts.
+  /// This is separate from [maxTokens], which remains the total output limit
+  /// and must leave room for model-specific thinking markers and public output.
+  /// A non-null value leaves thinking at llama.cpp's default (`true`) when
+  /// [enableThinking] is `null`, and is invalid when it is explicitly `false`.
+  final int? reasoningBudgetTokens;
 
   void validate() {
     if (maxTokens <= 0) {
@@ -521,13 +534,38 @@ final class GenerationConfig {
         'must not be provided with grammar',
       );
     }
-    if (enableThinking == true && (grammar != null || jsonSchema != null)) {
+    if ((enableThinking == true || this.reasoningBudgetTokens != null) &&
+        (grammar != null || jsonSchema != null)) {
       throw ArgumentError.value(
         enableThinking,
         'enableThinking',
         'thinking output cannot be combined with request-owned structured '
             'output',
       );
+    }
+    final reasoningBudgetTokens = this.reasoningBudgetTokens;
+    if (reasoningBudgetTokens != null) {
+      if (reasoningBudgetTokens < 0) {
+        throw ArgumentError.value(
+          reasoningBudgetTokens,
+          'reasoningBudgetTokens',
+          'must be non-negative',
+        );
+      }
+      if (reasoningBudgetTokens > _maxInt32) {
+        throw ArgumentError.value(
+          reasoningBudgetTokens,
+          'reasoningBudgetTokens',
+          'must fit int32',
+        );
+      }
+      if (enableThinking == false) {
+        throw ArgumentError.value(
+          reasoningBudgetTokens,
+          'reasoningBudgetTokens',
+          'cannot be used when enableThinking is false',
+        );
+      }
     }
     if (jsonSchema != null) {
       _validateJsonValue(jsonSchema, 'jsonSchema');

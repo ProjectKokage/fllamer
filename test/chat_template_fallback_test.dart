@@ -86,6 +86,73 @@ void main() {
       }
     });
 
+    test(
+      'reasoning budget uses llama.cpp default-on through the Jinja plan',
+      () async {
+        final active = fixture;
+        final activeCounters = counters;
+        if (active == null || activeCounters == null) {
+          markTestSkipped('A C compiler is not available for the fake bridge.');
+          return;
+        }
+        activeCounters.reset();
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: 'thinking-budget.gguf',
+            nativeLibraryPath: active.libraryPath,
+          ),
+        );
+        try {
+          final chunks = await engine
+              .chat(
+                messages: <ChatMessage>[ChatMessage.user('hello')],
+                config: const GenerationConfig(
+                  maxTokens: 16,
+                  reasoningBudgetTokens: 8,
+                ),
+              )
+              .toList();
+
+          expect(chunks.single.text, 'terminal');
+          expect(activeCounters.applyCalls(), 0);
+          expect(activeCounters.planCalls(), 1);
+        } finally {
+          await engine.close();
+        }
+      },
+    );
+
+    test('bounded reasoning rejects a stale same-ABI bridge', () async {
+      final active = fixture;
+      if (active == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'thinking-old.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      try {
+        await expectLater(
+          engine
+              .chat(
+                messages: <ChatMessage>[ChatMessage.user('hello')],
+                config: const GenerationConfig(
+                  maxTokens: 16,
+                  enableThinking: true,
+                  reasoningBudgetTokens: 8,
+                ),
+              )
+              .toList(),
+          throwsA(isA<UnsupportedFeatureException>()),
+        );
+      } finally {
+        await engine.close();
+      }
+    });
+
     test('uses the Jinja plan after unsupported legacy formatting', () async {
       final active = fixture;
       final activeCounters = counters;
@@ -378,6 +445,7 @@ enum fake_mode {
   MODE_SCHEMA = 4,
   MODE_MEDIA = 5,
   MODE_THINKING = 6,
+  MODE_OLD_THINKING = 7,
 };
 
 static const char *last_error = "";
@@ -456,6 +524,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
                     "legacy-error")) {
     current_mode = MODE_ERROR;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "thinking-old")) {
+    current_mode = MODE_OLD_THINKING;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
                            "thinking")) {
     current_mode = MODE_THINKING;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
@@ -492,7 +563,8 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_apply_chat_template(
   if (messages == NULL || message_count != 1 || out_prompt == NULL) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid messages");
   }
-  if (current_mode == MODE_LEGACY || current_mode == MODE_THINKING) {
+  if (current_mode == MODE_LEGACY || current_mode == MODE_THINKING ||
+      current_mode == MODE_OLD_THINKING) {
     return copy_buffer(add_assistant_prompt != 0
         ? "legacy:assistant"
         : "legacy:no-assistant", out_prompt);
@@ -527,6 +599,8 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
   const int no_tools = strstr(request, "\"tools\":[]") != NULL;
   const int thinking_disabled =
       strstr(request, "\"enable_thinking\":false") != NULL;
+  const int reasoning_budget =
+      strstr(request, "\"reasoning_budget_tokens\":8") != NULL;
   const int media_request =
       strstr(request, "left<__media__>middle<__media__>right") != NULL;
   free(request);
@@ -534,7 +608,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "ordinary fallback injected tool metadata");
   }
-  if (current_mode == MODE_THINKING && !thinking_disabled) {
+  if ((current_mode == MODE_THINKING ||
+       current_mode == MODE_OLD_THINKING) &&
+      !(thinking_disabled || reasoning_budget)) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "thinking control was not forwarded");
   }
@@ -546,13 +622,19 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
   const char *prompt = current_mode == MODE_MEDIA
       ? "jinja:left<__media__>middle<__media__>right:assistant"
       : add_assistant ? "jinja:assistant" : "jinja:no-assistant";
+  const char *reasoning_fields =
+      reasoning_budget && current_mode != MODE_OLD_THINKING
+      ? "\"thinking_start_tag\":\"<think>\","
+        "\"thinking_end_tags\":[\"</think>\"],"
+        "\"reasoning_budget_tokens\":8,"
+      : "";
   char plan[1024];
   const int size = snprintf(
       plan, sizeof(plan),
       "{\"version\":1,\"prompt\":\"%s\",\"grammar\":\"\","
       "\"grammar_lazy\":false,\"grammar_triggers\":[],"
       "\"preserved_tokens\":[],\"additional_stops\":[],"
-      "\"generation_prompt\":\"\"}", prompt);
+      "%s\"generation_prompt\":\"\"}", prompt, reasoning_fields);
   if (size <= 0 || (size_t)size >= sizeof(plan)) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "chat plan buffer overflow");
   }
