@@ -205,10 +205,15 @@ too small for the serialized state being restored.
 Bridge CMake enables the static upstream common library for speculative
 decoding while disabling upstream tools, UI/prebuilt UI, OpenSSL integration,
 external LLGuidance, native CPU tuning, OpenMP, LLAMAFILE, HBM, KleidiAI, BLAS,
-Accelerate, and non-Apple accelerator backends for the current smoke-tested
-baseline. `LLAMA_DART_NO_NETWORK=ON` also enables disconnected CMake fetches.
-Apple targets build the pinned Metal backend with embedded kernels. Vulkan
-remains an opt-in CMake variant until Android device validation is available.
+and Accelerate. It enables only the target-selected Metal or Vulkan accelerator
+backend; CPU-only variants disable both. `LLAMA_DART_NO_NETWORK=ON` also enables
+disconnected CMake fetches. Apple targets build the pinned Metal backend with
+embedded kernels. Vulkan is strict by default for native Linux and Windows
+builds while the CPU backend remains available; an explicit consuming-workspace
+override builds CPU-only.
+Cross-architecture desktop builds are rejected because the pinned Vulkan
+shader-generator toolchain has no separate host-tool contract. Android native
+inference validation remains separate.
 Native-assets builds use `RelWithDebInfo`; the effective CMake build type and
 feature flags are exposed in runtime/benchmark metadata.
 

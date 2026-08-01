@@ -1,5 +1,9 @@
 # Native Builds
 
+Native CPU/Metal builds require CMake 3.16 or newer. Vulkan builds require
+CMake 3.19 or newer, matching the pinned upstream shader build; the
+native-assets hook checks this before configuration.
+
 Current local build:
 
 ```sh
@@ -7,6 +11,13 @@ cmake -S native/llama_dart_bridge -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native --config Release
 ctest --test-dir build/native --output-on-failure
 ```
+
+Direct Linux and Windows CMake builds require Vulkan by default. Install the
+target's Vulkan development files, SPIR-V headers, and `glslc`, or request a
+deliberate CPU-only artifact with
+`-DLLAMA_DART_ENABLE_VULKAN=OFF`. Configuration fails when Vulkan is enabled
+but those build dependencies are incomplete; it never silently changes the
+artifact to CPU-only.
 
 Package dry run:
 
@@ -78,9 +89,40 @@ runtime used by draft-model, EAGLE-3, and MTP strategies. The bridge does not
 call llama-common download helpers; model paths remain app supplied and local.
 Apple targets also set `GGML_METAL=ON` and
 `GGML_METAL_EMBED_LIBRARY=ON` so Metal kernels stay inside the bundled
-library. Other upstream network/tool/UI and accelerator backends remain
-disabled. A custom build can opt into Vulkan with
-`-DLLAMA_DART_ENABLE_VULKAN=ON` when its SDK is available.
+library. Linux and Windows targets set `GGML_VULKAN=ON` by default and retain
+the CPU backend. Other upstream network/tool/UI and accelerator backends remain
+disabled.
+
+The desktop Vulkan policy is explicit native-assets input rather than an
+ambient best-effort probe. In the consuming app's workspace-root `pubspec.yaml`,
+use:
+
+```yaml
+hooks:
+  user_defines:
+    fllamer:
+      # Defaults to true on Linux and Windows.
+      vulkan: true
+      # Optional when CMake can use system Vulkan development packages.
+      vulkan_sdk: toolchains/vulkan/1.4.x/
+```
+
+`vulkan` accepts only a boolean. `false` builds a reproducible CPU-only bridge.
+`true` is strict and fails CMake configuration if Vulkan, `glslc`, or
+SPIR-V-Headers cannot be found. `vulkan_sdk` is an optional local directory
+forwarded as `Vulkan_ROOT` and `VULKAN_SDK`; the hook records that directory as
+an input, but tracks only the header tree, SPIRV-Headers CMake package files,
+loader import library, and `glslc` files CMake consumes rather than hashing
+unrelated SDK samples, documentation, and tools. Pin and provision that SDK
+outside the package when a release build must use one exact toolchain. The hook
+does not download it.
+
+Both bridge variants retain the CPU backend. `GpuConfig.cpu()` is therefore an
+explicit runtime fallback when the Vulkan loader can load but no usable device
+exists. A Vulkan-enabled bridge still has a target-system dependency on the
+Vulkan loader (`vulkan-1.dll` on Windows or the platform Vulkan loader on
+Linux). Machines without that loader need the CPU-only artifact; they cannot
+load the Vulkan-linked bridge merely to select CPU afterward.
 
 Target notes:
 
@@ -109,8 +151,25 @@ Target notes:
   layers. This also keeps context, KV, speculative, and multimodal projector
   work off Metal. Explicit Metal selection remains unchanged for diagnostics;
   physical-device Metal behavior must be validated on a physical device.
-- macOS and Linux host builds are supported by the same hook. Windows is not
-  configured yet.
+- The Linux hook is configured for native x64 and arm64 host builds.
+  Debian/Ubuntu builders can provision the pinned upstream requirements with
+  `libvulkan-dev`, `glslc`, and `spirv-headers`; other distributions need the
+  equivalent loader development files, shader compiler, and SPIR-V headers.
+  The optional LunarG SDK path above is also an accepted configuration input.
+  The emitted code asset is `libllama_dart_bridge.so`.
+- The Windows hook is configured for native x64 and arm64 host builds through
+  the C compiler, linker, archiver, and Developer Command Prompt supplied by
+  native-assets.
+  Install a `flutter doctor -v`-accepted Visual Studio Desktop development with
+  C++ toolchain, CMake 3.19 or newer, Ninja, and a LunarG Vulkan SDK containing
+  headers, `vulkan-1.lib`, `glslc`, and SPIR-V headers. The hook configures
+  Ninja with those exact native-assets tool paths and runs CMake inside the
+  supplied Visual Studio environment. The emitted code asset is
+  `llama_dart_bridge.dll`.
+- Cross-architecture Linux and Windows builds are rejected. The pinned Vulkan
+  build executes a target-built shader generator during compilation, so x64
+  artifacts must be built on x64 and arm64 artifacts on arm64 until an
+  independently provisioned host-toolchain contract is implemented.
 
 Model files remain app-owned data. The hook only packages native executable
 code that is built from the pinned source files.
@@ -131,6 +190,11 @@ own durable app-private model directory before loading it again later.
 
 Current verification:
 
+- Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
+  explicit CPU-only override, SDK-root propagation, desktop architecture
+  rejection, Windows Ninja/MSVC argument propagation, and Developer Command
+  Prompt environment parsing. These tests run on macOS but do not constitute a
+  Linux or Windows compilation or Vulkan runtime result.
 - The hook has host smoke-test coverage through `dart test` and `flutter test`.
 - Native `ctest` always covers ABI/error handling; its assertions remain active
   in Release builds, and an ASan/UBSan Debug build passes locally.
@@ -436,6 +500,9 @@ Current verification:
 
 Current limitations:
 
+- Linux and Windows bridge compilation, packaging, loader discovery, real GGUF
+  offload, and CPU fallback still require results from those target hosts; a
+  macOS policy test cannot establish them.
 - `flutter build apk --debug` without `--target-platform` still asks Flutter's
   native-assets pipeline to build `android-arm`; the hook rejects that 32-bit
   ABI because this package only supports `arm64-v8a` and `x86_64`.

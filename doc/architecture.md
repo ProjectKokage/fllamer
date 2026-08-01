@@ -174,4 +174,9 @@ through the example app. A dependent Flutter app also passes an iOS 26.5
 Simulator automatic-backend runtime regression and an unsigned `iphoneos`
 Debug build. Those checks validate Simulator CPU runtime behavior and device
 compile/package output, respectively; physical-device Metal runtime testing is
-still pending.
+still pending. Linux and Windows native-assets builds use a strict,
+configuration-visible Vulkan policy by default while preserving the CPU
+backend. They accept an explicit CPU-only override and optional local SDK root,
+and reject cross-architecture builds until the Vulkan host shader-generator
+toolchain has a separate contract. This defines reproducible build inputs; it
+does not replace target-host package, loader, GPU, or model validation.

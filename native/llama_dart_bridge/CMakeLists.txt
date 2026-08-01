@@ -10,10 +10,14 @@ option(
   "Build the Metal backend on Apple platforms"
   ${APPLE}
 )
+set(LLAMA_DART_ENABLE_VULKAN_DEFAULT OFF)
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(LLAMA_DART_ENABLE_VULKAN_DEFAULT ON)
+endif()
 option(
   LLAMA_DART_ENABLE_VULKAN
-  "Build the Vulkan backend when its SDK is available"
-  OFF
+  "Require and build the Vulkan backend"
+  ${LLAMA_DART_ENABLE_VULKAN_DEFAULT}
 )
 option(
   LLAMA_DART_NO_NETWORK

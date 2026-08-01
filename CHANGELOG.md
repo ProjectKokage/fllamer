@@ -1,5 +1,15 @@
 ## 0.2.4
 
+- Added `LlamaEmbeddingEngine`, a worker-owned persistent embedding context
+  that reuses one loaded model for tokenization, metadata inspection, and
+  repeated single or batch embeddings. The existing static embedding helpers
+  remain available for one-shot work.
+- Enabled strict-by-default Vulkan native-assets builds on Linux and Windows,
+  with an explicit CPU-only boolean override and optional local Vulkan SDK
+  root. Windows now consumes the native-assets Visual Studio environment and
+  exact compiler/linker/archiver through Ninja; unsupported and
+  cross-architecture desktop builds fail with actionable errors. Vulkan builds
+  require CMake 3.19 or newer.
 - Fixed multimodal prompt preprocessing after upstream added an explicit
   `text_len` field to `mtmd_input_text`. The bridge now passes the complete
   rendered prompt instead of accidentally exposing only its first byte.

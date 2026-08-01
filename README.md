@@ -31,9 +31,11 @@ dart pub get
 ```
 
 The native-assets hook builds the bundled bridge with CMake. Host Dart builds
-therefore require CMake and a C++ toolchain; Android builds additionally require
-the NDK, and Apple builds require Xcode. See
-[native builds](doc/native_builds.md) for supported ABIs, minimum platform
+therefore require CMake 3.16 or newer and a C++ toolchain; Android builds
+additionally require the NDK, and Apple builds require Xcode. Linux/Windows
+Vulkan builds require CMake 3.19 or newer, Vulkan development files, and
+`glslc` unless the consuming workspace explicitly selects a CPU-only bridge.
+See [native builds](doc/native_builds.md) for supported ABIs, minimum platform
 versions, and platform-specific commands. Models, mmproj files, and LoRA
 adapters are app-owned data and are never downloaded by the package.
 
@@ -216,8 +218,10 @@ void main() async {
   CPU path. On Apple Simulator targets, `GpuConfig.auto()` also resolves to an
   explicit CPU device with zero GPU layers because Simulator Metal is not a
   supported inference path. Explicit Metal requests remain available for
-  diagnostics. Vulkan selection is runtime-gated until a Vulkan-enabled bridge
-  is supplied.
+  diagnostics. Linux and Windows native-assets builds require and include
+  Vulkan by default while retaining the CPU backend; consuming workspaces can
+  explicitly build a CPU-only bridge. Runtime capability metadata distinguishes
+  the two artifacts before an app requests Vulkan.
 - Experimental GBNF grammar constraints, JSON mode, and pinned-upstream JSON
   Schema conversion for `GenerationConfig.jsonSchema`, including local
   `$defs`/`$ref`, JSON
@@ -294,6 +298,9 @@ before persistence or display.
   introduced in iOS 15. The native-assets hook compiles the bridge for at least
   iOS 15 even when Flutter supplies its generic iOS 13 hook input; applications
   must also set their Xcode deployment target to iOS 15.0 or newer.
+- Cross-architecture Linux or Windows builds. Build x64 artifacts on an x64
+  host and arm64 artifacts on an arm64 host so the pinned Vulkan shader
+  generator is executable during the native build.
 
 ## Safety notes
 

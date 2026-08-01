@@ -8,6 +8,10 @@ const _assetName = 'llama_dart_bridge';
 const _cmakeBuildType = 'RelWithDebInfo';
 const minimumIosVersion = 15;
 const maximumDefaultBuildJobs = 4;
+const minimumVulkanCmakeMajor = 3;
+const minimumVulkanCmakeMinor = 19;
+const vulkanUserDefine = 'vulkan';
+const vulkanSdkUserDefine = 'vulkan_sdk';
 
 Future<void> main(List<String> args) async {
   await build(args, (input, output) async {
@@ -25,6 +29,31 @@ Future<void> main(List<String> args) async {
     final linkMode = DynamicLoadingBundled();
     final outputName = targetOS.libraryFileName(_libraryName, linkMode);
     final assetFile = input.outputDirectory.resolve(outputName);
+    final enableVulkan = vulkanEnabledForNativeAssetsBuild(
+      targetOS,
+      input.userDefines[vulkanUserDefine],
+    );
+    final vulkanSdk = vulkanSdkForNativeAssetsBuild(
+      input.userDefines[vulkanSdkUserDefine],
+      resolveVulkanSdkUserDefine(
+        input.userDefines[vulkanSdkUserDefine],
+        input.userDefines.path(vulkanSdkUserDefine),
+        targetOS,
+      ),
+      enabled: enableVulkan,
+    );
+    final targetArgs = cmakeTargetArgsForNativeAssetsBuild(
+      code,
+      enableVulkan: enableVulkan,
+      vulkanSdk: vulkanSdk,
+    );
+    final cmakeEnvironment = await cmakeEnvironmentForNativeAssetsBuild(
+      code,
+      vulkanSdk: vulkanSdk,
+    );
+    if (enableVulkan) {
+      await validateInstalledCmakeForVulkanBuild(cmakeEnvironment);
+    }
 
     final configureArgs = <String>[
       '-S',
@@ -33,9 +62,9 @@ Future<void> main(List<String> args) async {
       buildDir.toFilePath(),
       '-DCMAKE_BUILD_TYPE=$_cmakeBuildType',
       '-DBUILD_TESTING=OFF',
-      ..._targetArgs(code),
+      ...targetArgs,
     ];
-    await _run('cmake', configureArgs);
+    await _run('cmake', configureArgs, environment: cmakeEnvironment);
     await _run('cmake', [
       '--build',
       buildDir.toFilePath(),
@@ -45,13 +74,18 @@ Future<void> main(List<String> args) async {
       _libraryName,
       '--parallel',
       '${cmakeBuildParallelism()}',
-    ]);
+    ], environment: cmakeEnvironment);
 
     final builtFile = await builtLibraryForCmakeOutput(buildDir, outputName);
     await Directory.fromUri(input.outputDirectory).create(recursive: true);
     await builtFile.copy(assetFile.toFilePath());
 
     output.dependencies.addAll(_nativeBuildDependencies(input.packageRoot));
+    if (vulkanSdk != null) {
+      output.dependencies.addAll(
+        vulkanSdkBuildDependenciesForNativeAssetsBuild(vulkanSdk, targetOS),
+      );
+    }
     output.assets.code.add(
       CodeAsset(
         package: input.packageName,
@@ -100,9 +134,124 @@ List<Uri> _filesUnder(Uri directory) {
       .toList(growable: false);
 }
 
-List<String> _targetArgs(CodeConfig code) {
+List<Uri> vulkanSdkBuildDependenciesForNativeAssetsBuild(
+  Uri sdkRoot,
+  OS targetOS,
+) {
+  final dependencies = <Uri>{
+    for (final includeDirectory in const ['Include/', 'include/'])
+      ..._filesUnder(sdkRoot.resolve(includeDirectory)),
+    for (final configDirectory in const [
+      'share/cmake/SPIRV-Headers/',
+      'lib/cmake/SPIRV-Headers/',
+      'lib64/cmake/SPIRV-Headers/',
+      'x86_64/share/cmake/SPIRV-Headers/',
+      'x86_64/lib/cmake/SPIRV-Headers/',
+      'aarch64/share/cmake/SPIRV-Headers/',
+      'aarch64/lib/cmake/SPIRV-Headers/',
+    ])
+      ..._filesUnder(sdkRoot.resolve(configDirectory)),
+  };
+  final relativeFiles = targetOS == OS.windows
+      ? const [
+          'Bin/glslc.exe',
+          'bin/glslc.exe',
+          'Lib/vulkan-1.lib',
+          'lib/vulkan-1.lib',
+          'Lib/arm64/vulkan-1.lib',
+          'Lib/ARM64/vulkan-1.lib',
+        ]
+      : const [
+          'bin/glslc',
+          'Bin/glslc',
+          'lib/libvulkan.so',
+          'lib/libvulkan.so.1',
+          'lib64/libvulkan.so',
+          'lib64/libvulkan.so.1',
+          'x86_64/bin/glslc',
+          'x86_64/lib/libvulkan.so',
+          'x86_64/lib/libvulkan.so.1',
+          'aarch64/bin/glslc',
+          'aarch64/lib/libvulkan.so',
+          'aarch64/lib/libvulkan.so.1',
+        ];
+  for (final relativeFile in relativeFiles) {
+    final file = File.fromUri(sdkRoot.resolve(relativeFile));
+    if (file.existsSync()) {
+      dependencies.add(file.uri);
+    }
+  }
+  return dependencies.toList()
+    ..sort((a, b) => a.toString().compareTo(b.toString()));
+}
+
+bool vulkanEnabledForNativeAssetsBuild(OS targetOS, Object? userDefine) {
+  if (userDefine != null && userDefine is! bool) {
+    throw BuildError(
+      message:
+          'hooks.user_defines.fllamer.$vulkanUserDefine must be a boolean.',
+    );
+  }
+  final isVulkanDesktop = targetOS == OS.linux || targetOS == OS.windows;
+  return isVulkanDesktop && (userDefine as bool? ?? true);
+}
+
+Uri? vulkanSdkForNativeAssetsBuild(
+  Object? userDefine,
+  Uri? resolvedPath, {
+  required bool enabled,
+}) {
+  if (userDefine != null && userDefine is! String) {
+    throw BuildError(
+      message:
+          'hooks.user_defines.fllamer.$vulkanSdkUserDefine must be a path.',
+    );
+  }
+  if (!enabled || userDefine == null) {
+    return null;
+  }
+  if (resolvedPath == null || !resolvedPath.isScheme('file')) {
+    throw BuildError(
+      message:
+          'hooks.user_defines.fllamer.$vulkanSdkUserDefine must resolve to '
+          'a local directory.',
+    );
+  }
+  final directory = Directory.fromUri(resolvedPath);
+  if (!directory.existsSync()) {
+    throw BuildError(
+      message: 'Configured Vulkan SDK directory does not exist.',
+    );
+  }
+  return directory.uri;
+}
+
+Uri? resolveVulkanSdkUserDefine(
+  Object? userDefine,
+  Uri? resolvedPath,
+  OS targetOS,
+) {
+  if (targetOS == OS.windows &&
+      userDefine is String &&
+      (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(userDefine) ||
+          userDefine.startsWith(r'\\'))) {
+    return Uri.directory(userDefine, windows: true);
+  }
+  return resolvedPath;
+}
+
+List<String> cmakeTargetArgsForNativeAssetsBuild(
+  CodeConfig code, {
+  required bool enableVulkan,
+  Uri? vulkanSdk,
+}) {
   final os = code.targetOS;
   final arch = code.targetArchitecture;
+  final args = vulkanCmakeArgsForNativeAssetsBuild(
+    enableVulkan: enableVulkan,
+    vulkanSdk: vulkanSdk,
+    windows: os == OS.windows,
+  );
   if (os == OS.android) {
     final abi = androidAbiForNativeAssetsBuild(arch);
     final ndk = _androidNdk(code);
@@ -110,6 +259,7 @@ List<String> _targetArgs(CodeConfig code) {
       throw BuildError(message: 'Android NDK was not found for native build.');
     }
     return [
+      ...args,
       '-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake',
       '-DANDROID_ABI=$abi',
       '-DANDROID_PLATFORM=android-${code.android.targetNdkApi}',
@@ -122,6 +272,7 @@ List<String> _targetArgs(CodeConfig code) {
       code.iOS.targetVersion,
     );
     return [
+      ...args,
       '-DCMAKE_SYSTEM_NAME=iOS',
       '-DCMAKE_OSX_ARCHITECTURES=${_appleArch(arch)}',
       '-DCMAKE_OSX_SYSROOT=${code.iOS.targetSdk.type}',
@@ -130,14 +281,204 @@ List<String> _targetArgs(CodeConfig code) {
   }
   if (os == OS.macOS) {
     return [
+      ...args,
       '-DCMAKE_OSX_ARCHITECTURES=${_appleArch(arch)}',
       '-DCMAKE_OSX_DEPLOYMENT_TARGET=${code.macOS.targetVersion}.0',
     ];
   }
   if (os == OS.linux) {
-    return const <String>[];
+    validateDesktopArchitectureForNativeAssetsBuild(os, arch);
+    return args;
+  }
+  if (os == OS.windows) {
+    validateDesktopArchitectureForNativeAssetsBuild(os, arch);
+    return [
+      ...args,
+      ...windowsCmakeToolchainArgsForNativeAssetsBuild(arch, code.cCompiler),
+    ];
   }
   throw BuildError(message: 'Native build is not configured for ${os.name}.');
+}
+
+List<String> vulkanCmakeArgsForNativeAssetsBuild({
+  required bool enableVulkan,
+  Uri? vulkanSdk,
+  bool windows = false,
+}) => [
+  '-DLLAMA_DART_ENABLE_VULKAN=${enableVulkan ? 'ON' : 'OFF'}',
+  if (vulkanSdk != null)
+    '-DVulkan_ROOT=${_cmakePath(vulkanSdk, windows: windows)}',
+];
+
+void validateDesktopArchitectureForNativeAssetsBuild(
+  OS targetOS,
+  Architecture targetArchitecture, {
+  Architecture? hostArchitecture,
+}) {
+  if (targetArchitecture != Architecture.x64 &&
+      targetArchitecture != Architecture.arm64) {
+    throw BuildError(
+      message:
+          '${targetOS.name} architecture is not configured for '
+          '${targetArchitecture.name}. Supported desktop architectures are '
+          'x64 and arm64.',
+    );
+  }
+  final host = hostArchitecture ?? Architecture.current;
+  if (targetArchitecture != host) {
+    throw BuildError(
+      message:
+          'Cross-architecture ${targetOS.name} native builds are not '
+          'configured. Run the build on a ${targetArchitecture.name} host.',
+    );
+  }
+}
+
+List<String> windowsCmakeToolchainArgsForNativeAssetsBuild(
+  Architecture architecture,
+  CCompilerConfig? toolchain, {
+  Architecture? hostArchitecture,
+}) {
+  validateDesktopArchitectureForNativeAssetsBuild(
+    OS.windows,
+    architecture,
+    hostArchitecture: hostArchitecture,
+  );
+  if (toolchain == null) {
+    throw BuildError(
+      message:
+          'The Windows C/C++ toolchain was not provided by the native-assets '
+          'build. Install a flutter doctor -v accepted Visual Studio Desktop '
+          'development with C++ toolchain, CMake, and Ninja.',
+    );
+  }
+  return [
+    '-G',
+    'Ninja',
+    '-DCMAKE_SYSTEM_PROCESSOR=${architecture == Architecture.arm64 ? 'ARM64' : 'AMD64'}',
+    '-DCMAKE_C_COMPILER=${_cmakeToolPath(toolchain.compiler)}',
+    '-DCMAKE_CXX_COMPILER=${_cmakeToolPath(toolchain.compiler)}',
+    '-DCMAKE_LINKER=${_cmakeToolPath(toolchain.linker)}',
+    '-DCMAKE_AR=${_cmakeToolPath(toolchain.archiver)}',
+  ];
+}
+
+String _cmakeToolPath(Uri uri) {
+  if (!uri.isScheme('file')) {
+    throw BuildError(message: 'Native build tools must use local file paths.');
+  }
+  final path = _cmakePath(uri, windows: true);
+  if (!_isUsableBuildPath(path)) {
+    throw BuildError(message: 'Native build tool path is invalid.');
+  }
+  return path;
+}
+
+String _cmakePath(Uri uri, {required bool windows}) =>
+    uri.toFilePath(windows: windows).replaceAll('\\', '/');
+
+Future<Map<String, String>> cmakeEnvironmentForNativeAssetsBuild(
+  CodeConfig code, {
+  Uri? vulkanSdk,
+}) async {
+  final environment = <String, String>{};
+  if (code.targetOS == OS.windows) {
+    final prompt = code.cCompiler?.windows.developerCommandPrompt;
+    if (prompt != null) {
+      environment.addAll(
+        await windowsDeveloperEnvironmentForNativeAssetsBuild(prompt),
+      );
+    }
+  }
+  if (vulkanSdk != null) {
+    environment['VULKAN_SDK'] = _cmakePath(
+      vulkanSdk,
+      windows: code.targetOS == OS.windows,
+    );
+  }
+  return environment;
+}
+
+Future<Map<String, String>> windowsDeveloperEnvironmentForNativeAssetsBuild(
+  DeveloperCommandPrompt prompt,
+) async {
+  if (!prompt.script.isScheme('file')) {
+    throw BuildError(
+      message: 'The Windows developer command prompt must be a local file.',
+    );
+  }
+  final script = prompt.script.toFilePath(windows: true);
+  if (!_isUsableBuildPath(script)) {
+    throw BuildError(
+      message: 'The Windows developer command prompt path is invalid.',
+    );
+  }
+  for (final argument in prompt.arguments) {
+    if (!RegExp(r'^[A-Za-z0-9_.,:=+/-]+$').hasMatch(argument)) {
+      throw BuildError(
+        message: 'A Windows developer command prompt argument is invalid.',
+      );
+    }
+  }
+  final arguments = prompt.arguments.join(' ');
+  final command =
+      'call "$script"${arguments.isEmpty ? '' : ' $arguments'} '
+      '>nul && set';
+  final result = await Process.run(
+    'cmd.exe',
+    ['/d', '/s', '/c', command],
+    stdoutEncoding: systemEncoding,
+    stderrEncoding: systemEncoding,
+  );
+  if (result.exitCode != 0) {
+    throw BuildError(message: 'Windows developer command prompt setup failed.');
+  }
+  return parseWindowsBuildEnvironment(result.stdout as String);
+}
+
+Map<String, String> parseWindowsBuildEnvironment(String output) {
+  final environment = <String, String>{};
+  for (final line in output.split(RegExp(r'\r?\n'))) {
+    final separator = line.indexOf('=');
+    if (separator <= 0) {
+      continue;
+    }
+    environment[line.substring(0, separator)] = line.substring(separator + 1);
+  }
+  return environment;
+}
+
+Future<void> validateInstalledCmakeForVulkanBuild(
+  Map<String, String> environment,
+) async {
+  final result = await Process.run(
+    'cmake',
+    ['--version'],
+    environment: environment,
+    stdoutEncoding: systemEncoding,
+    stderrEncoding: systemEncoding,
+  );
+  if (result.exitCode != 0) {
+    throw BuildError(message: 'CMake version detection failed.');
+  }
+  validateCmakeVersionForVulkanBuild(result.stdout as String);
+}
+
+void validateCmakeVersionForVulkanBuild(String output) {
+  final match = RegExp(r'cmake version (\d+)\.(\d+)').firstMatch(output);
+  if (match == null) {
+    throw BuildError(message: 'CMake version output was not recognized.');
+  }
+  final major = int.parse(match.group(1)!);
+  final minor = int.parse(match.group(2)!);
+  if (major < minimumVulkanCmakeMajor ||
+      (major == minimumVulkanCmakeMajor && minor < minimumVulkanCmakeMinor)) {
+    throw BuildError(
+      message:
+          'Vulkan builds require CMake '
+          '$minimumVulkanCmakeMajor.$minimumVulkanCmakeMinor or newer.',
+    );
+  }
 }
 
 String androidAbiForNativeAssetsBuild(Architecture architecture) {
@@ -358,8 +699,16 @@ bool _isCmakeConfigurationOutput(String path, String configuration) {
       );
 }
 
-Future<void> _run(String executable, List<String> args) async {
-  final process = await Process.start(executable, args);
+Future<void> _run(
+  String executable,
+  List<String> args, {
+  Map<String, String>? environment,
+}) async {
+  final process = await Process.start(
+    executable,
+    args,
+    environment: environment,
+  );
   final output = stdout.addStream(process.stdout);
   final errors = stderr.addStream(process.stderr);
   final exitCode = await process.exitCode;
