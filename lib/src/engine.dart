@@ -386,6 +386,142 @@ abstract final class LlamaEmbeddings {
   }
 }
 
+/// A worker-owned embedding context that keeps its model loaded across calls.
+///
+/// Operations are serialized by the worker isolate. Call [close] when the
+/// owning application no longer needs tokenization or embeddings.
+final class LlamaEmbeddingEngine {
+  LlamaEmbeddingEngine._(this.modelConfig, this.embeddingConfig, this._native);
+
+  final LlamaModelConfig modelConfig;
+  final EmbeddingConfig embeddingConfig;
+  final NativeLlamaEngineSession _native;
+  bool _closed = false;
+  Future<void>? _closeFuture;
+
+  static Future<LlamaEmbeddingEngine> load(
+    LlamaModelConfig modelConfig, {
+    EmbeddingConfig config = const EmbeddingConfig(),
+  }) async {
+    modelConfig.validate();
+    _requireEmbeddingContextConfig(modelConfig);
+    config.validate();
+    final native = await NativeLlamaBridge.startEmbeddingEngine(
+      modelConfig,
+      config.pooling,
+    );
+    return LlamaEmbeddingEngine._(modelConfig, config, native);
+  }
+
+  Future<Float32List> embedText(String text) async {
+    final batch = await embedTexts(<String>[text]);
+    return Float32List.fromList(batch.single);
+  }
+
+  Future<EmbeddingBatch> embedTexts(List<String> texts) {
+    _ensureOpen();
+    final checkedTexts = List<String>.unmodifiable(texts);
+    for (final text in checkedTexts) {
+      if (text.trim().isEmpty) {
+        throw ArgumentError.value(
+          checkedTexts,
+          'texts',
+          'must not contain empty text',
+        );
+      }
+      if (text.contains('\u0000')) {
+        throw ArgumentError.value(
+          checkedTexts,
+          'texts',
+          'must not contain NUL',
+        );
+      }
+    }
+    if (checkedTexts.isEmpty) {
+      return Future<EmbeddingBatch>.value(
+        EmbeddingBatch.empty(
+          normalized: embeddingConfig.normalize,
+          pooling: embeddingConfig.pooling,
+        ),
+      );
+    }
+    return _native.embedTexts(checkedTexts, embeddingConfig);
+  }
+
+  Future<LlamaModelInfo> modelInfo() {
+    _ensureOpen();
+    return _native.modelInfo();
+  }
+
+  Future<Map<String, String>> modelMetadata() {
+    _ensureOpen();
+    return _native.modelMetadata();
+  }
+
+  Future<List<int>> tokenize(
+    String text, {
+    bool addSpecial = false,
+    bool parseSpecial = false,
+  }) {
+    _ensureOpen();
+    _validateNativeText(text, 'text');
+    return _native.tokenize(
+      text,
+      addSpecial: addSpecial,
+      parseSpecial: parseSpecial,
+    );
+  }
+
+  Future<int> countTokens(
+    String text, {
+    bool addSpecial = false,
+    bool parseSpecial = false,
+  }) {
+    _ensureOpen();
+    _validateNativeText(text, 'text');
+    return _native.countTokens(
+      text,
+      addSpecial: addSpecial,
+      parseSpecial: parseSpecial,
+    );
+  }
+
+  Future<String> detokenize(
+    List<int> tokens, {
+    bool removeSpecial = false,
+    bool unparseSpecial = false,
+  }) {
+    _ensureOpen();
+    final checkedTokens = List<int>.unmodifiable(tokens);
+    _validateTokenIds(checkedTokens);
+    if (checkedTokens.isEmpty) {
+      return Future<String>.value('');
+    }
+    return _native.detokenize(
+      checkedTokens,
+      removeSpecial: removeSpecial,
+      unparseSpecial: unparseSpecial,
+    );
+  }
+
+  Future<void> close() {
+    final existing = _closeFuture;
+    if (existing != null) {
+      return existing;
+    }
+    _closed = true;
+    final closeFuture = _native.close();
+    _closeFuture = closeFuture;
+    return closeFuture;
+  }
+
+  void _ensureOpen() {
+    if (_closed) {
+      throw const ResourceDisposedException('LlamaEmbeddingEngine is closed.');
+    }
+  }
+}
+
 final class LlamaEmbeddingModel implements EmbeddingModel {
   const LlamaEmbeddingModel(
     this.modelConfig, {

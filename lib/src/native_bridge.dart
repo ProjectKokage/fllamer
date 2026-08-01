@@ -165,7 +165,18 @@ final class NativeLlamaBridge {
 
   static Future<NativeLlamaEngineSession> startEngine(
     LlamaModelConfig config,
-  ) async {
+  ) => _startEngine(config, embeddings: false, pooling: EmbeddingPooling.model);
+
+  static Future<NativeLlamaEngineSession> startEmbeddingEngine(
+    LlamaModelConfig config,
+    EmbeddingPooling pooling,
+  ) => _startEngine(config, embeddings: true, pooling: pooling);
+
+  static Future<NativeLlamaEngineSession> _startEngine(
+    LlamaModelConfig config, {
+    required bool embeddings,
+    required EmbeddingPooling pooling,
+  }) async {
     final ready = ReceivePort();
     final lifecyclePort = ReceivePort();
     final lifecycle = _EngineWorkerLifecycle(lifecyclePort);
@@ -173,7 +184,12 @@ final class NativeLlamaBridge {
     try {
       isolate = await Isolate.spawn(
         _engineWorkerMain,
-        _EngineWorkerStart(config, ready.sendPort),
+        _EngineWorkerStart(
+          config,
+          ready.sendPort,
+          embeddings: embeddings,
+          pooling: pooling,
+        ),
         errorsAreFatal: true,
         onError: lifecyclePort.sendPort,
         onExit: lifecyclePort.sendPort,
@@ -1098,47 +1114,55 @@ final class NativeLlamaBridge {
       pooling: embeddingConfig.pooling,
     );
     try {
-      if (texts.isEmpty) {
-        return EmbeddingBatch.empty(
-          normalized: embeddingConfig.normalize,
-          pooling: embeddingConfig.pooling,
-        );
-      }
-      Float32List embed(String text) {
-        final values = handles.embedText(text, embeddingConfig);
-        return embeddingConfig.normalize ? _normalize(values) : values;
-      }
-
-      final first = embed(texts.first);
-      if (first.isEmpty) {
-        throw const EmbeddingException(
-          'Native bridge returned an empty embedding.',
-        );
-      }
-      final dimensions = first.length;
-      final values = Float32List(texts.length * dimensions)
-        ..setRange(0, dimensions, first);
-      for (var i = 1; i < texts.length; i += 1) {
-        final vector = embed(texts[i]);
-        if (vector.length != dimensions) {
-          throw EmbeddingException(
-            'Embedding dimension changed within one batch: expected '
-            '$dimensions, got ${vector.length}.',
-          );
-        }
-        final start = i * dimensions;
-        values.setRange(start, start + dimensions, vector);
-      }
-      return EmbeddingBatch(
-        count: texts.length,
-        dimensions: dimensions,
-        values: values,
-        normalized: embeddingConfig.normalize,
-        pooling: embeddingConfig.pooling,
-      );
+      return _embedTextsWithHandles(handles, texts, embeddingConfig);
     } finally {
       handles.close();
     }
+  }
+
+  static EmbeddingBatch _embedTextsWithHandles(
+    _NativeEngineHandles handles,
+    List<String> texts,
+    EmbeddingConfig embeddingConfig,
+  ) {
+    if (texts.isEmpty) {
+      return EmbeddingBatch.empty(
+        normalized: embeddingConfig.normalize,
+        pooling: embeddingConfig.pooling,
+      );
+    }
+    Float32List embed(String text) {
+      final values = handles.embedText(text, embeddingConfig);
+      return embeddingConfig.normalize ? _normalize(values) : values;
+    }
+
+    final first = embed(texts.first);
+    if (first.isEmpty) {
+      throw const EmbeddingException(
+        'Native bridge returned an empty embedding.',
+      );
+    }
+    final dimensions = first.length;
+    final values = Float32List(texts.length * dimensions)
+      ..setRange(0, dimensions, first);
+    for (var i = 1; i < texts.length; i += 1) {
+      final vector = embed(texts[i]);
+      if (vector.length != dimensions) {
+        throw EmbeddingException(
+          'Embedding dimension changed within one batch: expected '
+          '$dimensions, got ${vector.length}.',
+        );
+      }
+      final start = i * dimensions;
+      values.setRange(start, start + dimensions, vector);
+    }
+    return EmbeddingBatch(
+      count: texts.length,
+      dimensions: dimensions,
+      values: values,
+      normalized: embeddingConfig.normalize,
+      pooling: embeddingConfig.pooling,
+    );
   }
 
   static String _formatChatInWorker(
@@ -2423,6 +2447,25 @@ final class NativeLlamaEngineSession {
     );
     final message = await _lifecycle.receive(reply);
     if (message is String) {
+      return message;
+    }
+    if (message is _EngineWorkerFailure) {
+      throw message.error.toException();
+    }
+    throw NativeBridgeException('Unexpected engine worker response: $message');
+  }
+
+  Future<EmbeddingBatch> embedTexts(
+    List<String> texts,
+    EmbeddingConfig config,
+  ) async {
+    if (_closed) {
+      throw const ResourceDisposedException('LlamaEngine is closed.');
+    }
+    final reply = ReceivePort();
+    _commands.send(_EngineWorkerEmbedTexts(texts, config, reply.sendPort));
+    final message = await _lifecycle.receive(reply);
+    if (message is EmbeddingBatch) {
       return message;
     }
     if (message is _EngineWorkerFailure) {
@@ -3802,10 +3845,17 @@ final class _EngineFinalizerToken {
 }
 
 final class _EngineWorkerStart {
-  const _EngineWorkerStart(this.config, this.reply);
+  const _EngineWorkerStart(
+    this.config,
+    this.reply, {
+    required this.embeddings,
+    required this.pooling,
+  });
 
   final LlamaModelConfig config;
   final SendPort reply;
+  final bool embeddings;
+  final EmbeddingPooling pooling;
 }
 
 final class _EngineWorkerReady {
@@ -3894,6 +3944,14 @@ final class _EngineWorkerDetokenize {
   final List<int> tokens;
   final bool removeSpecial;
   final bool unparseSpecial;
+  final SendPort reply;
+}
+
+final class _EngineWorkerEmbedTexts {
+  const _EngineWorkerEmbedTexts(this.texts, this.config, this.reply);
+
+  final List<String> texts;
+  final EmbeddingConfig config;
   final SendPort reply;
 }
 
@@ -4093,6 +4151,7 @@ SendPort? _engineWorkerReply(Object? message) {
     _EngineWorkerTokenize(:final reply) => reply,
     _EngineWorkerCountTokens(:final reply) => reply,
     _EngineWorkerDetokenize(:final reply) => reply,
+    _EngineWorkerEmbedTexts(:final reply) => reply,
     _EngineWorkerChatTemplateCapabilities(:final reply) => reply,
     _EngineWorkerFormatChat(:final reply) => reply,
     _EngineWorkerCountChatTokens(:final reply) => reply,
@@ -4346,7 +4405,11 @@ void _engineWorkerMain(_EngineWorkerStart start) {
     if (bridge == null) {
       throw _nativeBridgeUnavailable(start.config.nativeLibraryPath);
     }
-    handles = bridge._openEngine(start.config);
+    handles = bridge._openEngine(
+      start.config,
+      embeddings: start.embeddings,
+      pooling: start.pooling,
+    );
     start.reply.send(
       _EngineWorkerReady(commands.sendPort, handles.context.address),
     );
@@ -4548,6 +4611,22 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             message.tokens,
             removeSpecial: message.removeSpecial,
             unparseSpecial: message.unparseSpecial,
+          ),
+        );
+      } catch (error) {
+        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
+      }
+    } else if (message is _EngineWorkerEmbedTexts) {
+      try {
+        final active = handles;
+        if (active == null) {
+          throw const ResourceDisposedException('LlamaEngine is closed.');
+        }
+        message.reply.send(
+          NativeLlamaBridge._embedTextsWithHandles(
+            active,
+            message.texts,
+            message.config,
           ),
         );
       } catch (error) {

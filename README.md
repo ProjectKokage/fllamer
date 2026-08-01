@@ -119,6 +119,9 @@ void main() async {
   capability inspection, and chat formatting. Methods on a loaded
   `LlamaEngine` reuse its worker-owned model; static `LlamaTokenizer` and
   `LlamaChatTemplate` helpers use temporary vocab-only model loads.
+- Worker-owned `LlamaEmbeddingEngine` contexts reuse one loaded embedding
+  model for tokenization, metadata inspection, and repeated embedding batches;
+  `LlamaEmbeddings` remains the one-shot helper for occasional calls.
 - Worker-isolate chat-template formatting with `llama_chat_apply_template`,
   plus capability-gated upstream Jinja rendering for tool-aware requests.
   Chat requests can set nullable `GenerationConfig.enableThinking`: an explicit

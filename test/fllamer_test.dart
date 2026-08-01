@@ -2228,6 +2228,29 @@ void main() {
         modelConfig,
         const <String>[query, related, unrelated],
       );
+      final persistentEngine = await LlamaEmbeddingEngine.load(modelConfig);
+      late final EmbeddingBatch persistentBatch;
+      try {
+        expect(
+          (await persistentEngine.modelMetadata())['general.architecture'],
+          'bert',
+        );
+        expect((await persistentEngine.modelInfo()).outputEmbeddingSize, 384);
+        final tokens = await persistentEngine.tokenize(query, addSpecial: true);
+        expect(tokens, isNotEmpty);
+        expect(
+          await persistentEngine.detokenize(tokens, removeSpecial: true),
+          isNotEmpty,
+        );
+        persistentBatch = await persistentEngine.embedTexts(const <String>[
+          query,
+          related,
+          unrelated,
+        ]);
+      } finally {
+        await persistentEngine.close();
+        await persistentEngine.close();
+      }
       final raw = await LlamaEmbeddings.embedText(
         modelConfig,
         query,
@@ -2241,6 +2264,14 @@ void main() {
       expect(batch.values, hasLength(3 * 384));
       expect(batch.normalized, isTrue);
       expect(batch.pooling, EmbeddingPooling.model);
+      expect(persistentBatch.count, batch.count);
+      expect(persistentBatch.dimensions, batch.dimensions);
+      expect(persistentBatch.normalized, isTrue);
+      expect(persistentBatch.pooling, EmbeddingPooling.model);
+      expect(
+        _maxAbsoluteDifference(persistentBatch.first, batch.first),
+        lessThan(1e-6),
+      );
       expect(raw, hasLength(single.length));
       for (final vector in <Float32List>[single, ...batch]) {
         expect(vector, hasLength(single.length));
@@ -4955,6 +4986,13 @@ void main() {
         ),
         throwsA(isA<UnsupportedFeatureException>()),
       );
+      expect(
+        LlamaEmbeddingEngine.load(
+          const LlamaModelConfig(modelPath: 'model.gguf'),
+          config: const EmbeddingConfig(pooling: EmbeddingPooling.rank),
+        ),
+        throwsA(isA<UnsupportedFeatureException>()),
+      );
     });
 
     test('embedding contexts reject generation-only model settings', () {
@@ -4978,6 +5016,7 @@ void main() {
         LlamaEmbeddings.embedTexts(speculative, const <String>['query']),
         throwsSpeculative,
       );
+      expect(LlamaEmbeddingEngine.load(speculative), throwsSpeculative);
       expect(
         LlamaReranking.scorePair(
           speculative,

@@ -14,6 +14,9 @@ Tokenizer and chat-template methods on `LlamaEngine` reuse that worker's loaded
 model and serialize with context work. The static `LlamaTokenizer` and
 `LlamaChatTemplate` helpers remain available before an engine is opened; each
 operation uses a short-lived worker and one temporary vocab-only model load.
+`LlamaEmbeddingEngine` applies the same ownership model to repeated embedding
+work: one worker owns one embedding-enabled context and serializes
+tokenization, metadata inspection, and embedding batches until `close()`.
 Model SHA-256 calculation and in-memory vector-index JSON persistence/loading
 also use short-lived workers because those Dart-only operations can process
 hundreds of megabytes in mobile apps.
