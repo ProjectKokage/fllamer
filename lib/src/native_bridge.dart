@@ -2092,12 +2092,22 @@ final class NativeLlamaEngineSession {
       ChatMessage? assistantMessage,
     })
   >
-  completeChatStream(List<ChatMessage> messages, GenerationConfig config) {
+  completeChatStream(
+    List<ChatMessage> messages,
+    GenerationConfig config, {
+    required bool reusePromptPrefix,
+  }) {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
     }
     return _streamGeneration(
-      (id, reply) => _EngineWorkerStreamComplete(id, messages, config, reply),
+      (id, reply) => _EngineWorkerStreamComplete(
+        id,
+        messages,
+        config,
+        reusePromptPrefix,
+        reply,
+      ),
     );
   }
 
@@ -3143,6 +3153,7 @@ final class _NativeEngineHandles {
     int addSpecialMode = _addSpecialIfContextEmpty,
     bool parseSpecial = false,
     bool manageRequestLoras = true,
+    bool reusePromptPrefix = false,
   }) {
     final promptBytes = utf8.encode(prompt);
     final grammarBytes = config.grammar == null
@@ -3281,7 +3292,8 @@ final class _NativeEngineHandles {
         ..chat_plan_data = chatPlanPointer
         ..chat_plan_size = chatPlanBytes.length
         ..stop_tokens = stopTokens
-        ..stop_token_count = config.stopTokens.length;
+        ..stop_token_count = config.stopTokens.length
+        ..reuse_prompt_prefix = reusePromptPrefix ? 1 : 0;
       return run(completionConfig);
     } finally {
       calloc.free(completionConfig);
@@ -3404,6 +3416,7 @@ final class _NativeEngineHandles {
     List<_NativeMediaInput> media = const <_NativeMediaInput>[],
     _NativeChatPlan? chatPlan,
     bool parseSpecial = false,
+    bool reusePromptPrefix = false,
   }) {
     final restoreLoras = config.loraScales != null;
     if (restoreLoras) {
@@ -3451,6 +3464,7 @@ final class _NativeEngineHandles {
         chatPlan: chatPlan,
         parseSpecial: parseSpecial,
         manageRequestLoras: false,
+        reusePromptPrefix: reusePromptPrefix,
       );
     } catch (_) {
       if (restoreLoras) {
@@ -3462,8 +3476,9 @@ final class _NativeEngineHandles {
 
   _NativeStreamingGeneration startChatStream(
     List<ChatMessage> messages,
-    GenerationConfig config,
-  ) {
+    GenerationConfig config, {
+    required bool reusePromptPrefix,
+  }) {
     final prepared = _prepareMultimodalChat(messages, bridge._multimodalMarker);
     final rendered = bridge._renderPreparedChat(
       model,
@@ -3481,6 +3496,7 @@ final class _NativeEngineHandles {
       media: prepared.media,
       chatPlan: rendered.plan,
       parseSpecial: true,
+      reusePromptPrefix: reusePromptPrefix,
     );
   }
 
@@ -4085,12 +4101,14 @@ final class _EngineWorkerStreamComplete {
     this.id,
     this.messages,
     this.config,
+    this.reusePromptPrefix,
     this.reply,
   );
 
   final int id;
   final List<ChatMessage> messages;
   final GenerationConfig config;
+  final bool reusePromptPrefix;
   final SendPort reply;
 }
 
@@ -4809,6 +4827,7 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         streamingGeneration = active.startChatStream(
           message.messages,
           message.config,
+          reusePromptPrefix: message.reusePromptPrefix,
         );
         streamingId = message.id;
         streamingReply = message.reply;

@@ -664,9 +664,16 @@ final class LlamaEngine {
     return LlamaEngine._(config, native);
   }
 
+  /// Generates an assistant response for [messages].
+  ///
+  /// When [reusePromptPrefix] is true, the native session keeps its existing
+  /// text KV state only if its committed token history is an exact prefix of
+  /// the newly rendered and tokenized full prompt. A mismatch resets the
+  /// session and evaluates the full prompt. Media prompts are not eligible.
   Stream<GenerationChunk> chat({
     required List<ChatMessage> messages,
     GenerationConfig config = const GenerationConfig(),
+    bool reusePromptPrefix = false,
   }) {
     _ensureOpen();
     final checkedMessages = _snapshotChatMessages(messages);
@@ -677,7 +684,11 @@ final class LlamaEngine {
     );
     checkedConfig.validate();
     return _native
-        .completeChatStream(checkedMessages, checkedConfig)
+        .completeChatStream(
+          checkedMessages,
+          checkedConfig,
+          reusePromptPrefix: reusePromptPrefix,
+        )
         .map(
           (chunk) => GenerationChunk(
             text: chunk.text,

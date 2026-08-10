@@ -2,6 +2,7 @@
 #include "gpu_policy.h"
 #include "kv_cache_policy.h"
 #include "load_policy.h"
+#include "prompt_prefix.h"
 #include "speculative.h"
 #include "state_snapshot.h"
 
@@ -20,6 +21,29 @@
 
 int main() {
   using namespace llama_dart_bridge_internal;
+
+  const std::vector<int32_t> empty_prompt_history;
+  const std::vector<int32_t> first_prompt_tokens{1, 2, 3};
+  const prompt_prefix_reuse_plan empty_prefix =
+      resolve_prompt_prefix_reuse(empty_prompt_history, first_prompt_tokens);
+  assert(empty_prefix.exact_prefix);
+  assert(empty_prefix.suffix_start == 0);
+  const prompt_prefix_reuse_plan appended_prefix =
+      resolve_prompt_prefix_reuse(first_prompt_tokens, {1, 2, 3, 4, 5});
+  assert(appended_prefix.exact_prefix);
+  assert(appended_prefix.suffix_start == 3);
+  const prompt_prefix_reuse_plan identical_prefix =
+      resolve_prompt_prefix_reuse(first_prompt_tokens, first_prompt_tokens);
+  assert(identical_prefix.exact_prefix);
+  assert(identical_prefix.suffix_start == 3);
+  const prompt_prefix_reuse_plan changed_prefix =
+      resolve_prompt_prefix_reuse(first_prompt_tokens, {1, 9, 3, 4});
+  assert(!changed_prefix.exact_prefix);
+  assert(changed_prefix.suffix_start == 0);
+  const prompt_prefix_reuse_plan trimmed_prefix =
+      resolve_prompt_prefix_reuse(first_prompt_tokens, {2, 3, 4});
+  assert(!trimmed_prefix.exact_prefix);
+  assert(trimmed_prefix.suffix_start == 0);
 
   assert(resolve_model_load_mode(false, false) == LLAMA_LOAD_MODE_NONE);
   assert(resolve_model_load_mode(true, false) == LLAMA_LOAD_MODE_MMAP);
@@ -688,6 +712,11 @@ int main() {
                                      &completion, nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   completion_config.add_special = LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY;
+  completion_config.reuse_prompt_prefix = 2;
+  assert(llama_dart_context_complete(nullptr, &completion_config,
+                                     &completion, nullptr) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  completion_config.reuse_prompt_prefix = 0;
   completion_config.prompt_data = nullptr;
   completion_config.prompt_size = 0;
   completion_config.stop_sequence_count = 1;

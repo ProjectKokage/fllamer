@@ -11,6 +11,7 @@
 #include "log.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
+#include "prompt_prefix.h"
 #include "reasoning-budget.h"
 #include "reasoning_sampler.h"
 #include "sampling_policy.h"
@@ -132,6 +133,7 @@ using llama_dart_bridge_internal::decode_state_snapshot;
 using llama_dart_bridge_internal::finalize_state_snapshot;
 using llama_dart_bridge_internal::kStateSnapshotHeaderSize;
 using llama_dart_bridge_internal::read_u32_le;
+using llama_dart_bridge_internal::resolve_prompt_prefix_reuse;
 using llama_dart_bridge_internal::state_snapshot_decode_result;
 using llama_dart_bridge_internal::state_snapshot_layout;
 using llama_dart_bridge_internal::state_snapshot_size;
@@ -1257,7 +1259,77 @@ bool completion_adds_special(const llama_dart_context *context,
                              const llama_dart_completion_config *config) {
   return config->add_special == LLAMA_DART_ADD_SPECIAL_ALWAYS ||
          (config->add_special == LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY &&
-          context->position == 0);
+          (config->reuse_prompt_prefix != 0 || context->position == 0));
+}
+
+struct prepared_completion_prompt {
+  std::vector<llama_token> tokens;
+  size_t suffix_start = 0;
+};
+
+llama_dart_result tokenize_text_completion_prompt(
+    const llama_dart_context *context, const llama_vocab *vocab,
+    const llama_dart_completion_config *config,
+    std::vector<llama_token> *tokens) {
+  int32_t required = llama_tokenize(
+      vocab, reinterpret_cast<const char *>(config->prompt_data),
+      static_cast<int32_t>(config->prompt_size), nullptr, 0,
+      completion_adds_special(context, config), config->parse_special != 0);
+  if (required == std::numeric_limits<int32_t>::min()) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "tokenization overflowed");
+  }
+  if (required < 0) {
+    required = -required;
+  }
+  tokens->resize(static_cast<size_t>(required));
+  const int32_t actual = llama_tokenize(
+      vocab, reinterpret_cast<const char *>(config->prompt_data),
+      static_cast<int32_t>(config->prompt_size), tokens->data(), required,
+      completion_adds_special(context, config), config->parse_special != 0);
+  if (actual < 0) {
+    return fail(LLAMA_DART_ERROR_GENERATION,
+                "failed to tokenize completion prompt");
+  }
+  if (actual == 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "completion prompt produced no tokens");
+  }
+  tokens->resize(static_cast<size_t>(actual));
+  last_error.clear();
+  return LLAMA_DART_SUCCESS;
+}
+
+llama_dart_result prepare_completion_prompt_reuse(
+    llama_dart_context *context, const llama_vocab *vocab,
+    const llama_dart_completion_config *config,
+    prepared_completion_prompt *prepared) {
+  if (config->reuse_prompt_prefix == 0) {
+    return LLAMA_DART_SUCCESS;
+  }
+  const llama_dart_result tokenized = tokenize_text_completion_prompt(
+      context, vocab, config, &prepared->tokens);
+  if (tokenized != LLAMA_DART_SUCCESS) {
+    return tokenized;
+  }
+
+  const auto reuse = resolve_prompt_prefix_reuse(context->token_history,
+                                                 prepared->tokens);
+  if (context->position >= 0 &&
+      static_cast<size_t>(context->position) ==
+          context->token_history.size() &&
+      reuse.exact_prefix) {
+    prepared->suffix_start = reuse.suffix_start;
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  }
+
+  const llama_dart_result reset = llama_dart_context_reset(context);
+  if (reset != LLAMA_DART_SUCCESS) {
+    return reset;
+  }
+  prepared->suffix_start = 0;
+  last_error.clear();
+  return LLAMA_DART_SUCCESS;
 }
 
 llama_dart_result decode_multimodal_prompt(
@@ -1411,7 +1483,8 @@ llama_dart_result decode_multimodal_prompt(
 llama_dart_result decode_completion_prompt(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config,
-    std::vector<llama_token> *sampler_tokens, uint32_t *prompt_token_count) {
+    std::vector<llama_token> *sampler_tokens, uint32_t *prompt_token_count,
+    const prepared_completion_prompt *prepared = nullptr) {
   sampler_tokens->clear();
   *prompt_token_count = 0;
   if (config->prompt_size == 0) {
@@ -1423,31 +1496,18 @@ llama_dart_result decode_completion_prompt(
                                     prompt_token_count);
   }
 
-  int32_t required = llama_tokenize(
-      vocab, reinterpret_cast<const char *>(config->prompt_data),
-      static_cast<int32_t>(config->prompt_size), nullptr, 0,
-      completion_adds_special(context, config), config->parse_special != 0);
-  if (required == std::numeric_limits<int32_t>::min()) {
-    return fail(LLAMA_DART_ERROR_INTERNAL, "tokenization overflowed");
+  if (prepared != nullptr) {
+    sampler_tokens->assign(
+        prepared->tokens.begin() +
+            static_cast<std::ptrdiff_t>(prepared->suffix_start),
+        prepared->tokens.end());
+  } else {
+    const llama_dart_result tokenized = tokenize_text_completion_prompt(
+        context, vocab, config, sampler_tokens);
+    if (tokenized != LLAMA_DART_SUCCESS) {
+      return tokenized;
+    }
   }
-  if (required < 0) {
-    required = -required;
-  }
-  sampler_tokens->resize(static_cast<size_t>(required));
-  const int32_t actual = llama_tokenize(
-      vocab, reinterpret_cast<const char *>(config->prompt_data),
-      static_cast<int32_t>(config->prompt_size), sampler_tokens->data(),
-      required, completion_adds_special(context, config),
-      config->parse_special != 0);
-  if (actual < 0) {
-    return fail(LLAMA_DART_ERROR_GENERATION,
-                "failed to tokenize completion prompt");
-  }
-  if (actual == 0) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "completion prompt produced no tokens");
-  }
-  sampler_tokens->resize(static_cast<size_t>(actual));
   *prompt_token_count = static_cast<uint32_t>(sampler_tokens->size());
   return decode_prompt_tokens(context, *sampler_tokens);
 }
@@ -2296,7 +2356,8 @@ llama_dart_result validate_completion_request(
                 "prompt_data must not be null when prompt_size is positive");
   }
   if (config->add_special > LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY ||
-      !valid_bool(config->parse_special)) {
+      !valid_bool(config->parse_special) ||
+      !valid_bool(config->reuse_prompt_prefix)) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "completion tokenization modes are invalid");
   }
@@ -2327,6 +2388,14 @@ llama_dart_result validate_completion_request(
   if (config->media_input_count > 0 && config->prompt_size == 0) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "media inputs require a prompt");
+  }
+  if (config->reuse_prompt_prefix != 0 && config->prompt_size == 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "prompt-prefix reuse requires a full prompt");
+  }
+  if (config->reuse_prompt_prefix != 0 && config->media_input_count > 0) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "prompt-prefix reuse does not support media inputs");
   }
   if (contains_nul(config->prompt_data, config->prompt_size)) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
@@ -5269,6 +5338,18 @@ llama_dart_result llama_dart_context_complete(
 
     std::vector<llama_token> prompt_tokens;
     uint32_t prompt_token_count = 0;
+    prepared_completion_prompt prepared_prompt;
+    const prepared_completion_prompt *prepared_prompt_pointer = nullptr;
+    if (config->reuse_prompt_prefix != 0) {
+      const steady_clock::time_point prepare_start = steady_clock::now();
+      const llama_dart_result prepared = prepare_completion_prompt_reuse(
+          context, vocab, config, &prepared_prompt);
+      prompt_eval_ms += elapsed_ms(prepare_start, steady_clock::now());
+      if (prepared != LLAMA_DART_SUCCESS) {
+        return prepared;
+      }
+      prepared_prompt_pointer = &prepared_prompt;
+    }
 
     llama_sampler *sampler = nullptr;
     llama_sampler *prompt_sampler = nullptr;
@@ -5281,9 +5362,10 @@ llama_dart_result llama_dart_context_complete(
     if (config->prompt_size > 0) {
       const steady_clock::time_point prompt_start = steady_clock::now();
       const llama_dart_result decoded = decode_completion_prompt(
-          context, vocab, config, &prompt_tokens, &prompt_token_count);
+          context, vocab, config, &prompt_tokens, &prompt_token_count,
+          prepared_prompt_pointer);
       const steady_clock::time_point prompt_end = steady_clock::now();
-      prompt_eval_ms = elapsed_ms(prompt_start, prompt_end);
+      prompt_eval_ms += elapsed_ms(prompt_start, prompt_end);
       if (decoded != LLAMA_DART_SUCCESS) {
         llama_sampler_free(sampler);
         return decoded;
@@ -5436,6 +5518,19 @@ llama_dart_result llama_dart_generation_start(
 
     std::vector<llama_token> prompt_tokens;
     uint32_t prompt_token_count = 0;
+    prepared_completion_prompt prepared_prompt;
+    const prepared_completion_prompt *prepared_prompt_pointer = nullptr;
+    double prompt_prepare_ms = 0.0;
+    if (config->reuse_prompt_prefix != 0) {
+      const steady_clock::time_point prepare_start = steady_clock::now();
+      const llama_dart_result prepared = prepare_completion_prompt_reuse(
+          context, vocab, config, &prepared_prompt);
+      prompt_prepare_ms = elapsed_ms(prepare_start, steady_clock::now());
+      if (prepared != LLAMA_DART_SUCCESS) {
+        return prepared;
+      }
+      prepared_prompt_pointer = &prepared_prompt;
+    }
 
     llama_sampler *sampler = nullptr;
     llama_sampler *prompt_sampler = nullptr;
@@ -5448,9 +5543,11 @@ llama_dart_result llama_dart_generation_start(
     if (config->prompt_size > 0) {
       const steady_clock::time_point prompt_start = steady_clock::now();
       const llama_dart_result decoded = decode_completion_prompt(
-          context, vocab, config, &prompt_tokens, &prompt_token_count);
+          context, vocab, config, &prompt_tokens, &prompt_token_count,
+          prepared_prompt_pointer);
       const steady_clock::time_point prompt_end = steady_clock::now();
-      generation->prompt_eval_ms = elapsed_ms(prompt_start, prompt_end);
+      generation->prompt_eval_ms =
+          prompt_prepare_ms + elapsed_ms(prompt_start, prompt_end);
       if (decoded != LLAMA_DART_SUCCESS) {
         llama_sampler_free(sampler);
         return decoded;

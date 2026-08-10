@@ -925,6 +925,42 @@ void main() {
       },
     );
 
+    test('chat forwards exact prompt-prefix reuse opt in', () async {
+      final fixture = await _buildStreamingCaptureBridge();
+      if (fixture == null) {
+        markTestSkipped('C compiler is not available for fake bridge build');
+        return;
+      }
+
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: fixture.markerPath,
+          nativeLibraryPath: fixture.libraryPath,
+        ),
+      );
+      try {
+        final reused = await engine
+            .chat(
+              messages: <ChatMessage>[ChatMessage.user('First')],
+              config: const GenerationConfig(maxTokens: 1, temperature: 0),
+              reusePromptPrefix: true,
+            )
+            .toList();
+        final reset = await engine
+            .chat(
+              messages: <ChatMessage>[ChatMessage.user('Second')],
+              config: const GenerationConfig(maxTokens: 1, temperature: 0),
+            )
+            .toList();
+
+        expect(reused.single.text, 'A');
+        expect(reset.single.text, 'a');
+        expect(await File(fixture.markerPath).readAsString(), 'Aa');
+      } finally {
+        await engine.close();
+      }
+    });
+
     test(
       'streaming coalesces tokens and rejects context work while paused',
       () async {
@@ -9161,6 +9197,7 @@ static uint32_t generation_limit;
 static int generation_active;
 static int cancelled;
 static uint8_t requested_load_mtp;
+static uint8_t requested_reuse_prompt_prefix;
 
 static llama_dart_result fail(llama_dart_result result, const char *message) {
   last_error = message;
@@ -9169,6 +9206,10 @@ static llama_dart_result fail(llama_dart_result result, const char *message) {
 
 LLAMA_DART_EXPORT uint32_t llama_dart_abi_version(void) {
   return LLAMA_DART_ABI_VERSION;
+}
+
+LLAMA_DART_EXPORT const char *llama_dart_multimodal_marker(void) {
+  return "<__media__>";
 }
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
@@ -9214,6 +9255,25 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_get_chat_template(
   }
   memcpy(out_template->data, selected_chat_template, size);
   out_template->size = size;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
+}
+
+LLAMA_DART_EXPORT llama_dart_result llama_dart_model_apply_chat_template(
+    const llama_dart_model *model, const llama_dart_chat_message *messages,
+    size_t message_count, uint8_t add_assistant_prompt,
+    llama_dart_buffer *out_prompt) {
+  (void)model;
+  (void)add_assistant_prompt;
+  if (messages == NULL || message_count != 1 || out_prompt == NULL) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid chat messages");
+  }
+  out_prompt->size = messages[0].content_size;
+  out_prompt->data = (uint8_t *)malloc(out_prompt->size);
+  if (out_prompt->data == NULL) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  }
+  memcpy(out_prompt->data, messages[0].content_data, out_prompt->size);
   last_error = "";
   return LLAMA_DART_SUCCESS;
 }
@@ -9299,6 +9359,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_start(
   generation_limit = config->max_tokens;
   generation_active = 1;
   cancelled = 0;
+  requested_reuse_prompt_prefix = config->reuse_prompt_prefix;
   *out_generation = (llama_dart_generation *)&fake_generation_storage;
   last_error = "";
   return LLAMA_DART_SUCCESS;
@@ -9319,14 +9380,15 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
   if (marker == NULL) {
     return fail(LLAMA_DART_ERROR_GENERATION, "marker could not be opened");
   }
-  fputc((int)('a' + generated_tokens), marker);
+  const int base = requested_reuse_prompt_prefix != 0 ? 'A' : 'a';
+  fputc(base + (int)generated_tokens, marker);
   fclose(marker);
 
   out_text->data = (uint8_t *)malloc(1);
   if (out_text->data == NULL) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
   }
-  out_text->data[0] = (uint8_t)('a' + generated_tokens);
+  out_text->data[0] = (uint8_t)(base + (int)generated_tokens);
   out_text->size = 1;
   ++generated_tokens;
   memset(out_stats, 0, sizeof(*out_stats));

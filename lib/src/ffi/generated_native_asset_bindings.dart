@@ -1337,6 +1337,9 @@ final class llama_dart_completion_config extends ffi.Struct {
 
   @ffi.Size()
   external int stop_token_count;
+
+  @ffi.Uint8()
+  external int reuse_prompt_prefix;
 }
 
 final class llama_dart_completion_stats extends ffi.Struct {
@@ -1453,4 +1456,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 40;
+const int LLAMA_DART_ABI_VERSION = 41;

@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 40u
+#define LLAMA_DART_ABI_VERSION 41u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -278,6 +278,10 @@ typedef struct llama_dart_completion_config {
   size_t chat_plan_size;
   const int32_t *stop_tokens;
   size_t stop_token_count;
+  /* When true, a text prompt reuses the current KV state only when the
+   * committed token history is an exact prefix of the newly tokenized full
+   * prompt. A mismatch clears the context before evaluating the full prompt. */
+  uint8_t reuse_prompt_prefix;
 } llama_dart_completion_config;
 
 typedef struct llama_dart_completion_stats {
