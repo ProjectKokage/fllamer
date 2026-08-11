@@ -8,7 +8,16 @@
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
   `third_party/llama.cpp/licenses/`, plus the package-maintained notices under
-  `third_party/licenses/`, with redistributed source or binaries.
+  `third_party/licenses/` and the independently pinned
+  `third_party/vulkan_headers/LICENSE.md`, with redistributed source or
+  binaries.
+
+Android Vulkan builds use the complete `include/` tree from
+KhronosGroup/Vulkan-Headers tag `vulkan-sdk-1.4.357.0`. The upstream source
+archive SHA-256 is
+`e87dce08116151f6b6d7de6b6faf41498e87e6cf848ff16fa3bd5402190ad4a3`;
+`third_party/vulkan_headers/README.fllamer.md` records the imported subset and
+update contract. This pin is independent of the llama.cpp gitlink.
 
 The parent repository's gitlink is the source of truth for the upstream pin.
 Initialize a repository checkout with:
@@ -23,10 +32,19 @@ so builds from pub packages remain self-contained and require no Git or network
 access. The publish checkout must initialize the submodule before running
 `dart pub publish`.
 
-No package-local changes are carried inside `third_party/llama.cpp`. Metal
-capability reporting and Gemma 4 generation grammar therefore match the pinned
-upstream commit. fllamer still validates parsed tool arguments against the
-declared schema before exposing them to application code.
+No package-local changes are carried inside `third_party/llama.cpp`. Opt-in
+Android Vulkan builds instead create a temporary version-3 build-output overlay.
+Its pure transform normalizes CRLF to LF, accepts only recorded full-file hashes
+from this exact pin, and applies five q-payload-only shader replacements while
+preserving Q4_0/Q4_1 scale and min fields. It also transforms exactly one
+`ggml-vulkan.cpp` source to install a Qualcomm-vendor plus
+Qualcomm-proprietary-driver K-quant correctness policy: restricted Q4_K routing
+and CPU scheduling fallback for Q5_K/Q6_K matrix operations. An upstream sync
+must revalidate, update, or remove every external transform and its expected
+output hashes, then bump the hook's build-output overlay version; never apply it
+inside the submodule. Metal capability reporting and Gemma 4 generation grammar
+therefore match the pinned upstream commit. fllamer still validates parsed tool
+arguments against the declared schema before exposing them to application code.
 
 To sync upstream, fetch and inspect an explicit commit, check it out detached
 inside the submodule, and stage the updated gitlink:
@@ -215,10 +233,17 @@ backend; CPU-only variants disable both. `LLAMA_DART_NO_NETWORK=ON` also enables
 disconnected CMake fetches. Apple targets build the pinned Metal backend with
 embedded kernels. Vulkan is strict by default for native Linux and Windows
 builds while the CPU backend remains available; an explicit consuming-workspace
-override builds CPU-only.
+override builds CPU-only. Android remains CPU-only by default and can opt into
+Vulkan with package-pinned Vulkan-Headers 1.4.357.0 plus the Flutter-selected
+NDK's target loader, SPIR-V headers, and host `glslc`. That opt-in build also
+requires the
+hash-gated build-output shader overlay and reports both
+`GGML_VULKAN_ANDROID_SAFE_QUANT=1` and
+`GGML_VULKAN_ANDROID_SAFE_K_QUANT=1` in bridge metadata; other builds report
+`0` for both.
 Cross-architecture desktop builds are rejected because the pinned Vulkan
 shader-generator toolchain has no separate host-tool contract. Android native
-inference validation remains separate.
+Vulkan cross-compilation does not establish physical-device inference.
 Native-assets builds use `RelWithDebInfo`; the effective CMake build type and
 feature flags are exposed in runtime/benchmark metadata.
 

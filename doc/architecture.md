@@ -178,5 +178,10 @@ still pending. Linux and Windows native-assets builds use a strict,
 configuration-visible Vulkan policy by default while preserving the CPU
 backend. They accept an explicit CPU-only override and optional local SDK root,
 and reject cross-architecture builds until the Vulkan host shader-generator
-toolchain has a separate contract. This defines reproducible build inputs; it
-does not replace target-host package, loader, GPU, or model validation.
+toolchain has a separate contract. Android stays CPU-only by default and has an
+opt-in Vulkan artifact contract: the package supplies an exact bundled Vulkan
+header set, while Flutter's selected NDK owns the target loader, SPIR-V headers,
+and host `glslc`. An app may override only the header root when required; no
+host loader enters the artifact. This defines
+reproducible build inputs; it does not replace package, loader, GPU, model, or
+physical-device validation.

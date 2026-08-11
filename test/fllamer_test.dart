@@ -92,7 +92,6 @@ void main() {
       expect(capabilities.speculativeDecoding, isTrue);
       expect(capabilities.mtp, isTrue);
       expect(capabilities.metal, Platform.isMacOS || Platform.isIOS);
-      expect(capabilities.vulkan, isFalse);
       expect(capabilities.toolCalling, isTrue);
       expect(capabilities.nativeLogging, isTrue);
       expect(capabilities.prefill, isTrue);
@@ -113,6 +112,10 @@ void main() {
               ? 'GGML_METAL=ON'
               : 'GGML_METAL=OFF',
         ),
+      );
+      expect(
+        capabilities.nativeBuildFlags,
+        contains(capabilities.vulkan ? 'GGML_VULKAN=ON' : 'GGML_VULKAN=OFF'),
       );
       if (Platform.isMacOS || Platform.isIOS) {
         expect(
@@ -1386,6 +1389,9 @@ void main() {
       final capabilities = LlamaRuntime.currentCapabilities(
         nativeLibraryPath: path,
       );
+      // Compiled capability does not guarantee a usable runtime device. A
+      // present device reaches the missing-model check; an absent device fails
+      // earlier with a typed unsupported error.
       await expectLater(
         LlamaModel.inspect(
           LlamaModelConfig(
@@ -1396,7 +1402,10 @@ void main() {
         ),
         throwsA(
           capabilities.metal
-              ? isA<ModelLoadException>()
+              ? anyOf(
+                  isA<ModelLoadException>(),
+                  isA<UnsupportedFeatureException>(),
+                )
               : isA<UnsupportedFeatureException>(),
         ),
       );
@@ -1408,7 +1417,14 @@ void main() {
             gpu: const GpuConfig.vulkan(),
           ),
         ),
-        throwsA(isA<UnsupportedFeatureException>()),
+        throwsA(
+          capabilities.vulkan
+              ? anyOf(
+                  isA<ModelLoadException>(),
+                  isA<UnsupportedFeatureException>(),
+                )
+              : isA<UnsupportedFeatureException>(),
+        ),
       );
     });
 
@@ -1651,6 +1667,7 @@ void main() {
               ubatchSize: 8,
               threads: 1,
               batchThreads: 1,
+              gpu: const GpuConfig.cpu(),
             ),
           );
           final contextInfo = await engine.contextInfo();
@@ -1662,13 +1679,8 @@ void main() {
           expect(contextInfo.contextSize, greaterThan(0));
           expect(contextInfo.batchSize, greaterThan(0));
           expect(contextInfo.ubatchSize, greaterThan(0));
-          final capabilities = LlamaRuntime.currentCapabilities(
-            nativeLibraryPath: bridgePath,
-          );
-          expect(
-            contextInfo.gpuBackend,
-            capabilities.metal ? GpuBackend.metal : GpuBackend.cpu,
-          );
+          expect(contextInfo.gpuBackend, GpuBackend.cpu);
+          expect(contextInfo.kvCacheOffload, isFalse);
           final state = await engine.saveState();
           expect(state, isNotEmpty);
           await engine.restoreState(state);

@@ -125,6 +125,24 @@ KV offload off, even when `KvCacheConfig.offload` retains its portable default.
 On Apple Simulator targets, compiled Metal capability may still report true,
 but `GpuConfig.auto()` selects CPU and disables effective offload. Explicit
 Metal remains a diagnostic request there, not a supported performance path.
+Android Vulkan is likewise an opt-in artifact capability, not a performance
+claim. Record the exact phone/SoC, OS, bridge flags, Vulkan driver, GGUF and
+quantization, observed backend, offloaded layers, memory, thermals, latency,
+and sustained throughput, then compare the same workload with
+`GpuConfig.cpu()` before choosing it for product defaults.
+The initial 2026-08-11 Adreno 750 Q4_0 diagnostic diverged materially from
+CPU; it is retained in the native-build receipt as negative evidence. The
+final-source bounded gate on the same device later matched its CPU oracle, but
+that does not establish throughput or product enablement. In particular, the
+Qualcomm-proprietary K-quant policy intentionally keeps Q5_K/Q6_K matrix work
+on CPU and uses a restricted Q4_K Vulkan route, so reported layer offload is
+not an operation-level GPU accounting. The available short hybrid measurements
+were slower than the CPU baseline; do not infer a speedup from this receipt.
+The diagnostic `GGML_VULKAN_CHECK_RESULTS` intermediate-result threshold also
+remains unmet. Require independent sustained, thermal, memory, and
+CPU-comparison measurements on each target model/device before claiming a
+performance benefit or qualifying a product support matrix. Merely enabling
+the artifact does not transfer the narrow receipt to another workload.
 
 Quantized cache types can reduce context memory but are model- and backend-
 dependent. Quantized V caches require Flash Attention; `KvCacheConfig`

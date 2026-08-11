@@ -3,15 +3,19 @@ import 'dart:io';
 import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 
+import 'src/android_vulkan_shader_overlay.dart';
+
 const _libraryName = 'llama_dart_bridge';
 const _assetName = 'llama_dart_bridge';
 const _cmakeBuildType = 'RelWithDebInfo';
+const _androidVulkanShaderOverlayVersion = '3';
 const minimumIosVersion = 15;
 const maximumDefaultBuildJobs = 4;
 const minimumVulkanCmakeMajor = 3;
 const minimumVulkanCmakeMinor = 19;
 const vulkanUserDefine = 'vulkan';
 const vulkanSdkUserDefine = 'vulkan_sdk';
+const bundledAndroidVulkanHeadersPath = 'third_party/vulkan_headers/';
 
 Future<void> main(List<String> args) async {
   await build(args, (input, output) async {
@@ -33,6 +37,10 @@ Future<void> main(List<String> args) async {
       targetOS,
       input.userDefines[vulkanUserDefine],
     );
+    final androidNdk = targetOS == OS.android ? _androidNdk(code) : null;
+    if (targetOS == OS.android && androidNdk == null) {
+      throw BuildError(message: 'Android NDK was not found for native build.');
+    }
     final vulkanSdk = vulkanSdkForNativeAssetsBuild(
       input.userDefines[vulkanSdkUserDefine],
       resolveVulkanSdkUserDefine(
@@ -41,11 +49,49 @@ Future<void> main(List<String> args) async {
         targetOS,
       ),
       enabled: enableVulkan,
+      targetOS: targetOS,
+      bundledAndroidVulkanHeaders: input.packageRoot.resolve(
+        bundledAndroidVulkanHeadersPath,
+      ),
     );
+    final androidVulkanGlslc = targetOS == OS.android && enableVulkan
+        ? androidVulkanGlslcForNdk(androidNdk!)
+        : null;
+    Uri? androidVulkanShaderOverlay;
+    if (targetOS == OS.android && enableVulkan) {
+      final source = Directory.fromUri(
+        input.packageRoot.resolve(
+          'third_party/llama.cpp/ggml/src/ggml-vulkan/vulkan-shaders/',
+        ),
+      );
+      final vulkanSource = File.fromUri(
+        input.packageRoot.resolve(
+          'third_party/llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp',
+        ),
+      );
+      final output = Directory.fromUri(
+        buildDir.resolve(
+          'android-vulkan-shaders-v$_androidVulkanShaderOverlayVersion/',
+        ),
+      );
+      try {
+        await prepareAndroidVulkanShaderOverlay(
+          sourceDirectory: source,
+          vulkanSourceFile: vulkanSource,
+          outputDirectory: output,
+        );
+      } on AndroidVulkanShaderOverlayException catch (error) {
+        throw BuildError(message: error.message);
+      }
+      androidVulkanShaderOverlay = output.uri;
+    }
     final targetArgs = cmakeTargetArgsForNativeAssetsBuild(
       code,
       enableVulkan: enableVulkan,
       vulkanSdk: vulkanSdk,
+      androidVulkanGlslc: androidVulkanGlslc,
+      androidVulkanShaderOverlay: androidVulkanShaderOverlay,
+      androidNdk: androidNdk,
     );
     final cmakeEnvironment = await cmakeEnvironmentForNativeAssetsBuild(
       code,
@@ -86,6 +132,9 @@ Future<void> main(List<String> args) async {
         vulkanSdkBuildDependenciesForNativeAssetsBuild(vulkanSdk, targetOS),
       );
     }
+    if (androidVulkanGlslc != null) {
+      output.dependencies.add(androidVulkanGlslc);
+    }
     output.assets.code.add(
       CodeAsset(
         package: input.packageName,
@@ -99,6 +148,7 @@ Future<void> main(List<String> args) async {
 
 List<Uri> _nativeBuildDependencies(Uri packageRoot) {
   final dependencies = <Uri>[
+    packageRoot.resolve('hook/src/android_vulkan_shader_overlay.dart'),
     packageRoot.resolve('third_party/llama.cpp/CMakeLists.txt'),
     packageRoot.resolve('third_party/llama.cpp/LICENSE'),
   ];
@@ -138,9 +188,19 @@ List<Uri> vulkanSdkBuildDependenciesForNativeAssetsBuild(
   Uri sdkRoot,
   OS targetOS,
 ) {
+  if (targetOS == OS.android) {
+    final dependencies = <Uri>{
+      for (final includeDirectory in const ['Include/', 'include/'])
+        ..._filesUnder(sdkRoot.resolve(includeDirectory)),
+    };
+    return dependencies.toList()
+      ..sort((a, b) => a.toString().compareTo(b.toString()));
+  }
   final dependencies = <Uri>{
     for (final includeDirectory in const ['Include/', 'include/'])
       ..._filesUnder(sdkRoot.resolve(includeDirectory)),
+  };
+  dependencies.addAll(<Uri>{
     for (final configDirectory in const [
       'share/cmake/SPIRV-Headers/',
       'lib/cmake/SPIRV-Headers/',
@@ -151,7 +211,7 @@ List<Uri> vulkanSdkBuildDependenciesForNativeAssetsBuild(
       'aarch64/lib/cmake/SPIRV-Headers/',
     ])
       ..._filesUnder(sdkRoot.resolve(configDirectory)),
-  };
+  });
   final relativeFiles = targetOS == OS.windows
       ? const [
           'Bin/glslc.exe',
@@ -192,6 +252,9 @@ bool vulkanEnabledForNativeAssetsBuild(OS targetOS, Object? userDefine) {
           'hooks.user_defines.fllamer.$vulkanUserDefine must be a boolean.',
     );
   }
+  if (targetOS == OS.android) {
+    return userDefine as bool? ?? false;
+  }
   final isVulkanDesktop = targetOS == OS.linux || targetOS == OS.windows;
   return isVulkanDesktop && (userDefine as bool? ?? true);
 }
@@ -200,6 +263,8 @@ Uri? vulkanSdkForNativeAssetsBuild(
   Object? userDefine,
   Uri? resolvedPath, {
   required bool enabled,
+  required OS targetOS,
+  Uri? bundledAndroidVulkanHeaders,
 }) {
   if (userDefine != null && userDefine is! String) {
     throw BuildError(
@@ -207,23 +272,71 @@ Uri? vulkanSdkForNativeAssetsBuild(
           'hooks.user_defines.fllamer.$vulkanSdkUserDefine must be a path.',
     );
   }
-  if (!enabled || userDefine == null) {
+  if (!enabled) {
     return null;
   }
-  if (resolvedPath == null || !resolvedPath.isScheme('file')) {
+  if (userDefine == null && targetOS != OS.android) {
+    return null;
+  }
+  final effectivePath = userDefine == null
+      ? bundledAndroidVulkanHeaders
+      : resolvedPath;
+  if (effectivePath == null || !effectivePath.isScheme('file')) {
     throw BuildError(
-      message:
-          'hooks.user_defines.fllamer.$vulkanSdkUserDefine must resolve to '
-          'a local directory.',
+      message: userDefine == null
+          ? 'Bundled Android Vulkan headers were not found.'
+          : 'hooks.user_defines.fllamer.$vulkanSdkUserDefine must resolve to '
+                'a local directory.',
     );
   }
-  final directory = Directory.fromUri(resolvedPath);
+  final directory = Directory.fromUri(effectivePath);
   if (!directory.existsSync()) {
     throw BuildError(
-      message: 'Configured Vulkan SDK directory does not exist.',
+      message: userDefine == null
+          ? 'Bundled Android Vulkan headers directory does not exist.'
+          : 'Configured Vulkan SDK directory does not exist.',
+    );
+  }
+  if (targetOS == OS.android &&
+      !const [
+        'Include/vulkan/vulkan.hpp',
+        'include/vulkan/vulkan.hpp',
+      ].any((path) => File.fromUri(directory.uri.resolve(path)).existsSync())) {
+    throw BuildError(
+      message: userDefine == null
+          ? 'Bundled Android Vulkan headers do not contain vulkan/vulkan.hpp.'
+          : 'Configured Android Vulkan SDK directory does not contain '
+                'vulkan/vulkan.hpp.',
     );
   }
   return directory.uri;
+}
+
+Uri androidVulkanGlslcForNdk(String ndkRoot, {String? hostOperatingSystem}) {
+  if (!_isUsableBuildPath(ndkRoot) || !_isAndroidNdk(ndkRoot)) {
+    throw BuildError(
+      message:
+          'Android Vulkan builds require the Flutter-selected Android NDK.',
+    );
+  }
+  final host = hostOperatingSystem ?? Platform.operatingSystem;
+  final relativePath = switch (host) {
+    'macos' => 'shader-tools/darwin-x86_64/glslc',
+    'linux' => 'shader-tools/linux-x86_64/glslc',
+    'windows' => 'shader-tools/windows-x86_64/glslc.exe',
+    _ => throw BuildError(
+      message: 'Android Vulkan shader compilation is not configured on $host.',
+    ),
+  };
+  final glslc = Directory(ndkRoot).uri.resolve(relativePath);
+  if (!File.fromUri(glslc).existsSync()) {
+    throw BuildError(
+      message:
+          'The Flutter-selected Android NDK does not contain host glslc at '
+          '$relativePath.',
+    );
+  }
+  return glslc;
 }
 
 Uri? resolveVulkanSdkUserDefine(
@@ -231,8 +344,7 @@ Uri? resolveVulkanSdkUserDefine(
   Uri? resolvedPath,
   OS targetOS,
 ) {
-  if (targetOS == OS.windows &&
-      userDefine is String &&
+  if (userDefine is String &&
       (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(userDefine) ||
           userDefine.startsWith(r'\\'))) {
     return Uri.directory(userDefine, windows: true);
@@ -244,17 +356,23 @@ List<String> cmakeTargetArgsForNativeAssetsBuild(
   CodeConfig code, {
   required bool enableVulkan,
   Uri? vulkanSdk,
+  Uri? androidVulkanGlslc,
+  Uri? androidVulkanShaderOverlay,
+  String? androidNdk,
 }) {
   final os = code.targetOS;
   final arch = code.targetArchitecture;
   final args = vulkanCmakeArgsForNativeAssetsBuild(
     enableVulkan: enableVulkan,
     vulkanSdk: vulkanSdk,
+    androidVulkanGlslc: androidVulkanGlslc,
+    androidVulkanShaderOverlay: androidVulkanShaderOverlay,
+    android: os == OS.android,
     windows: os == OS.windows,
   );
   if (os == OS.android) {
     final abi = androidAbiForNativeAssetsBuild(arch);
-    final ndk = _androidNdk(code);
+    final ndk = androidNdk ?? _androidNdk(code);
     if (ndk == null) {
       throw BuildError(message: 'Android NDK was not found for native build.');
     }
@@ -303,12 +421,41 @@ List<String> cmakeTargetArgsForNativeAssetsBuild(
 List<String> vulkanCmakeArgsForNativeAssetsBuild({
   required bool enableVulkan,
   Uri? vulkanSdk,
+  Uri? androidVulkanGlslc,
+  Uri? androidVulkanShaderOverlay,
+  bool android = false,
   bool windows = false,
-}) => [
-  '-DLLAMA_DART_ENABLE_VULKAN=${enableVulkan ? 'ON' : 'OFF'}',
-  if (vulkanSdk != null)
-    '-DVulkan_ROOT=${_cmakePath(vulkanSdk, windows: windows)}',
-];
+}) {
+  if (android && enableVulkan && androidVulkanShaderOverlay == null) {
+    throw BuildError(
+      message:
+          'Android Vulkan builds require the pinned shader overlay output.',
+    );
+  }
+  if ((!android || !enableVulkan) && androidVulkanShaderOverlay != null) {
+    throw BuildError(
+      message:
+          'The Android Vulkan shader overlay is valid only for an enabled '
+          'Android Vulkan build.',
+    );
+  }
+  return [
+    '-DLLAMA_DART_ENABLE_VULKAN=${enableVulkan ? 'ON' : 'OFF'}',
+    if (android && !enableVulkan) ...const [
+      '-ULLAMA_DART_ANDROID_VULKAN_HOST_ROOT',
+      '-ULLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR',
+      '-UVulkan_GLSLC_EXECUTABLE',
+    ],
+    if (vulkanSdk != null && android)
+      '-DLLAMA_DART_ANDROID_VULKAN_HOST_ROOT=${_cmakePath(vulkanSdk, windows: windows)}',
+    if (androidVulkanGlslc != null && android)
+      '-DVulkan_GLSLC_EXECUTABLE=${_cmakePath(androidVulkanGlslc, windows: windows)}',
+    if (androidVulkanShaderOverlay != null)
+      '-DLLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR=${_cmakePath(androidVulkanShaderOverlay, windows: windows)}',
+    if (vulkanSdk != null && !android)
+      '-DVulkan_ROOT=${_cmakePath(vulkanSdk, windows: windows)}',
+  ];
+}
 
 void validateDesktopArchitectureForNativeAssetsBuild(
   OS targetOS,
@@ -374,8 +521,13 @@ String _cmakeToolPath(Uri uri) {
   return path;
 }
 
-String _cmakePath(Uri uri, {required bool windows}) =>
-    uri.toFilePath(windows: windows).replaceAll('\\', '/');
+String _cmakePath(Uri uri, {required bool windows}) => uri
+    .toFilePath(windows: windows || _isWindowsFileUri(uri))
+    .replaceAll('\\', '/');
+
+bool _isWindowsFileUri(Uri uri) =>
+    uri.isScheme('file') &&
+    (uri.host.isNotEmpty || RegExp(r'^/[A-Za-z]:/').hasMatch(uri.path));
 
 Future<Map<String, String>> cmakeEnvironmentForNativeAssetsBuild(
   CodeConfig code, {
@@ -391,10 +543,9 @@ Future<Map<String, String>> cmakeEnvironmentForNativeAssetsBuild(
     }
   }
   if (vulkanSdk != null) {
-    environment['VULKAN_SDK'] = _cmakePath(
-      vulkanSdk,
-      windows: code.targetOS == OS.windows,
-    );
+    environment['VULKAN_SDK'] = code.targetOS == OS.android
+        ? ''
+        : _cmakePath(vulkanSdk, windows: code.targetOS == OS.windows);
   }
   return environment;
 }

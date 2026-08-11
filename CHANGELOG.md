@@ -1,3 +1,25 @@
+## Unreleased
+
+- Added an opt-in Android Vulkan native-assets variant. It uses the Android
+  NDK for the target loader, SPIR-V headers, and host `glslc`, while taking the
+  Vulkan header set from a bundled exact Vulkan-Headers 1.4.357.0 pin. An
+  optional `vulkan_sdk` value can override only those headers, so consuming
+  apps need no machine-specific SDK path. The CPU backend
+  remains available and Android remains CPU-only by default. The build hook
+  creates a fail-closed, pinned-source overlay in build output without
+  modifying the llama.cpp submodule: five validated Q4_0, Q4_1, and Q8_0
+  payload-load paths plus a Qualcomm-proprietary-only K-quant policy. That
+  policy uses a restricted Q4_K Vulkan route and makes Q5_K/Q6_K matrix
+  operations fall back to the retained CPU backend. The final-source Adreno
+  750 Debug-harness gate matched a bounded CPU oracle and passed cancellation,
+  reset/recovery, and repeat disposal. Both safe-overlay markers are exposed in
+  runtime metadata. Switching the same native-assets cache back to Android's
+  default CPU build explicitly clears the header-root, shader-overlay, and
+  `glslc` CMake cache entries. The strict intermediate backend-result checker
+  still exceeds its relative-error threshold, so this is experimental,
+  device-specific correctness evidence only—not a speed, all-operation-offload,
+  or Android Vulkan qualification claim.
+
 ## 0.2.4
 
 - Added `LlamaEmbeddingEngine`, a worker-owned persistent embedding context

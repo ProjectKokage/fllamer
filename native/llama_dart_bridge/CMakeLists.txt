@@ -14,6 +14,18 @@ set(LLAMA_DART_ENABLE_VULKAN_DEFAULT OFF)
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(LLAMA_DART_ENABLE_VULKAN_DEFAULT ON)
 endif()
+set(
+  LLAMA_DART_ANDROID_VULKAN_HOST_ROOT
+  ""
+  CACHE PATH
+  "Host Vulkan toolchain root for Android Vulkan builds"
+)
+set(
+  LLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR
+  ""
+  CACHE PATH
+  "Prepared Android Vulkan shader overlay directory"
+)
 option(
   LLAMA_DART_ENABLE_VULKAN
   "Require and build the Vulkan backend"
@@ -26,6 +38,88 @@ option(
 )
 if(LLAMA_DART_ENABLE_METAL AND NOT APPLE)
   message(FATAL_ERROR "LLAMA_DART_ENABLE_METAL requires an Apple target")
+endif()
+set(LLAMA_DART_ANDROID_VULKAN_SAFE_QUANT 0)
+set(LLAMA_DART_ANDROID_VULKAN_SAFE_K_QUANT 0)
+if(ANDROID AND LLAMA_DART_ENABLE_VULKAN)
+  if(NOT LLAMA_DART_ANDROID_VULKAN_HOST_ROOT)
+    message(
+      FATAL_ERROR
+      "Android Vulkan builds require LLAMA_DART_ANDROID_VULKAN_HOST_ROOT"
+    )
+  endif()
+  if(
+    NOT LLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR OR
+    NOT IS_DIRECTORY "${LLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR}"
+  )
+    message(
+      FATAL_ERROR
+      "Android Vulkan builds require the prepared shader overlay directory"
+    )
+  endif()
+  if(NOT Vulkan_GLSLC_EXECUTABLE OR NOT EXISTS "${Vulkan_GLSLC_EXECUTABLE}")
+    message(
+      FATAL_ERROR
+      "Android Vulkan builds require an explicit host Vulkan_GLSLC_EXECUTABLE"
+    )
+  endif()
+  if(
+    EXISTS
+    "${LLAMA_DART_ANDROID_VULKAN_HOST_ROOT}/Include/vulkan/vulkan.hpp"
+  )
+    set(
+      LLAMA_DART_ANDROID_VULKAN_HEADERS_INCLUDE_DIR
+      "${LLAMA_DART_ANDROID_VULKAN_HOST_ROOT}/Include"
+    )
+  elseif(
+    EXISTS
+    "${LLAMA_DART_ANDROID_VULKAN_HOST_ROOT}/include/vulkan/vulkan.hpp"
+  )
+    set(
+      LLAMA_DART_ANDROID_VULKAN_HEADERS_INCLUDE_DIR
+      "${LLAMA_DART_ANDROID_VULKAN_HOST_ROOT}/include"
+    )
+  else()
+    message(
+      FATAL_ERROR
+      "Android Vulkan header root does not contain vulkan/vulkan.hpp"
+    )
+  endif()
+  set(
+    LLAMA_DART_ANDROID_SPIRV_HEADERS_INCLUDE_DIR
+    "${CMAKE_ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers/include"
+  )
+  if(
+    NOT EXISTS
+    "${LLAMA_DART_ANDROID_SPIRV_HEADERS_INCLUDE_DIR}/spirv/unified1/spirv.hpp"
+  )
+    message(
+      FATAL_ERROR
+      "Android Vulkan builds require the SPIR-V headers bundled with the Android NDK"
+    )
+  endif()
+  include_directories(
+    SYSTEM
+    "${LLAMA_DART_ANDROID_VULKAN_HEADERS_INCLUDE_DIR}"
+    "${LLAMA_DART_ANDROID_SPIRV_HEADERS_INCLUDE_DIR}"
+  )
+  set(
+    SPIRV-Headers_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/android-spirv-headers"
+    CACHE PATH
+    "Android NDK SPIR-V headers package configuration"
+    FORCE
+  )
+  unset(Vulkan_ROOT CACHE)
+  unset(Vulkan_ROOT)
+  set(ENV{VULKAN_SDK} "")
+  set(LLAMA_DART_ANDROID_VULKAN_SAFE_QUANT 1)
+  set(LLAMA_DART_ANDROID_VULKAN_SAFE_K_QUANT 1)
+elseif(LLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR)
+  message(
+    FATAL_ERROR
+    "The Android Vulkan shader overlay is invalid outside an enabled Android Vulkan build"
+  )
 endif()
 if(LLAMA_DART_NO_NETWORK)
   set(FETCHCONTENT_FULLY_DISCONNECTED ON CACHE BOOL "" FORCE)
@@ -121,6 +215,8 @@ set(
   GGML_SYCL=OFF
   GGML_VIRTGPU=OFF
   GGML_VULKAN=${LLAMA_DART_ENABLE_VULKAN}
+  GGML_VULKAN_ANDROID_SAFE_QUANT=${LLAMA_DART_ANDROID_VULKAN_SAFE_QUANT}
+  GGML_VULKAN_ANDROID_SAFE_K_QUANT=${LLAMA_DART_ANDROID_VULKAN_SAFE_K_QUANT}
   GGML_WEBGPU=OFF
   GGML_ZDNN=OFF
   GGML_ZENDNN=OFF
@@ -133,6 +229,16 @@ add_subdirectory(
   ${CMAKE_CURRENT_BINARY_DIR}/llama.cpp
   EXCLUDE_FROM_ALL
 )
+
+if(ANDROID AND LLAMA_DART_ENABLE_VULKAN)
+  include(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/android-vulkan-shader-overlay.cmake
+  )
+  fllamer_apply_android_vulkan_shader_overlay(
+    ggml-vulkan
+    "${LLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR}"
+  )
+endif()
 
 add_library(
   llama_dart_bridge_reasoning STATIC

@@ -35,6 +35,8 @@ therefore require CMake 3.16 or newer and a C++ toolchain; Android builds
 additionally require the NDK, and Apple builds require Xcode. Linux/Windows
 Vulkan builds require CMake 3.19 or newer, Vulkan development files, and
 `glslc` unless the consuming workspace explicitly selects a CPU-only bridge.
+Android Vulkan is an opt-in build variant. Its exact Vulkan-Headers pin is
+bundled, and the build uses host `glslc` from Flutter's selected Android NDK.
 See [native builds](doc/native_builds.md) for supported ABIs, minimum platform
 versions, and platform-specific commands. Models, mmproj files, and LoRA
 adapters are app-owned data and are never downloaded by the package.
@@ -220,8 +222,18 @@ void main() async {
   supported inference path. Explicit Metal requests remain available for
   diagnostics. Linux and Windows native-assets builds require and include
   Vulkan by default while retaining the CPU backend; consuming workspaces can
-  explicitly build a CPU-only bridge. Runtime capability metadata distinguishes
-  the two artifacts before an app requests Vulkan.
+  explicitly build a CPU-only bridge. Android remains CPU-only by default and
+  can opt into a Vulkan-enabled bridge without an app-specific SDK path; the
+  package supplies its pinned headers and Flutter's selected NDK supplies the
+  remaining target and host shader-tool inputs.
+  Runtime capability metadata distinguishes the artifacts before an app
+  requests Vulkan. One final-source Debug harness run on an Adreno 750 selected
+  Vulkan, matched its bounded CPU oracle, and passed cancellation/reset/recovery
+  and repeat-dispose checks. This is a narrow experimental receipt, not Android
+  Vulkan support or a speed claim: the Qualcomm-proprietary K-quant policy uses
+  a safe Q4_K matrix route and CPU fallback for Q5_K/Q6_K matrix operations.
+  Android remains opt-in and unqualified; see [native builds](doc/native_builds.md)
+  for the exact artifact and checker limitation.
 - Experimental GBNF grammar constraints, JSON mode, and pinned-upstream JSON
   Schema conversion for `GenerationConfig.jsonSchema`, including local
   `$defs`/`$ref`, JSON
@@ -292,6 +304,14 @@ before persistence or display.
   iOS 26.5 Simulator automatic-backend regression and an unsigned `iphoneos`
   Debug build, but the latter is compile/package evidence rather than a Metal
   runtime result from iPhone hardware.
+- Android Vulkan product support beyond one Xiaomi 23127PN0CC/Adreno 750
+  Android 16 Debug-harness receipt. That receipt covers a final-source bounded
+  CPU-oracle run, cancellation, reset/recovery, and repeat disposal. It does not cover
+  sustained or thermal behavior, more models, drivers, devices, Android
+  lifecycle transitions, signed/release packaging, or performance. The strict
+  backend-result checker still reports some Q4_0/Q4_1 intermediate relative
+  errors, and Q5_K/Q6_K matrix work deliberately falls back to CPU on the
+  affected Qualcomm proprietary driver.
 - Android API levels below 28 and 32-bit Android `armeabi-v7a`; pass
   `--target-platform android-arm64,android-x64` for Android APK validation.
 - iOS versions below 15.0. The pinned embedded Metal backend uses an event API

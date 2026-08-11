@@ -1,0 +1,16 @@
+if(NOT ANDROID OR NOT LLAMA_DART_ANDROID_SPIRV_HEADERS_INCLUDE_DIR)
+  set(SPIRV-Headers_FOUND FALSE)
+  return()
+endif()
+
+if(NOT TARGET SPIRV-Headers::SPIRV-Headers)
+  add_library(SPIRV-Headers::SPIRV-Headers INTERFACE IMPORTED)
+  set_target_properties(
+    SPIRV-Headers::SPIRV-Headers
+    PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES
+      "${LLAMA_DART_ANDROID_SPIRV_HEADERS_INCLUDE_DIR}"
+  )
+endif()
+
+set(SPIRV-Headers_FOUND TRUE)

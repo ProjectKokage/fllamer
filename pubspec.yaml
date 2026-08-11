@@ -33,3 +33,4 @@ flutter:
     - third_party/llama.cpp/vendor/cpp-httplib/LICENSE
     - third_party/licenses/LICENSE-miniaudio
     - third_party/licenses/LICENSE-stb
+    - third_party/vulkan_headers/LICENSE.md

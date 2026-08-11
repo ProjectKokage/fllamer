@@ -19,6 +19,20 @@ deliberate CPU-only artifact with
 but those build dependencies are incomplete; it never silently changes the
 artifact to CPU-only.
 
+Direct Android CMake builds remain CPU-only by default. An opt-in Vulkan build
+sets `-DLLAMA_DART_ENABLE_VULKAN=ON` and supplies
+`-DLLAMA_DART_ANDROID_VULKAN_HOST_ROOT=/path/to/fllamer/third_party/vulkan_headers`
+plus the exact host `glslc` under the selected NDK's
+`shader-tools/<host-tag>/` as `-DVulkan_GLSLC_EXECUTABLE`. It must also pass the
+build-output directory prepared by the hook as
+`-DLLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR`. The hook normalizes CRLF to
+LF, verifies the exact pinned hashes of every transformed source, and refuses
+unknown or already-patched input. The header root must contain
+`Include/vulkan/vulkan.hpp` or `include/vulkan/vulkan.hpp` and the matching
+Vulkan header set. The Android NDK remains authoritative for the target Vulkan
+loader, bundled SPIR-V headers, and host shader compiler. CPU-only and desktop
+builds neither prepare nor consume this overlay.
+
 Package dry run:
 
 ```sh
@@ -90,39 +104,70 @@ call llama-common download helpers; model paths remain app supplied and local.
 Apple targets also set `GGML_METAL=ON` and
 `GGML_METAL_EMBED_LIBRARY=ON` so Metal kernels stay inside the bundled
 library. Linux and Windows targets set `GGML_VULKAN=ON` by default and retain
-the CPU backend. Other upstream network/tool/UI and accelerator backends remain
+the CPU backend. Android retains CPU by default and accepts an explicit Vulkan
+variant. Other upstream network/tool/UI and accelerator backends remain
 disabled.
 
-The desktop Vulkan policy is explicit native-assets input rather than an
-ambient best-effort probe. In the consuming app's workspace-root `pubspec.yaml`,
-use:
+The Vulkan policy is explicit native-assets input rather than an ambient
+best-effort probe. In the consuming app's workspace-root `pubspec.yaml`, use:
 
 ```yaml
 hooks:
   user_defines:
     fllamer:
-      # Defaults to true on Linux and Windows.
+      # Defaults to true on Linux/Windows and false on Android.
       vulkan: true
-      # Optional when CMake can use system Vulkan development packages.
-      vulkan_sdk: toolchains/vulkan/1.4.x/
 ```
 
 `vulkan` accepts only a boolean. `false` builds a reproducible CPU-only bridge.
-`true` is strict and fails CMake configuration if Vulkan, `glslc`, or
-SPIR-V-Headers cannot be found. `vulkan_sdk` is an optional local directory
-forwarded as `Vulkan_ROOT` and `VULKAN_SDK`; the hook records that directory as
-an input, but tracks only the header tree, SPIRV-Headers CMake package files,
-loader import library, and `glslc` files CMake consumes rather than hashing
-unrelated SDK samples, documentation, and tools. Pin and provision that SDK
-outside the package when a release build must use one exact toolchain. The hook
-does not download it.
+On Linux and Windows, `true` is strict and fails CMake configuration if Vulkan,
+`glslc`, or SPIR-V-Headers cannot be found. The optional `vulkan_sdk` directory
+is forwarded as `Vulkan_ROOT` and `VULKAN_SDK` on those desktop targets. On
+Android it overrides only the bundled header root; ordinary Android consumers
+should omit it.
 
-Both bridge variants retain the CPU backend. `GpuConfig.cpu()` is therefore an
-explicit runtime fallback when the Vulkan loader can load but no usable device
-exists. A Vulkan-enabled bridge still has a target-system dependency on the
-Vulkan loader (`vulkan-1.dll` on Windows or the platform Vulkan loader on
-Linux). Machines without that loader need the CPU-only artifact; they cannot
-load the Vulkan-linked bridge merely to select CPU afterward.
+On Android, `vulkan: true` is self-contained: the hook uses the package's
+complete Vulkan-Headers 1.4.357.0 `include/` tree, and derives host `glslc` from
+the same Android NDK selected by Flutter. `vulkan_sdk` remains an optional
+header-only override.
+The hook never forwards either header root as `Vulkan_ROOT` or `VULKAN_SDK`, so
+CMake cannot link a host loader into the Android artifact. The NDK supplies the
+target `libvulkan.so` stub, SPIR-V headers, and host shader compiler. The hook
+creates a hash-gated build-output overlay, leaving the submodule untouched:
+five exact q-payload
+load replacements cover Q4_0, Q4_1, and Q8_0 while preserving Q4_0/Q4_1
+scale/min fields, and one exact `ggml-vulkan.cpp` transform installs the
+Qualcomm-specific K-quant fallback policy below. CMake replaces only the four
+generated shader units that include those shader files and the one Vulkan
+source unit. Android Vulkan bridge metadata reports both
+`GGML_VULKAN_ANDROID_SAFE_QUANT=1` and
+`GGML_VULKAN_ANDROID_SAFE_K_QUANT=1`; all other builds report `0` for both.
+When a later Android build disables Vulkan, the hook explicitly removes the
+cached header-root, shader-overlay, and `glslc` entries before configuring the
+CPU bridge. This keeps one native-assets cache from retaining a stale opt-in.
+The hook records the shader sources, bundled or overridden Vulkan headers, and
+exact NDK `glslc` as build inputs. It does not download executable code or
+headers during the build.
+
+The K-quant policy is deliberately narrow. It applies only when the Vulkan
+vendor is Qualcomm and the driver ID is Qualcomm proprietary. For Q4_K it
+suppresses the failing F32/F16 DMMV registrations and matvec route, forces the
+dequant-to-F16 matrix route, and rejects `MUL_MAT`+`ADD` fusion. For Q5_K and
+Q6_K it reports `MUL_MAT` and `MUL_MAT_ID` unsupported so the upstream
+scheduler places those operations on the retained CPU backend. It is a
+correctness fallback for that driver, not a generic K-quant acceleration or a
+promise that an apparently fully offloaded model executes every operation on
+Vulkan.
+
+All Vulkan-enabled bridge variants retain the CPU backend, so an app may choose
+`GpuConfig.cpu()` before loading a model or perform a separately owned CPU load
+under its own bounded degradation policy. This is not an automatic retry of a
+Vulkan-selected model load or compute failure. A Vulkan-enabled bridge still
+has a target-system
+dependency on the Vulkan loader (`vulkan-1.dll` on Windows or the platform
+Vulkan loader on Linux, and `libvulkan.so` on Android). Systems without that
+loader need the CPU-only artifact; they cannot load the Vulkan-linked bridge
+merely to select CPU afterward.
 
 Target notes:
 
@@ -134,7 +179,12 @@ Target notes:
   `ANDROID_NDK`, `ANDROID_NDK_HOME`, `ANDROID_NDK_LATEST_HOME`,
   `ANDROID_NDK_ROOT`, then the newest numeric version under
   `ANDROID_HOME/ndk/*`. It passes the Android CMake toolchain, target ABI, NDK
-  API level from the build config, and `c++_static`.
+  API level from the build config, and `c++_static`. An enabled Vulkan build
+  uses the package's pinned Vulkan-Hpp headers and that selected NDK's host
+  `glslc`. Vulkan remains opt-in because it is an experimental, device-qualified
+  path rather than a package default. The
+  pinned backend requires a Vulkan 1.2-capable runtime before it can expose a
+  usable device.
 - iOS 15.0 is the explicit minimum in the example Xcode project. Flutter's
   native-assets driver currently supplies a generic iOS 13 hook target even
   when the Xcode project has a newer deployment target, so the hook raises the
@@ -191,10 +241,93 @@ own durable app-private model directory before loading it again later.
 Current verification:
 
 - Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
-  explicit CPU-only override, SDK-root propagation, desktop architecture
-  rejection, Windows Ninja/MSVC argument propagation, and Developer Command
-  Prompt environment parsing. These tests run on macOS but do not constitute a
-  Linux or Windows compilation or Vulkan runtime result.
+  Android's explicit opt-in, bundled Vulkan-Hpp pin, selected-NDK `glslc`,
+  CPU-only overrides, target-specific header-root propagation, desktop
+  architecture rejection,
+  Windows Ninja/MSVC argument propagation, and Developer Command Prompt
+  environment parsing. These policy tests do not constitute Vulkan runtime
+  evidence.
+- On 2026-08-11, direct offline CMake cross-compiles of the opt-in Vulkan
+  bridge passed for `arm64-v8a` and `x86_64` at Android API 28 from macOS
+  26.5.2 with CMake 4.4.2, Android NDK r28c (`28.2.13676358`),
+  Vulkan-Headers 1.4.357.0, and shaderc/glslc 2026.3. Both ELF files are 64-bit
+  and have 16 KiB `LOAD` alignment. Their only `DT_NEEDED` entries are
+  Android system libraries: `libm.so`, `libdl.so`, `libvulkan.so`, and
+  `libc.so`; no host or duplicate Vulkan loader is packaged. Stripped copies
+  were 44,590,896 bytes for arm64-v8a and 45,787,088 bytes for x86_64. This is
+  native compile/link evidence, not a Flutter APK, loaded-device, model-offload,
+  correctness, or performance result.
+- Later on 2026-08-11, an arm64 Debug APK loaded the opt-in bridge on a Xiaomi
+  `23127PN0CC` (`houji`), Android 16/API 36, Snapdragon SM8650, and Adreno 750
+  reporting Vulkan 1.3.128. The APK SHA-256 was
+  `8dcca92fc0f6e532a9cf176f4a2b30bae67da65e5cd470fe5367a3d7628a537b`;
+  its stripped bridge SHA-256 was
+  `724a16f7a701466b7a8ce988f8d6c462928d8de6c07b46c48c48590ca4037778`.
+  The exact SmolLM2 Q4_0 fixture was 91,893,088 bytes at SHA-256
+  `bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03`.
+  Runtime diagnostics selected Vulkan, named Adreno 750, enabled KV offload,
+  and reported 31/31 model layers offloaded. Bounded generation and
+  cancellation/reset/recovery completed, but greedy Vulkan output diverged
+  materially from CPU. Direct CLI reproduction remained incorrect after
+  disabling FP16, async, fusion, graph optimization, integer dot, dot2, MMVQ,
+  Flash Attention, or KV offload and with only one layer offloaded. Batch and
+  ubatch 16 with one Vulkan node per submission also failed; the tested Q4_K_M
+  fixture separately failed pipeline creation. This is negative correctness
+  evidence, not Android Vulkan support or a performance result.
+- The final 2026-08-11 overlay also patches `ggml-vulkan.cpp`, preserving the
+  pinned submodule, and enables the Qualcomm-proprietary K-quant policy above.
+  It pins the normalized source/output SHA-256 pairs: `ggml-vulkan.cpp`
+  `34691a65d3d436342f26d9b464c49dd6ba3a9f15e5c7344f3176727184820c6b` /
+  `877d2c2d0da802b84dc8962f0047f21c6bff033052fdcbfcfc730f3aec89fe80`,
+  `dequant_funcs_cm2.comp`
+  `d70cf26d67104b333fdd2dedefdb060ea1409091465cfc81829c1f6d1b14683a` /
+  `79e3bed12bdb16181293a3123e09c58abe6b1d774d928f59407c5d2ac3eb8e25`,
+  and `mul_mm_cm2.comp`
+  `b48523e624ca55a8e4441c38e580b7109813a146265f2866f1238549caceebbe` /
+  `bf170282a7fb3f17e7214814fd0e9ce1656e54d68fce28a8e917201537056d9e`.
+  The transform rejects any other input or output.
+- A dependent Flutter native-test harness then exercised the final-source
+  arm64-v8a bridge on that same physical device. The Debug APK SHA-256 was
+  `916db989df04dc68f4e426cfef238d3672c7b221c53311ad359c47731a816e18`; its
+  29,976,312-byte bridge SHA-256 was
+  `5b79932a6261a83a22e18fcc6eb4d0dbdd0952ee2f1e95a68ccf37e181a2614b`.
+  It used NDK `30.0.14904198`, target API 35, `RelWithDebInfo`,
+  Vulkan-Headers 1.4.357, and the explicit host `glslc`. Diagnostics selected
+  Adreno 750 Vulkan, enabled KV offload, and contained both safe-overlay
+  markers. The exact 91,893,088-byte SmolLM2 Q4_0 fixture at SHA-256
+  `bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03`
+  produced the checked bounded greedy result, matched a CPU reference, and
+  passed cancellation, reset/recovery, and repeat-dispose checks.
+- Device probes of the same Qualcomm-proprietary policy also established the
+  intended hybrid behavior: Q4_K uses the safe Vulkan matrix route, while
+  Q5_K/Q6_K matrix operations fall back to CPU and surrounding eligible work
+  can remain on Vulkan. This is correctness evidence for those bounded probes,
+  not a general all-model or all-driver qualification. A report of all layers
+  offloaded is layer placement metadata; it must not be read as proof that all
+  operations ran on Vulkan.
+- `GGML_VULKAN_CHECK_RESULTS` still exceeds its 1% relative threshold for some
+  Q4_0/Q4_1 intermediate local/accumulated values. It is a strict diagnostic
+  checker, not an acceptance bypass: the final bounded CPU-oracle result above
+  is the only positive inference evidence recorded here. This remains
+  experimental and unqualified; no sustained, thermal, multi-device,
+  release-signed-package, or performance qualification has been completed.
+- A final normal Kokage consumer build then exercised the self-contained
+  header/tool contract with `VULKAN_SDK` unset. The target-API-36, two-ABI
+  Debug APK was
+  311,977,712 bytes at SHA-256
+  `2c8b47cd13c44575a70f81d63c0eefeee3e8205dd3372fbe67055d5acb232424`.
+  Its arm64-v8a bridge was 29,976,312 bytes at
+  `bb78a1ba1b47af1edc3496b4791546166ab975969f199990cadc16dc67694692`;
+  its x86_64 bridge was 31,072,464 bytes at
+  `02971b6a0f88d50c4f2e16ce8bb1c7fdfbf88660a5a079c88af220f7ef0a309c`.
+  Both return ABI 41, embed Vulkan plus both Android safe-policy markers, have
+  16 KiB `LOAD` alignment, and depend only on Android system
+  `libm.so`, `libdl.so`, `libvulkan.so`, and `libc.so`. The APK packages no
+  Vulkan loader and passes `zipalign -P 16`. The build used macOS 26.5.2,
+  Flutter 3.47.0-0.1.pre, CMake 4.4.2, NDK `30.0.14904198`, native API 35,
+  bundled Vulkan-Headers 1.4.357.0, and the selected NDK's glslc v2022.3.
+  This verifies normal consumer compilation and packaging, not device
+  selection, model correctness, Release/AAB output, or performance.
 - The hook has host smoke-test coverage through `dart test` and `flutter test`.
 - Native `ctest` always covers ABI/error handling; its assertions remain active
   in Release builds, and an ASan/UBSan Debug build passes locally.
@@ -506,7 +639,9 @@ Current limitations:
 - `flutter build apk --debug` without `--target-platform` still asks Flutter's
   native-assets pipeline to build `android-arm`; the hook rejects that 32-bit
   ABI because this package only supports `arm64-v8a` and `x86_64`.
-- Physical-device smoke tests have not been run in this workspace.
+- The Android Vulkan receipt above is one physical-device Debug-harness result,
+  not a release or fleet qualification. Physical Android CPU paths and all
+  other target/device combinations still need their own evidence.
 - Runtime loading still supports explicit `nativeLibraryPath` and
   `FLLAMER_NATIVE_LIBRARY`; app builds should verify the bundled library is
   discoverable on each target platform before release.

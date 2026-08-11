@@ -242,6 +242,24 @@ int main() {
   assert(std::strstr(llama_dart_build_flags(), "LLAMA_BUILD_MTMD=ON") !=
          nullptr);
   assert(std::strstr(llama_dart_build_flags(), "MTMD_VIDEO=OFF") != nullptr);
+#if defined(__ANDROID__)
+  if (std::strstr(llama_dart_build_flags(), "GGML_VULKAN=ON") != nullptr) {
+    assert(std::strstr(llama_dart_build_flags(),
+                       "GGML_VULKAN_ANDROID_SAFE_QUANT=1") != nullptr);
+    assert(std::strstr(llama_dart_build_flags(),
+                       "GGML_VULKAN_ANDROID_SAFE_K_QUANT=1") != nullptr);
+  } else {
+    assert(std::strstr(llama_dart_build_flags(),
+                       "GGML_VULKAN_ANDROID_SAFE_QUANT=0") != nullptr);
+    assert(std::strstr(llama_dart_build_flags(),
+                       "GGML_VULKAN_ANDROID_SAFE_K_QUANT=0") != nullptr);
+  }
+#else
+  assert(std::strstr(llama_dart_build_flags(),
+                     "GGML_VULKAN_ANDROID_SAFE_QUANT=0") != nullptr);
+  assert(std::strstr(llama_dart_build_flags(),
+                     "GGML_VULKAN_ANDROID_SAFE_K_QUANT=0") != nullptr);
+#endif
   assert(std::strlen(llama_dart_multimodal_marker()) > 0);
 
   assert(llama_dart_backend_init() == LLAMA_DART_SUCCESS);
