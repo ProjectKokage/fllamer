@@ -101,7 +101,7 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge (current ABI 40): version, capabilities, backend
+- Native ABI smoke bridge (current ABI 41): version, capabilities, backend
   init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.

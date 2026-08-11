@@ -188,6 +188,11 @@ When a quantized V cache is paired with Flash Attention `auto`, the bridge
 records the upstream-promoted `enabled` mode so `contextInfo()` continues to
 report the applied cache policy rather than the original request.
 
+ABI 41 adds exact prompt-prefix reuse. A completion may reuse committed KV
+state only when its committed token history is an exact prefix of the newly
+tokenized full prompt; a mismatch clears the context before evaluating the
+full prompt.
+
 Bounded reasoning uses pinned `common_reasoning_budget_init` with vectors of
 start and end token sequences, plus `common_reasoning_budget_get_state` and
 `common_reasoning_budget_get_end_match`. All template-provided end alternatives
