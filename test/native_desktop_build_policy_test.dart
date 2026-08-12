@@ -7,6 +7,38 @@ import 'package:test/test.dart';
 import '../hook/build.dart' as build_hook;
 
 void main() {
+  group('CMake build directory', () {
+    test('keys reusable output by the normalized native source URI', () {
+      final outputDirectory = Uri.directory('/tmp/fllamer-hook-output/');
+      final firstSource = Uri.directory(
+        '/tmp/pub-cache/fllamer-0.2.0/native/llama_dart_bridge/',
+      );
+      final normalizedEquivalent = Uri.parse(
+        'file:///tmp/pub-cache/fllamer-0.2.0/native/./llama_dart_bridge/',
+      );
+      final upgradedSource = Uri.directory(
+        '/tmp/pub-cache/fllamer-0.2.1/native/llama_dart_bridge/',
+      );
+
+      Uri buildDirectory(Uri sourceDirectory) =>
+          build_hook.cmakeBuildDirectoryForNativeAssetsBuild(
+            outputDirectory: outputDirectory,
+            sourceDirectory: sourceDirectory,
+            targetOS: OS.macOS,
+            targetArchitecture: Architecture.arm64,
+          );
+
+      final first = buildDirectory(firstSource);
+      final equivalent = buildDirectory(normalizedEquivalent);
+      final upgraded = buildDirectory(upgradedSource);
+
+      expect(equivalent, first);
+      expect(upgraded, isNot(first));
+      expect(first.toString(), startsWith(outputDirectory.toString()));
+      expect(upgraded.toString(), startsWith(outputDirectory.toString()));
+    });
+  });
+
   group('Vulkan build policy', () {
     test('is strict-by-default only on Linux and Windows', () {
       expect(

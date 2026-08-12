@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
+import 'package:crypto/crypto.dart';
 import 'package:hooks/hooks.dart';
 
 import 'src/android_vulkan_shader_overlay.dart';
@@ -27,8 +29,11 @@ Future<void> main(List<String> args) async {
     final targetOS = code.targetOS;
     final targetArchitecture = code.targetArchitecture;
     final sourceDir = input.packageRoot.resolve('native/llama_dart_bridge/');
-    final buildDir = input.outputDirectory.resolve(
-      'cmake-${targetOS.name}-${targetArchitecture.name}/',
+    final buildDir = cmakeBuildDirectoryForNativeAssetsBuild(
+      outputDirectory: input.outputDirectory,
+      sourceDirectory: sourceDir,
+      targetOS: targetOS,
+      targetArchitecture: targetArchitecture,
     );
     final linkMode = DynamicLoadingBundled();
     final outputName = targetOS.libraryFileName(_libraryName, linkMode);
@@ -144,6 +149,21 @@ Future<void> main(List<String> args) async {
       ),
     );
   });
+}
+
+Uri cmakeBuildDirectoryForNativeAssetsBuild({
+  required Uri outputDirectory,
+  required Uri sourceDirectory,
+  required OS targetOS,
+  required Architecture targetArchitecture,
+}) {
+  final sourceKey = sha256
+      .convert(utf8.encode(sourceDirectory.normalizePath().toString()))
+      .toString()
+      .substring(0, 16);
+  return outputDirectory.resolve(
+    'cmake-${targetOS.name}-${targetArchitecture.name}-$sourceKey/',
+  );
 }
 
 List<Uri> _nativeBuildDependencies(Uri packageRoot) {

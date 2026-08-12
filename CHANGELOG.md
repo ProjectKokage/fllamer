@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Key native CMake build directories by normalized source URI so hosted,
+  path, and version switches cannot reuse a cache configured for another
+  source root.
 - Added an opt-in Android Vulkan native-assets variant. It uses the Android
   NDK for the target loader, SPIR-V headers, and host `glslc`, while taking the
   Vulkan header set from a bundled exact Vulkan-Headers 1.4.357.0 pin. An
