@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Enforced explicit `enableThinking: false` for chat templates that expose
+  paired reasoning markers by installing the existing native reasoning sampler
+  with a zero budget. If a model still emits a reasoning start, the sampler
+  forces its closing sequence immediately and preserves subsequent public
+  output. Markerless templates and finite thinking budgets are unchanged.
 - Key native CMake build directories by normalized source URI so hosted,
   path, and version switches cannot reuse a cache configured for another
   source root.

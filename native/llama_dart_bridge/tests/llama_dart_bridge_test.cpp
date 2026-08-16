@@ -1161,6 +1161,22 @@ int main() {
   llama_dart_buffer_free(assistant_message.data);
   llama_dart_buffer_free(chat_plan.data);
 
+  const char markerless_thinking_off_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"enable_thinking":false})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             model,
+             reinterpret_cast<const uint8_t *>(
+                 markerless_thinking_off_request),
+             std::strlen(markerless_thinking_off_request), &chat_plan) ==
+         LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  const std::string markerless_thinking_off_plan(
+      reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
+  assert(markerless_thinking_off_plan.find(
+             R"("reasoning_budget_tokens":-1)") != std::string::npos);
+  llama_dart_buffer_free(chat_plan.data);
+
   const char reasoning_budget_without_thinking[] =
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"reasoning_budget_tokens":8})";
   chat_plan = {};
@@ -1272,6 +1288,27 @@ int main() {
          std::string::npos);
   assert(gemma4_reasoning_chat_plan.find(
              R"("reasoning_budget_tokens":8)") != std::string::npos);
+  llama_dart_buffer_free(chat_plan.data);
+
+  const char gemma4_thinking_off_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"enable_thinking":false})";
+  chat_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(gemma4_thinking_off_request),
+             std::strlen(gemma4_thinking_off_request), &chat_plan) ==
+         LLAMA_DART_SUCCESS);
+  assert(chat_plan.data != nullptr);
+  const std::string gemma4_thinking_off_plan(
+      reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
+  assert(gemma4_thinking_off_plan.find(
+             R"("thinking_start_tag":"<|channel>thought")") !=
+         std::string::npos);
+  assert(gemma4_thinking_off_plan.find(
+             R"("thinking_end_tags":["<channel|>"])") !=
+         std::string::npos);
+  assert(gemma4_thinking_off_plan.find(
+             R"("reasoning_budget_tokens":0)") != std::string::npos);
   llama_dart_buffer_free(chat_plan.data);
 
   const char gemma4_thinking_start[] = "<|channel>thought";

@@ -301,11 +301,20 @@ void test_generated_zero_budget_start_and_second_block() {
   assert_forced(sampler, 13);
   llama_sampler_accept(sampler, 13);
 
+  // A zero-budget close must not truncate the public response that follows.
+  candidates public_candidates{20, 99};
+  llama_sampler_apply(sampler, &public_candidates.array);
+  assert(std::isfinite(public_candidates.logit(20)));
+  assert(std::isfinite(public_candidates.logit(99)));
+  llama_sampler_accept(sampler, 99);
+  assert((sampling.accepted ==
+          std::vector<llama_token>{10, 11, 12, 13, 99}));
+
   // llama.cpp re-arms the budget when a model emits a later reasoning block.
   llama_sampler_accept(sampler, 10);
   llama_sampler_accept(sampler, 11);
   assert((grammar.accepted ==
-          std::vector<llama_token>{10, 11, 12, 13, 10, 11}));
+          std::vector<llama_token>{10, 11, 12, 13, 99, 10, 11}));
   assert_forced(sampler, 12);
 
   llama_sampler_free(sampler);

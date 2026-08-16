@@ -221,6 +221,12 @@ can activate its grammar trigger. The manual bridge sampler also reads
 `llama_sampler_init_logit_bias` with negative-infinity bias, matching pinned
 `llama-common` sampling behavior.
 
+An explicit `enable_thinking=false` plan with paired template reasoning
+markers uses the same sampler with a zero budget. This enforces Off if a model
+unexpectedly emits a reasoning start while preserving later public output.
+Markerless templates remain on their existing template-only path, and finite
+reasoning budgets are unchanged.
+
 Note: pinned upstream documents `llama_state_get_size()` as a save-only sizing
 helper. Do not use it to preflight `llama_state_set_data()` restores; it can be
 too small for the serialized state being restored.

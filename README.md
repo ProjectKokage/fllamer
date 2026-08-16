@@ -132,7 +132,11 @@ void main() async {
   value selects native Jinja chat planning and forwards the typed
   `enable_thinking` template input without reloading the model, while `null`
   retains the legacy formatter selection unless a reasoning budget requests a
-  native plan. Thinking chat cannot be combined with an app-supplied raw
+  native plan. When explicit `false` is paired with template-exposed reasoning
+  markers, native sampling also applies a zero reasoning budget: an unexpected
+  reasoning start is immediately closed and the public suffix remains
+  generatable. Markerless templates retain template-only Off behavior.
+  Thinking chat cannot be combined with an app-supplied raw
   grammar, JSON mode, or JSON schema because that constraint would also apply
   to reasoning. Planner-owned tool grammar remains supported. Typed terminal
   parsing keeps reasoning separate from the normalized assistant value, but

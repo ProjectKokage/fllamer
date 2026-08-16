@@ -400,7 +400,10 @@ final class GenerationConfig {
   /// `null` preserves the legacy-first formatting path unless
   /// [reasoningBudgetTokens] requests native chat planning. On that planning
   /// path, llama.cpp supplies its default `enable_thinking` value (`true`).
-  /// Non-null values are applied only by [LlamaEngine.chat].
+  /// Non-null values are applied only by [LlamaEngine.chat]. When `false` and
+  /// the selected template exposes paired reasoning markers, native sampling
+  /// also closes any unexpected reasoning block immediately before allowing
+  /// the public response to continue.
   final bool? enableThinking;
 
   /// Maximum tokens counted inside each chat-template reasoning block.

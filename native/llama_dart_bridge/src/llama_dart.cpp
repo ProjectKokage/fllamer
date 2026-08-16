@@ -3820,6 +3820,7 @@ llama_dart_result llama_dart_model_create_chat_plan(
 
   common_chat_templates_inputs inputs;
   int32_t reasoning_budget_tokens = -1;
+  bool hard_disable_thinking = false;
   try {
     inputs.messages =
         common_chat_msgs_parse_oaicompat(request.at("messages"));
@@ -3845,6 +3846,7 @@ llama_dart_result llama_dart_model_create_chat_plan(
                     "enable_thinking must be a boolean");
       }
       inputs.enable_thinking = request.at("enable_thinking").get<bool>();
+      hard_disable_thinking = !inputs.enable_thinking;
       // Explicit thinking control requests reasoning-aware terminal parsing
       // from the applied chat template.
       inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -3973,8 +3975,18 @@ llama_dart_result llama_dart_model_create_chat_plan(
                     "chat template thinking tags are invalid");
       }
     }
+    // Some reasoning models can emit a thinking start even when their
+    // template receives enable_thinking=false. When the applied template
+    // exposes a complete marker pair, reuse the reasoning-budget sampler with
+    // a zero budget so any such block is closed immediately and generation
+    // can continue with the public suffix. Markerless templates retain their
+    // existing template-only behavior.
+    const int32_t effective_reasoning_budget_tokens =
+        hard_disable_thinking && has_thinking_start && has_thinking_end
+            ? 0
+            : reasoning_budget_tokens;
     const std::string plan =
-        serialize_chat_plan(params, reasoning_budget_tokens).dump();
+        serialize_chat_plan(params, effective_reasoning_budget_tokens).dump();
     const llama_dart_result copied = copy_to_buffer(plan, out_plan);
     if (copied != LLAMA_DART_SUCCESS) {
       return copied;
