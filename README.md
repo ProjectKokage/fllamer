@@ -246,8 +246,8 @@ void main() async {
   property-count bounds, and bounded strings with selected formats, primitive
   `type` unions including constrained nullable schemas, plus exact small
   inclusive/exclusive integer ranges with positive `multipleOf` filters. The
-  standalone `llamaJsonSchemaGrammar()` helper remains a deterministic
-  pure-Dart common-subset converter. See
+  standalone `llamaJsonSchemaGrammar()` compatibility helper delegates to the
+  same pinned native converter. See
   [structured output](doc/structured_output.md).
 - Experimental local image/audio chat from files or encoded bytes through a
   matching `mmprojPath`, with worker-isolate preprocessing, model-specific

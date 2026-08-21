@@ -42,9 +42,10 @@ Active tools and response-format grammar are mutually exclusive because the
 model template owns the tool-call grammar. Use `toolChoice: LlamaToolChoice.none()`
 when a request must apply structured output without allowing a tool call.
 
-`llamaJsonSchemaGrammar()` remains available when a caller needs synchronous,
-model-free Dart conversion. It intentionally implements a smaller deterministic
-subset and is not used by `GenerationConfig.jsonSchema`.
+`llamaJsonSchemaGrammar()` remains available as a synchronous compatibility
+helper. It opens the bundled native bridge and delegates to the same pinned
+upstream converter; `GenerationConfig.jsonSchema` remains the non-blocking
+worker-isolate path for application generation.
 
 Grammar enforcement constrains syntax, not model quality or semantic truth.
 Apps should still parse and validate generated JSON before using it.

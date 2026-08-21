@@ -7,5 +7,6 @@ library;
 export 'src/config.dart';
 export 'src/engine.dart';
 export 'src/errors.dart';
+export 'src/json_schema_grammar.dart';
 export 'src/model_info.dart';
 export 'src/rag.dart';

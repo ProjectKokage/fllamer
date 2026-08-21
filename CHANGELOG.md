@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Replaced the duplicate pure-Dart JSON Schema-to-GBNF implementation with a
+  thin compatibility helper over llama.cpp's pinned native converter.
 - Enforced explicit `enableThinking: false` for chat templates that expose
   paired reasoning markers by installing the existing native reasoning sampler
   with a zero budget. If a model still emits a reasoning start, the sampler

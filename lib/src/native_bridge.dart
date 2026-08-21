@@ -19,6 +19,7 @@ const _addSpecialAlways = 1;
 const _addSpecialIfContextEmpty = 2;
 const _maxModelDescriptionBytes = 1024 * 1024;
 const _maxChatTemplateBytes = 16 * 1024 * 1024;
+const _maxJsonSchemaGrammarBytes = 16 * 1024 * 1024;
 const _maxModelMetadataEntries = 65536;
 const _maxModelMetadataKeyBytes = 4096;
 const _maxModelMetadataValueBytes = 16 * 1024 * 1024;
@@ -62,6 +63,16 @@ final class NativeLlamaBridge {
 
   static Future<String> chatTemplate(LlamaModelConfig config) {
     return Isolate.run(() => _chatTemplateInWorker(config));
+  }
+
+  static String jsonSchemaGrammar(Map<String, Object?> schema) {
+    final bridge = tryOpen(null);
+    if (bridge == null) {
+      throw const NativeBridgeException(
+        'The native bridge is unavailable for JSON Schema conversion.',
+      );
+    }
+    return bridge._jsonSchemaGrammar(schema);
   }
 
   static Future<List<int>> tokenize(
@@ -832,6 +843,56 @@ final class NativeLlamaBridge {
     } finally {
       _bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
+    }
+  }
+
+  String _jsonSchemaGrammar(Map<String, Object?> schema) {
+    final bytes = utf8.encode(jsonEncode(schema));
+    if (bytes.length > _maxJsonSchemaGrammarBytes) {
+      throw ArgumentError.value(
+        schema,
+        'schema',
+        'encoded JSON must not exceed 16 MiB',
+      );
+    }
+
+    final input = calloc<ffi.Uint8>(bytes.length);
+    final out = calloc<llama_dart_buffer>();
+    try {
+      input.asTypedList(bytes.length).setAll(0, bytes);
+      final result = _bindings.llama_dart_json_schema_to_grammar(
+        input,
+        bytes.length,
+        out,
+      );
+      if (result == llama_dart_result.LLAMA_DART_ERROR_INVALID_ARGUMENT) {
+        throw ArgumentError.value(schema, 'schema', _lastError());
+      }
+      _check(result);
+      final data = out.ref.data;
+      final size = out.ref.size;
+      if (data == ffi.nullptr || size == 0) {
+        throw const NativeBridgeException(
+          'Native JSON Schema conversion returned an empty grammar.',
+        );
+      }
+      if (size > _maxJsonSchemaGrammarBytes) {
+        throw const UnsupportedFeatureException(
+          'Generated JSON Schema grammar exceeds the 16 MiB safety limit.',
+        );
+      }
+      try {
+        return utf8.decode(data.asTypedList(size));
+      } on FormatException catch (error) {
+        throw UnsupportedFeatureException(
+          'Generated JSON Schema grammar is not valid UTF-8.',
+          cause: error,
+        );
+      }
+    } finally {
+      _bindings.llama_dart_buffer_free(out.ref.data);
+      calloc.free(out);
+      calloc.free(input);
     }
   }
 
