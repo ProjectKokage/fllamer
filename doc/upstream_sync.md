@@ -211,6 +211,15 @@ state only when its committed token history is an exact prefix of the newly
 tokenized full prompt; a mismatch clears the context before evaluating the
 full prompt.
 
+ABI 42 appends `maximum_token_piece_bytes` to `llama_dart_model_info`.
+Model loading scans each vocabulary ID once with pinned
+`llama_token_to_piece(vocab, token, buffer, 0, 0, true)`. A negative return is
+its exact required byte count; conversion uses signed 64-bit arithmetic before
+negation. This uses the same zero stripping and special-token rendering as
+`append_token_piece`, without allocating a buffer per token. The result stays
+on the model handle and is copied by later metadata reads. Custom ABI 41
+bridges require a rebuild; Dart checks ABI compatibility before struct access.
+
 Bounded reasoning uses pinned `common_reasoning_budget_init` with vectors of
 start and end token sequences, plus `common_reasoning_budget_get_state` and
 `common_reasoning_budget_get_end_match`. All template-provided end alternatives

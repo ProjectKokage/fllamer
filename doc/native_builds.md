@@ -645,3 +645,50 @@ Current limitations:
 - Runtime loading still supports explicit `nativeLibraryPath` and
   `FLLAMER_NATIVE_LIBRARY`; app builds should verify the bundled library is
   discoverable on each target platform before release.
+
+## 2026-09-06 decoded token-piece bound verification
+
+The ABI 42 model-info change keeps the pinned llama.cpp revision unchanged.
+Both committed ffigen configurations regenerated the dynamic and native-assets
+bindings. The local macOS arm64 CMake build and CTest passed all three targets,
+including ABI/error handling, reasoning sampler, and exported-symbol checks.
+The bridge test decodes every vocabulary ID from the pinned GPT-2, Gemma 4,
+and Qwen 3.5 vocabulary fixtures, verifies that the metadata bounds every
+rendered piece, and witnesses equality for the largest piece. Repeated reads
+return the cached value; invalid-handle output clears it.
+
+The immutable TinyLlama `stories15M-q8_0.gguf` fixture documented above was
+verified at 26,671,328 bytes and SHA-256
+`2eda49203f2f044f3dddf29a7dd7cc861ef5a0340f518a19613d73ba6d9c06b6`.
+With `LLAMA_DART_TEST_MODEL` pointing to its external temporary path, the
+`weighted fixture warms prefills shifts and stops cleanly` test passed on
+macOS arm64 CPU with context 128, batch 32, and one thread. It additionally
+checks positive/repeated model metadata, generated-token allowance, and
+output length against the decoded-piece bound. An explicit test ChatML
+prompt additionally verifies both thinking-mode counts against the real
+loaded generation's prompt-token telemetry. The static formatter/counter
+parity test covers true and false modes for GPT-2, Gemma 4 and Qwen 3.5.
+This is host correctness
+coverage; it does not qualify mobile inference, GPU execution, model answer
+quality, or physical devices.
+
+Full `dart analyze --fatal-infos` passed. Final `dart test` and `flutter test`
+each passed 199 tests with 12 separately provisioned fixture tests skipped.
+
+The content-free native tokenizer probe also measured the following cached
+model metadata and the difference between omitted and explicit thinking mode
+for representative 128-message English, Japanese and mixed-language requests:
+
+| Vocabulary fixture | Maximum decoded piece bytes | Explicit Off count delta | Explicit On count delta |
+| --- | ---: | ---: | ---: |
+| GPT-2, explicit test ChatML | 128 | 0 | 0 |
+| Gemma 4, GGUF template | 48 | +3 | 0 |
+| Qwen 3.5, GGUF template | 128 | 0 | 0 |
+
+Gemma 4 tool replay produced the same mode deltas. The Qwen 3.5 vocabulary
+fixture's template rejected tool replay, which remains outside this probe's
+coverage. The measured deltas are fixture observations, not universal token
+margins: callers now count the selected native mode directly. The probe used
+vocabulary-only models and app planning arithmetic; it did not generate
+answers or measure multimodal preprocessing, private reasoning throughput,
+or model quality.

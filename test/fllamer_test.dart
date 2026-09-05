@@ -1570,6 +1570,7 @@ void main() {
 
       expect(info.description, 'gpt-2');
       expect(info.vocabSize, greaterThan(0));
+      expect(info.maximumTokenPieceBytes, greaterThan(0));
       expect(info.trainingContextSize, greaterThan(0));
       expect(info.embeddingSize, greaterThan(0));
       expect(info.inputEmbeddingSize, greaterThan(0));
@@ -1909,6 +1910,7 @@ void main() {
       }
       final modelConfig = LlamaModelConfig(
         modelPath: modelPath,
+        chatTemplate: 'chatml',
         nativeLibraryPath: bridgePath,
         contextSize: 128,
         batchSize: 32,
@@ -1926,6 +1928,12 @@ void main() {
       );
       final engine = await LlamaEngine.load(modelConfig);
       try {
+        final info = await engine.modelInfo();
+        expect(info.maximumTokenPieceBytes, greaterThan(0));
+        expect(
+          (await engine.modelInfo()).maximumTokenPieceBytes,
+          info.maximumTokenPieceBytes,
+        );
         final configuredContext = await engine.contextInfo();
         expect(configuredContext.kvCacheKeyType, KvCacheType.f32);
         expect(configuredContext.kvCacheValueType, KvCacheType.f16);
@@ -1965,6 +1973,16 @@ void main() {
             .toList();
         final baselineText = baseline.map((chunk) => chunk.text).join();
         expect(baselineText, isNotEmpty);
+        expect(
+          baselineText.length,
+          lessThanOrEqualTo(
+            generation.maxTokens * info.maximumTokenPieceBytes!,
+          ),
+        );
+        expect(
+          baseline.last.telemetry?.generatedTokens,
+          lessThanOrEqualTo(generation.maxTokens),
+        );
         final promptTokens = await LlamaTokenizer.tokenize(
           modelConfig,
           prompt,
@@ -2132,6 +2150,37 @@ void main() {
         expect(stepped.first.text, isNotEmpty);
         expect(stepped.last.isDone, isTrue);
         expect(stepped.last.telemetry?.generatedTokens, inInclusiveRange(1, 2));
+        for (final mode in <bool>[false, true]) {
+          await engine.reset();
+          final messages = <ChatMessage>[ChatMessage.user('Hello')];
+          final count = await engine.countChatTokens(
+            messages,
+            enableThinking: mode,
+          );
+          final formatted = await engine.formatChat(
+            messages,
+            enableThinking: mode,
+          );
+          expect(
+            count,
+            await engine.countTokens(
+              formatted,
+              addSpecial: true,
+              parseSpecial: true,
+            ),
+          );
+          final reply = await engine
+              .chat(
+                messages: messages,
+                config: GenerationConfig(
+                  maxTokens: 1,
+                  enableThinking: mode,
+                  temperature: 0,
+                ),
+              )
+              .toList();
+          expect(reply.last.telemetry!.promptTokens, count);
+        }
       } finally {
         await engine.close();
       }
@@ -3582,6 +3631,58 @@ void main() {
 
       expect(await prompt, contains('hello'));
     });
+
+    test(
+      'explicit thinking counts match native plan rendering for vocabulary fixtures',
+      () async {
+        if (!File(_nativeBridgePath).existsSync()) {
+          markTestSkipped(
+            'native bridge has not been built at $_nativeBridgePath',
+          );
+          return;
+        }
+        for (final vocab in <String>['gpt-2', 'gemma-4', 'qwen35']) {
+          final path = 'third_party/llama.cpp/models/ggml-vocab-$vocab.gguf';
+          if (!File(path).existsSync()) {
+            markTestSkipped('vocab fixture is missing at $path');
+            return;
+          }
+        }
+        for (final vocab in <String>['gpt-2', 'gemma-4', 'qwen35']) {
+          final config = LlamaModelConfig(
+            modelPath: 'third_party/llama.cpp/models/ggml-vocab-$vocab.gguf',
+            nativeLibraryPath: _nativeBridgePath,
+            chatTemplate: vocab == 'gpt-2' ? 'chatml' : null,
+          );
+          for (final mode in <bool>[false, true]) {
+            final messages = <ChatMessage>[
+              ChatMessage.system('Use the selected language.'),
+              ChatMessage.user('Explain季節の変化 with an example.'),
+            ];
+            final formatted = await LlamaChatTemplate.format(
+              config,
+              messages,
+              enableThinking: mode,
+            );
+            final count = await LlamaChatTemplate.countTokens(
+              config,
+              messages,
+              enableThinking: mode,
+            );
+            expect(
+              count,
+              await LlamaTokenizer.countTokens(
+                config,
+                formatted,
+                addSpecial: true,
+                parseSpecial: true,
+              ),
+              reason: '$vocab thinking=$mode',
+            );
+          }
+        }
+      },
+    );
 
     test('counts chat-template tokens with the upstream tokenizer', () async {
       final bridgePath = _nativeBridgePath;
@@ -9436,6 +9537,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_get_info(
   last_error = "";
   memset(out_info, 0, sizeof(*out_info));
   out_info->struct_size = sizeof(*out_info);
+  out_info->maximum_token_piece_bytes = 256;
   return LLAMA_DART_SUCCESS;
 }
 

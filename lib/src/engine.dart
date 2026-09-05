@@ -292,6 +292,7 @@ abstract final class LlamaChatTemplate {
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
+    bool? enableThinking,
   }) async {
     config.validate();
     final checkedMessages = _snapshotChatMessages(messages);
@@ -306,6 +307,7 @@ abstract final class LlamaChatTemplate {
       checkedMessages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: checkedToolCalling,
+      enableThinking: enableThinking,
     );
   }
 
@@ -314,6 +316,7 @@ abstract final class LlamaChatTemplate {
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
+    bool? enableThinking,
   }) async {
     if (messages.any((message) => message.hasNonTextParts)) {
       throw const UnsupportedFeatureException(
@@ -331,6 +334,7 @@ abstract final class LlamaChatTemplate {
       checkedMessages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: checkedToolCalling,
+      enableThinking: enableThinking,
     );
   }
 }
@@ -852,6 +856,7 @@ final class LlamaEngine {
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
+    bool? enableThinking,
   }) async {
     _ensureOpen();
     final checkedMessages = _snapshotChatMessages(messages);
@@ -865,14 +870,18 @@ final class LlamaEngine {
       checkedMessages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: checkedToolCalling,
+      enableThinking: enableThinking,
     );
   }
 
   /// Counts a fully templated text-only chat using the already-loaded model.
+  /// Pass the generation's [enableThinking] value to count that exact rendered
+  /// mode, including its private-reasoning prefix and native chat-plan path.
   Future<int> countChatTokens(
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
+    bool? enableThinking,
   }) async {
     _ensureOpen();
     if (messages.any((message) => message.hasNonTextParts)) {
@@ -889,6 +898,7 @@ final class LlamaEngine {
       checkedMessages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: checkedToolCalling,
+      enableThinking: enableThinking,
     );
   }
 

@@ -19,6 +19,28 @@
 #include <string>
 #include <vector>
 
+// Check cached metadata against actual emitted bytes for every vocabulary ID.
+static void verify_token_piece_bound(const llama_dart_model *model) {
+  llama_dart_model_info info{};
+  info.struct_size = sizeof(info);
+  assert(llama_dart_model_get_info(model, &info) == LLAMA_DART_SUCCESS);
+  assert(info.maximum_token_piece_bytes > 0);
+  std::vector<uint8_t> piece(info.maximum_token_piece_bytes);
+  size_t largest = 0;
+  for (int32_t token = 0; token < info.n_vocab; ++token) {
+    size_t size = 0;
+    assert(llama_dart_model_detokenize(model, &token, 1, piece.data(),
+               piece.size(), &size, 0, 1) == LLAMA_DART_SUCCESS);
+    assert(size <= info.maximum_token_piece_bytes);
+    largest = std::max(largest, size);
+  }
+  assert(largest == info.maximum_token_piece_bytes);
+  llama_dart_model_info again{};
+  again.struct_size = sizeof(again);
+  assert(llama_dart_model_get_info(model, &again) == LLAMA_DART_SUCCESS);
+  assert(again.maximum_token_piece_bytes == info.maximum_token_piece_bytes);
+}
+
 int main() {
   using namespace llama_dart_bridge_internal;
 
@@ -486,10 +508,12 @@ int main() {
   llama_dart_model_info stale_model_info{};
   stale_model_info.struct_size = sizeof(stale_model_info);
   stale_model_info.n_vocab = 123;
+  stale_model_info.maximum_token_piece_bytes = 123;
   assert(llama_dart_model_get_info(nullptr, &stale_model_info) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(stale_model_info.struct_size == sizeof(stale_model_info));
   assert(stale_model_info.n_vocab == 0);
+  assert(stale_model_info.maximum_token_piece_bytes == 0);
 
   llama_dart_model_free(nullptr);
   llama_dart_lora_free(nullptr);
@@ -984,10 +1008,20 @@ int main() {
                      sizeof(explicit_chat_template)) == 0);
   llama_dart_buffer_free(effective_template.data);
 
+  llama_dart_model_load_config qwen_fixture_config = fixture_config;
+  const char *qwen_fixture_path = LLAMA_DART_TEST_QWEN_VOCAB_MODEL;
+  qwen_fixture_config.model_path_data = reinterpret_cast<const uint8_t *>(qwen_fixture_path);
+  qwen_fixture_config.model_path_size = std::strlen(qwen_fixture_path);
+  llama_dart_model *qwen_model = nullptr;
+  assert(llama_dart_model_load(&qwen_fixture_config, &qwen_model) == LLAMA_DART_SUCCESS);
+  verify_token_piece_bound(qwen_model);
+  llama_dart_model_free(qwen_model);
+
   llama_dart_model_info info{};
   info.struct_size = sizeof(info);
   assert(llama_dart_model_get_info(model, &info) == LLAMA_DART_SUCCESS);
   assert(info.n_vocab > 0);
+  verify_token_piece_bound(model);
   assert(info.n_ctx_train > 0);
   assert(info.n_embd > 0);
   assert(info.n_embd_inp > 0);
@@ -1235,6 +1269,7 @@ int main() {
   assert(llama_dart_model_load(&tool_fixture_config, &tool_model) ==
          LLAMA_DART_SUCCESS);
   assert(tool_model != nullptr);
+  verify_token_piece_bound(tool_model);
   effective_template = {};
   assert(llama_dart_model_get_chat_template(tool_model, &effective_template) ==
          LLAMA_DART_SUCCESS);

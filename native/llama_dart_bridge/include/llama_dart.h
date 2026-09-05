@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 41u
+#define LLAMA_DART_ABI_VERSION 42u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -180,6 +180,9 @@ typedef struct llama_dart_model_info {
   uint8_t add_bos;
   uint8_t add_eos;
   uint8_t add_sep;
+  // Maximum decoded bytes for one vocabulary token, with lstrip=0 and special
+  // rendering enabled, exactly as generation emits it. Cached at model load.
+  uint32_t maximum_token_piece_bytes;
 } llama_dart_model_info;
 
 typedef struct llama_dart_context_config {

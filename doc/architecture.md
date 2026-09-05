@@ -185,3 +185,33 @@ and host `glslc`. An app may override only the header root when required; no
 host loader enters the artifact. This defines
 reproducible build inputs; it does not replace package, loader, GPU, model, or
 physical-device validation.
+
+## Generated-text resource bounds
+
+`LlamaModelInfo.maximumTokenPieceBytes` reports the exact largest decoded
+vocabulary piece under the bridge's generation settings (`lstrip=0`, special
+rendering enabled). The model worker computes it once during loading and
+retains it with that model. The nullable Dart field preserves existing custom
+metadata constructors; native ABI 42 always provides the value. A model with
+no usable vocabulary can report zero and cannot supply a positive generation
+bound.
+
+An actual total generation allowance of O tokens produces at most O times
+this byte maximum. The total counts private reasoning, sampler-forced closing
+delimiters, speculative accepted/replacement tokens, and visible text. Each
+native step respects remaining total tokens; UTF-8 completion does not append
+extra tokens after the total limit. Dart's malformed UTF-8 replacement uses
+no more UTF-16 code units than input bytes. Consumers must check integer
+multiplication before allocation and distinguish this decoded output bound
+from arbitrary input text, JSON serialization, and re-encoded replacement
+characters. This metadata adds no text-length or reply-token cap of its own.
+
+Chat formatting and token counting accept the same nullable `enableThinking`
+mode as generation. An explicit value selects the native chat-plan renderer;
+null preserves the original template-default path. Static helpers load a
+vocabulary-only model in their worker, while `LlamaEngine` sends the mode to
+its existing model worker. The count includes the rendered reasoning prefix,
+using the exact native tokenizer with special tokens. A reasoning sampler
+budget changes generation policy, not prompt text. Callers cache counts by
+both messages and thinking mode and count the resolved mode again when an
+automatic router makes its decision.

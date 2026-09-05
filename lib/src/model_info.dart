@@ -75,6 +75,7 @@ final class LlamaModelInfo {
     this.chatTemplate,
     required this.vocabType,
     required this.vocabSize,
+    this.maximumTokenPieceBytes,
     required this.trainingContextSize,
     required this.embeddingSize,
     required this.inputEmbeddingSize,
@@ -110,6 +111,16 @@ final class LlamaModelInfo {
   final String? chatTemplate;
   final int vocabType;
   final int vocabSize;
+
+  /// Largest decoded token piece in bytes, including special-token rendering.
+  ///
+  /// The native bridge scans the loaded vocabulary once using the same
+  /// `lstrip=0, special=true` conversion as generation. Multiplying by an
+  /// actual total generated-token limit bounds raw generated UTF-8 bytes
+  /// (and decoded UTF-16 code units, including malformed-byte replacement).
+  /// This is not a bound on arbitrary input text before tokenization.
+  /// Null is reserved for non-native implementations without this metadata.
+  final int? maximumTokenPieceBytes;
   final int trainingContextSize;
   final int embeddingSize;
   final int inputEmbeddingSize;

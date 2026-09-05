@@ -1095,6 +1095,9 @@ final class llama_dart_model_info extends ffi.Struct {
 
   @ffi.Uint8()
   external int add_sep;
+
+  @ffi.Uint32()
+  external int maximum_token_piece_bytes;
 }
 
 final class llama_dart_context_config extends ffi.Struct {
@@ -1456,4 +1459,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 41;
+const int LLAMA_DART_ABI_VERSION = 42;

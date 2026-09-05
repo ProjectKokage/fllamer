@@ -69,6 +69,7 @@ struct llama_dart_model {
   llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
   bool check_tensors = true;
   bool vocab_only = false;
+  uint32_t maximum_token_piece_bytes = 0;
 };
 
 struct llama_dart_context {
@@ -3182,7 +3183,25 @@ llama_dart_result llama_dart_model_load(
                   "llama_model_load_from_file returned null");
     }
 
-    handle->model = loaded;
+    // Own the loaded model while inspecting its vocabulary, so an exception
+    // cannot leak it before the public handle is published.
+    std::unique_ptr<llama_model, decltype(&llama_model_free)> owned_model(
+        loaded, llama_model_free);
+    const llama_vocab *vocab = llama_model_get_vocab(loaded);
+    if (vocab != nullptr) {
+      char unused = 0;
+      for (int32_t token = 0; token < llama_vocab_n_tokens(vocab); ++token) {
+        // A zero-capacity query reports the exact required byte count as a
+        // negative value. Keep a non-null address even for an empty piece.
+        const int32_t result =
+            llama_token_to_piece(vocab, token, &unused, 0, 0, true);
+        const uint32_t size = static_cast<uint32_t>(
+            result < 0 ? -static_cast<int64_t>(result) : result);
+        handle->maximum_token_piece_bytes =
+            std::max(handle->maximum_token_piece_bytes, size);
+      }
+    }
+    handle->model = owned_model.release();
     handle->gpu_backend = effective_backend;
     handle->n_gpu_layers = params.n_gpu_layers;
     handle->simulator_auto_cpu = gpu_policy.simulator_auto_cpu;
@@ -3250,6 +3269,7 @@ llama_dart_model_get_info(const llama_dart_model *model,
   out_info->vocab_type =
       vocab == nullptr ? 0 : static_cast<int32_t>(llama_vocab_type(vocab));
   out_info->n_vocab = vocab == nullptr ? 0 : llama_vocab_n_tokens(vocab);
+  out_info->maximum_token_piece_bytes = model->maximum_token_piece_bytes;
   out_info->token_bos = vocab == nullptr ? LLAMA_TOKEN_NULL
                                          : llama_vocab_bos(vocab);
   out_info->token_eos = vocab == nullptr ? LLAMA_TOKEN_NULL

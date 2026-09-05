@@ -1,5 +1,14 @@
 ## Unreleased
 
+- Added nullable `LlamaModelInfo.maximumTokenPieceBytes`. Native model loading
+  computes and caches the exact largest decoded vocabulary piece, including
+  special-token rendering, for callers that derive output resource bounds.
+  Native ABI is now 42: rebuild custom bridges and regenerate both bindings;
+  ABI 41 binaries are rejected before the expanded model-info struct is used.
+- Added optional `enableThinking` to static and loaded-model chat formatting
+  and counting. Counts now use the same explicit native chat-plan mode as
+  generation, so callers need no guessed reasoning-prefix token margin.
+
 - Replaced the duplicate pure-Dart JSON Schema-to-GBNF implementation with a
   thin compatibility helper over llama.cpp's pinned native converter.
 - Enforced explicit `enableThinking: false` for chat templates that expose

@@ -103,13 +103,14 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge (current ABI 41): version, capabilities, backend
+- Native ABI smoke bridge (current ABI 42): version, capabilities, backend
   init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.
 - Worker-isolate model inspection that loads GGUF metadata with `vocab_only` and
   frees the native handle before returning, including tokenizer special-token
-  metadata, file type/quantization name, and NextN/MTP layer count.
+  metadata, maximum decoded token-piece bytes, file type/quantization name,
+  and NextN/MTP layer count.
 - Worker-isolate GGUF metadata reads through `LlamaModel.metadata()`, with a
   typed `LlamaModel.architecture()` accessor for `general.architecture`.
   Description and metadata allocations are bounded before copying untrusted

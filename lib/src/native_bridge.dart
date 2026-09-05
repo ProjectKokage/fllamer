@@ -141,6 +141,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     return Isolate.run(
       () => _formatChatInWorker(
@@ -148,6 +149,7 @@ final class NativeLlamaBridge {
         messages,
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
+        enableThinking: enableThinking,
       ),
     );
   }
@@ -157,6 +159,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     return Isolate.run(
       () => _countChatTokensInWorker(
@@ -164,6 +167,7 @@ final class NativeLlamaBridge {
         messages,
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
+        enableThinking: enableThinking,
       ),
     );
   }
@@ -539,6 +543,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     return _withLoadedModel(
       config,
@@ -547,6 +552,7 @@ final class NativeLlamaBridge {
         messages,
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
+        enableThinking: enableThinking,
       ),
     );
   }
@@ -556,6 +562,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     final prepared = _prepareMultimodalChat(messages, _multimodalMarker);
     return _renderPreparedChat(
@@ -563,6 +570,7 @@ final class NativeLlamaBridge {
       prepared.messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
+      enableThinking: enableThinking,
     ).prompt;
   }
 
@@ -651,6 +659,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     return _withLoadedModel(
       config,
@@ -659,6 +668,7 @@ final class NativeLlamaBridge {
         messages,
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
+        enableThinking: enableThinking,
       ),
     );
   }
@@ -668,12 +678,14 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     final prompt = _formatChat(
       model,
       messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
+      enableThinking: enableThinking,
     );
     return _tokenize(
       model,
@@ -751,6 +763,7 @@ final class NativeLlamaBridge {
         chatTemplate: _tryReadChatTemplate(model),
         vocabType: info.ref.vocab_type,
         vocabSize: info.ref.n_vocab,
+        maximumTokenPieceBytes: info.ref.maximum_token_piece_bytes,
         trainingContextSize: info.ref.n_ctx_train,
         embeddingSize: info.ref.n_embd,
         inputEmbeddingSize: info.ref.n_embd_inp,
@@ -1237,6 +1250,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     final bridge = tryOpen(config.nativeLibraryPath);
     if (bridge == null) {
@@ -1247,6 +1261,7 @@ final class NativeLlamaBridge {
       messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
+      enableThinking: enableThinking,
     );
   }
 
@@ -1255,6 +1270,7 @@ final class NativeLlamaBridge {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     final bridge = tryOpen(config.nativeLibraryPath);
     if (bridge == null) {
@@ -1265,6 +1281,7 @@ final class NativeLlamaBridge {
       messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
+      enableThinking: enableThinking,
     );
   }
 
@@ -2593,6 +2610,7 @@ final class NativeLlamaEngineSession {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) async {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
@@ -2603,6 +2621,7 @@ final class NativeLlamaEngineSession {
         messages,
         addAssistantPrompt,
         toolCalling,
+        enableThinking,
         reply.sendPort,
       ),
     );
@@ -2620,6 +2639,7 @@ final class NativeLlamaEngineSession {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) async {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
@@ -2630,6 +2650,7 @@ final class NativeLlamaEngineSession {
         messages,
         addAssistantPrompt,
         toolCalling,
+        enableThinking,
         reply.sendPort,
       ),
     );
@@ -3051,12 +3072,14 @@ final class _NativeEngineHandles {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     return bridge._formatChat(
       model,
       messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
+      enableThinking: enableThinking,
     );
   }
 
@@ -3064,12 +3087,14 @@ final class _NativeEngineHandles {
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
+    bool? enableThinking,
   }) {
     return bridge._countChatTokens(
       model,
       messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
+      enableThinking: enableThinking,
     );
   }
 
@@ -4073,12 +4098,14 @@ final class _EngineWorkerFormatChat {
     this.messages,
     this.addAssistantPrompt,
     this.toolCalling,
+    this.enableThinking,
     this.reply,
   );
 
   final List<ChatMessage> messages;
   final bool addAssistantPrompt;
   final LlamaToolCallingConfig toolCalling;
+  final bool? enableThinking;
   final SendPort reply;
 }
 
@@ -4087,12 +4114,14 @@ final class _EngineWorkerCountChatTokens {
     this.messages,
     this.addAssistantPrompt,
     this.toolCalling,
+    this.enableThinking,
     this.reply,
   );
 
   final List<ChatMessage> messages;
   final bool addAssistantPrompt;
   final LlamaToolCallingConfig toolCalling;
+  final bool? enableThinking;
   final SendPort reply;
 }
 
@@ -4762,6 +4791,7 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             message.messages,
             addAssistantPrompt: message.addAssistantPrompt,
             toolCalling: message.toolCalling,
+            enableThinking: message.enableThinking,
           ),
         );
       } catch (error) {
@@ -4778,6 +4808,7 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             message.messages,
             addAssistantPrompt: message.addAssistantPrompt,
             toolCalling: message.toolCalling,
+            enableThinking: message.enableThinking,
           ),
         );
       } catch (error) {
