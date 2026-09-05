@@ -642,6 +642,7 @@ final class GenerationChunk {
     this.telemetry,
     this.assistantMessage,
     this.stopReason,
+    this.generatedTokens,
   });
 
   final String text;
@@ -651,6 +652,13 @@ final class GenerationChunk {
 
   /// Why a terminal chunk ended. Non-terminal chunks have no stop reason.
   final GenerationStopReason? stopReason;
+
+  /// Increasing cumulative token count after a completed native decode step.
+  ///
+  /// Present only on content-free progress chunks, independently of text
+  /// coalescing. No progress is emitted while a native call is blocked or
+  /// before prompt evaluation completes. A step can produce no decoded text.
+  final int? generatedTokens;
 }
 
 final class LlamaEngine {
@@ -697,6 +705,7 @@ final class LlamaEngine {
           (chunk) => GenerationChunk(
             text: chunk.text,
             isDone: chunk.isDone,
+            generatedTokens: chunk.generatedTokens,
             telemetry: chunk.telemetry,
             assistantMessage: chunk.assistantMessage,
             stopReason: chunk.isDone ? chunk.telemetry?.stopReason : null,
@@ -733,6 +742,7 @@ final class LlamaEngine {
           (chunk) => GenerationChunk(
             text: chunk.text,
             isDone: chunk.isDone,
+            generatedTokens: chunk.generatedTokens,
             telemetry: chunk.telemetry,
             stopReason: chunk.isDone ? chunk.telemetry?.stopReason : null,
           ),
@@ -768,6 +778,7 @@ final class LlamaEngine {
           (chunk) => GenerationChunk(
             text: chunk.text,
             isDone: chunk.isDone,
+            generatedTokens: chunk.generatedTokens,
             telemetry: chunk.telemetry,
             stopReason: chunk.isDone ? chunk.telemetry?.stopReason : null,
           ),

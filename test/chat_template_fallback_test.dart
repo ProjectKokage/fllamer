@@ -75,6 +75,7 @@ void main() {
                 enableThinking: false,
               ),
             )
+            .where((chunk) => chunk.generatedTokens == null)
             .toList();
 
         expect(chunks.single.text, 'terminal');
@@ -111,6 +112,7 @@ void main() {
                   reasoningBudgetTokens: 8,
                 ),
               )
+              .where((chunk) => chunk.generatedTokens == null)
               .toList();
 
           expect(chunks.single.text, 'terminal');
@@ -209,6 +211,7 @@ void main() {
                   grammarRoot: 'answer',
                 ),
               )
+              .where((chunk) => chunk.generatedTokens == null)
               .toList();
 
           expect(chunks, hasLength(1));
@@ -255,6 +258,7 @@ void main() {
                   },
                 ),
               )
+              .where((chunk) => chunk.generatedTokens == null)
               .toList();
 
           expect(chunks, hasLength(1));
@@ -304,6 +308,7 @@ void main() {
                 ],
                 config: const GenerationConfig(maxTokens: 1),
               )
+              .where((chunk) => chunk.generatedTokens == null)
               .toList();
 
           expect(chunks.single.text, 'terminal');

@@ -337,6 +337,23 @@ Current verification:
   to run opt-in warm-up, prompt-only prefill and continuation,
   explicit/automatic context-shift continuation, and deterministic stop-token
   generation coverage.
+- The 2026-09-06 streaming-progress check on macOS 26.6.2 arm64 passed the
+  complete Dart and Flutter suites (201 tests each; 12 explicit optional-fixture
+  skips), native CTest (3/3), and the weighted TinyLlama Q8 CPU test below.
+  The compiled fake bridge separately verified split UTF-8 pieces, unchanged
+  token counts, absence of progress during a blocked native call, one batch
+  across pause/resume, and cancellation followed by recovery. The weighted
+  test used the exact `stories15M-q8_0.gguf` identity in the table below,
+  context 128, batch 32, one generation/batch thread, and CPU with KV offload
+  disabled; it checked completed-step counts against actual native telemetry.
+  These checks cover the host bridge and stream ownership, not mobile device
+  performance.
+
+  ```sh
+  LLAMA_DART_TEST_MODEL=/private/tmp/fllamer-speculative-fixture/stories15M-q8_0.gguf \
+    dart test test/fllamer_test.dart \
+    --plain-name 'weighted fixture warms prefills shifts and stops cleanly'
+  ```
 - Set `LLAMA_DART_TEST_EMBEDDING_MODEL` to the pinned Apache-2.0
   `all-MiniLM-L6-v2-Q4_K_M.gguf` fixture to run real single and same-context
   batch embedding coverage. The fixture is 20,999,104 bytes with SHA-256

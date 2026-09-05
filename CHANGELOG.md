@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Added content-free `GenerationChunk.generatedTokens` progress events after
+  completed native steps, independently of streamed text coalescing. Progress
+  preserves one outstanding worker batch and does not act as a timer heartbeat.
+  Consumers that count text chunks can filter on `generatedTokens == null`.
+
 - Added nullable `LlamaModelInfo.maximumTokenPieceBytes`. Native model loading
   computes and caches the exact largest decoded vocabulary piece, including
   special-token rendering, for callers that derive output resource bounds.

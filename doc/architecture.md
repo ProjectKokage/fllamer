@@ -84,7 +84,16 @@ decode steps internally. `LlamaEngine.complete` and `chat` use a worker
 start/step/dispose protocol for the native generation handle. Each caller
 request permits at most one bounded native batch, `streamChunkTokens` coalesces
 normal token steps, and a paused subscription stops requesting subsequent
-batches. Cancellation can dispose an idle paused generation; context/state/LoRA
+batches. After every successful native `generation_next` call whose cumulative
+`generated_tokens` increased, the worker sends a content-free progress message
+independently of text coalescing. This message becomes
+`GenerationChunk.generatedTokens`; it never completes the outstanding request
+or starts another native batch. One in-flight batch queues at most
+`streamChunkTokens` progress events plus its one text/terminal reply, including
+while paused. An incomplete UTF-8 piece can advance progress without text;
+blocked native calls and prefill produce no synthetic heartbeat. Cancellation
+retires the reply port, so late progress cannot revive a stream.
+Cancellation can dispose an idle paused generation; context/state/LoRA
 commands received meanwhile fail with a typed busy error, and a second stream is
 rejected before it can affect the active context. Cancelling a stream awaits
 worker disposal and resets the context before releasing the engine's generation

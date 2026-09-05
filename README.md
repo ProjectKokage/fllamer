@@ -190,8 +190,12 @@ void main() async {
   prefetched or restored non-empty context, with prior-session sampler penalty
   history preserved across successful requests. Streaming uses a worker
   start/step/dispose protocol: `streamChunkTokens` coalesces up to four tokens by
-  default, paused subscriptions stop requesting native steps, and a second
-  active or pending stream is rejected with a typed generation error.
+  default. Separate content-free `GenerationChunk.generatedTokens` events
+  report increasing native token counts after each completed step, even when
+  UTF-8 text is incomplete or held for coalescing. They do not advance the
+  worker request or report progress during blocked native work. Paused
+  subscriptions stop requesting later batches, and a second active or pending
+  stream is rejected with a typed generation error.
   Cancelling a subscription awaits native cleanup and resets its context before
   another request can start, so partial prompt/output state is not retained.
 - Sampling controls for temperature, top-k, top-p, min-p, typical-p,

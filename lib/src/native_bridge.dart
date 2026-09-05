@@ -2168,6 +2168,7 @@ final class NativeLlamaEngineSession {
       bool isDone,
       GenerationTelemetry? telemetry,
       ChatMessage? assistantMessage,
+      int? generatedTokens,
     })
   >
   completeChatStream(
@@ -2195,6 +2196,7 @@ final class NativeLlamaEngineSession {
       bool isDone,
       GenerationTelemetry? telemetry,
       ChatMessage? assistantMessage,
+      int? generatedTokens,
     })
   >
   completeStream(String prompt, GenerationConfig config) {
@@ -2212,6 +2214,7 @@ final class NativeLlamaEngineSession {
       bool isDone,
       GenerationTelemetry? telemetry,
       ChatMessage? assistantMessage,
+      int? generatedTokens,
     })
   >
   _streamGeneration(Object Function(int id, SendPort reply) createMessage) {
@@ -2221,6 +2224,7 @@ final class NativeLlamaEngineSession {
         bool isDone,
         GenerationTelemetry? telemetry,
         ChatMessage? assistantMessage,
+        int? generatedTokens,
       })
     >
     controller;
@@ -2281,6 +2285,7 @@ final class NativeLlamaEngineSession {
             bool isDone,
             GenerationTelemetry? telemetry,
             ChatMessage? assistantMessage,
+            int? generatedTokens,
           })
         >(
           onListen: () {
@@ -2316,6 +2321,19 @@ final class NativeLlamaEngineSession {
               handleWorkerFailure,
             );
             reply!.listen((message) {
+              if (terminalResponseReceived || controller.isClosed) return;
+              if (message is _EngineWorkerStreamProgress) {
+                // Progress belongs to the outstanding batch. It neither
+                // completes that request nor permits another native batch.
+                controller.add((
+                  text: '',
+                  isDone: false,
+                  telemetry: null,
+                  assistantMessage: null,
+                  generatedTokens: message.generatedTokens,
+                ));
+                return;
+              }
               waitingForWorker = false;
               if (message is _EngineWorkerStreamChunk) {
                 if (message.isDone) {
@@ -2329,6 +2347,7 @@ final class NativeLlamaEngineSession {
                     isDone: message.isDone,
                     telemetry: message.telemetry,
                     assistantMessage: message.assistantMessage,
+                    generatedTokens: null,
                   ));
                 }
                 if (message.isDone) {
@@ -3833,7 +3852,7 @@ final class _NativeStreamingGeneration {
     GenerationTelemetry? telemetry,
     ChatMessage? assistantMessage,
   })
-  next() {
+  next({required void Function(int generatedTokens) onProgress}) {
     if (_closed || _generation == ffi.nullptr) {
       throw const ResourceDisposedException('Native generation is closed.');
     }
@@ -3855,6 +3874,11 @@ final class _NativeStreamingGeneration {
           _done,
         ),
       );
+      final generatedTokens = _stats.ref.generated_tokens;
+      if (generatedTokens > _generatedTokens) {
+        _generatedTokens = generatedTokens;
+        onProgress(generatedTokens);
+      }
       var text = '';
       try {
         final data = _out.ref.data;
@@ -3869,7 +3893,6 @@ final class _NativeStreamingGeneration {
       }
 
       nativeSteps += 1;
-      _generatedTokens = _stats.ref.generated_tokens;
       final isDone = _done.value != 0;
       if (isDone) {
         text += _decoder.close();
@@ -4265,6 +4288,12 @@ final class _EngineWorkerText {
   final ChatMessage? assistantMessage;
 }
 
+final class _EngineWorkerStreamProgress {
+  const _EngineWorkerStreamProgress(this.generatedTokens);
+
+  final int generatedTokens;
+}
+
 final class _EngineWorkerStreamChunk {
   const _EngineWorkerStreamChunk(
     this.text,
@@ -4595,7 +4624,10 @@ void _engineWorkerMain(_EngineWorkerStart start) {
       return;
     }
     try {
-      final chunk = generation.next();
+      final chunk = generation.next(
+        onProgress: (generatedTokens) =>
+            reply.send(_EngineWorkerStreamProgress(generatedTokens)),
+      );
       if (chunk.isDone) {
         Object? closeError = closeStreamingGeneration();
         if (closeError != null) {

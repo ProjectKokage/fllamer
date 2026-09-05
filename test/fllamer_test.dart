@@ -850,7 +850,9 @@ void main() {
           config: GenerationConfig(loraScales: requestScales),
         );
         requestScales[adapter.id] = 0.5;
-        final chunks = await request.toList();
+        final chunks = await request
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
 
         expect(chunks, hasLength(1));
         expect(chunks.single.text, 'override-ok');
@@ -860,13 +862,17 @@ void main() {
         expect((await engine.contextInfo()).contextSize, 128);
         expect((await engine.loraAdapters()).single.scale, 0.25);
 
-        final global = await engine.chat(messages: messages).toList();
+        final global = await engine
+            .chat(messages: messages)
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
         expect(global.single.text, 'global-ok');
         final disabled = await engine
             .chat(
               messages: messages,
               config: const GenerationConfig(loraScales: <int, double>{}),
             )
+            .where((chunk) => chunk.generatedTokens == null)
             .toList();
         expect(disabled.single.text, 'disabled-ok');
         await expectLater(
@@ -877,11 +883,13 @@ void main() {
                   loraScales: <int, double>{adapter.id: 0.5},
                 ),
               )
+              .where((chunk) => chunk.generatedTokens == null)
               .toList(),
           throwsA(isA<CancelledException>()),
         );
         final restoredAfterCancellation = await engine
             .chat(messages: messages)
+            .where((chunk) => chunk.generatedTokens == null)
             .toList();
         expect(restoredAfterCancellation.single.text, 'global-ok');
         await expectLater(
@@ -892,10 +900,14 @@ void main() {
                   loraScales: <int, double>{999: 1},
                 ),
               )
+              .where((chunk) => chunk.generatedTokens == null)
               .toList(),
           throwsA(isA<LoraException>()),
         );
-        final restored = await engine.chat(messages: messages).toList();
+        final restored = await engine
+            .chat(messages: messages)
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
         expect(restored.single.text, 'global-ok');
       } finally {
         await engine.close();
@@ -956,8 +968,14 @@ void main() {
             )
             .toList();
 
-        expect(reused.single.text, 'A');
-        expect(reset.single.text, 'a');
+        expect(
+          reused.where((chunk) => chunk.generatedTokens == null).single.text,
+          'A',
+        );
+        expect(
+          reset.where((chunk) => chunk.generatedTokens == null).single.text,
+          'a',
+        );
         expect(await File(fixture.markerPath).readAsString(), 'Aa');
       } finally {
         await engine.close();
@@ -997,6 +1015,7 @@ void main() {
               )
               .listen(
                 (chunk) {
+                  if (chunk.generatedTokens != null) return;
                   chunks.add(chunk);
                   if (chunks.length == 1) {
                     subscription.pause();
@@ -1046,6 +1065,126 @@ void main() {
       },
     );
 
+    test(
+      'completed native steps report progress before coalesced UTF-8 text',
+      () async {
+        final fixture = await _buildStreamingCaptureBridge(delayedUtf8: true);
+        if (fixture == null) {
+          markTestSkipped('C compiler is not available for fake bridge build');
+          return;
+        }
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: fixture.markerPath,
+            nativeLibraryPath: fixture.libraryPath,
+          ),
+        );
+        try {
+          final chunks = <GenerationChunk>[];
+          final firstProgress = Completer<void>();
+          final done = Completer<void>();
+          late final StreamSubscription<GenerationChunk> subscription;
+          subscription = engine
+              .complete(
+                prompt: 'go',
+                config: const GenerationConfig(
+                  maxTokens: 6,
+                  streamChunkTokens: 3,
+                ),
+              )
+              .listen(
+                (chunk) {
+                  chunks.add(chunk);
+                  if (chunk.generatedTokens == 1) {
+                    subscription.pause();
+                    firstProgress.complete();
+                  }
+                },
+                onError: done.completeError,
+                onDone: done.complete,
+              );
+          await firstProgress.future;
+          expect(chunks.single.text, isEmpty);
+          expect(chunks.single.isDone, isFalse);
+          expect(chunks.single.telemetry, isNull);
+          expect(chunks.single.assistantMessage, isNull);
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          // The second FFI call is blocked. No synthetic heartbeat or extra
+          // stream request may appear while it has not completed.
+          expect(chunks, hasLength(1));
+          expect(await File(fixture.markerPath).length(), 1);
+          // Resuming during an outstanding native batch must not request a
+          // second batch. Pause again before the delayed call completes.
+          subscription.resume();
+          subscription.pause();
+          await Future<void>.delayed(const Duration(milliseconds: 350));
+          expect(await File(fixture.markerPath).length(), 3);
+          expect(chunks, hasLength(1));
+          subscription.resume();
+          await done.future;
+          expect(chunks.map((chunk) => chunk.generatedTokens), <int?>[
+            1,
+            2,
+            3,
+            null,
+            4,
+            5,
+            6,
+            null,
+          ]);
+          expect(chunks.map((chunk) => chunk.text), <String>[
+            '',
+            '',
+            '',
+            '€',
+            '',
+            '',
+            '',
+            '€',
+          ]);
+          expect(chunks.last.isDone, isTrue);
+          await subscription.cancel();
+        } finally {
+          await engine.close();
+        }
+      },
+    );
+
+    test('unchanged native token counts are not progress', () async {
+      final fixture = await _buildStreamingCaptureBridge(
+        unchangedMiddleCount: true,
+      );
+      if (fixture == null) {
+        markTestSkipped('C compiler is not available for fake bridge build');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: fixture.markerPath,
+          nativeLibraryPath: fixture.libraryPath,
+        ),
+      );
+      try {
+        final chunks = await engine
+            .complete(
+              prompt: 'go',
+              config: const GenerationConfig(
+                maxTokens: 3,
+                streamChunkTokens: 3,
+              ),
+            )
+            .toList();
+        expect(chunks.map((chunk) => chunk.generatedTokens), <int?>[
+          1,
+          3,
+          null,
+        ]);
+        expect(chunks.last.text, 'abc');
+      } finally {
+        await engine.close();
+      }
+    });
+
     test('stream cancellation awaits reset and permits recovery', () async {
       final fixture = await _buildStreamingCaptureBridge();
       if (fixture == null) {
@@ -1073,6 +1212,8 @@ void main() {
             )
             .listen((chunk) {
               if (!firstChunk.isCompleted) {
+                expect(chunk.generatedTokens, 1);
+                expect(chunk.text, isEmpty);
                 subscription.pause();
                 firstChunk.complete();
               }
@@ -2145,9 +2286,17 @@ void main() {
               ),
             )
             .toList();
-        expect(stepped, hasLength(2));
-        expect(stepped.first.isDone, isFalse);
-        expect(stepped.first.text, isNotEmpty);
+        final steppedText = stepped
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
+        expect(steppedText, hasLength(2));
+        expect(steppedText.first.isDone, isFalse);
+        expect(steppedText.first.text, isNotEmpty);
+        final progress = stepped
+            .map((chunk) => chunk.generatedTokens)
+            .whereType<int>()
+            .toList();
+        expect(progress, orderedEquals(<int>[1, 2]));
         expect(stepped.last.isDone, isTrue);
         expect(stepped.last.telemetry?.generatedTokens, inInclusiveRange(1, 2));
         for (final mode in <bool>[false, true]) {
@@ -8707,7 +8856,10 @@ LLAMA_DART_EXPORT const char *llama_dart_last_error_message(void) {
 }
 
 Future<({String libraryPath, String markerPath})?>
-_buildStreamingCaptureBridge() async {
+_buildStreamingCaptureBridge({
+  bool delayedUtf8 = false,
+  bool unchangedMiddleCount = false,
+}) async {
   if (Platform.isWindows) {
     return null;
   }
@@ -8719,7 +8871,10 @@ _buildStreamingCaptureBridge() async {
   final marker = File('${temp.path}${Platform.pathSeparator}steps.bin');
   try {
     await marker.writeAsBytes(const <int>[]);
-    await source.writeAsString(r'''
+    await source.writeAsString(
+      '#define DELAYED_UTF8 ${delayedUtf8 ? 1 : 0}\n'
+      '#define UNCHANGED_MIDDLE_COUNT ${unchangedMiddleCount ? 1 : 0}\n'
+      r'''
 #include "llama_dart.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -8917,6 +9072,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
   if (cancelled) {
     return fail(LLAMA_DART_ERROR_CANCELLED, "generation cancelled");
   }
+  if (DELAYED_UTF8 && generated_tokens == 1) usleep(300000);
   FILE *marker = fopen(marker_path, "ab");
   if (marker == NULL) {
     return fail(LLAMA_DART_ERROR_GENERATION, "marker could not be opened");
@@ -8929,13 +9085,17 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
   if (out_text->data == NULL) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
   }
-  out_text->data[0] = (uint8_t)(base + (int)generated_tokens);
+  static const uint8_t utf8_pieces[] = {0xe2, 0x82, 0xac};
+  out_text->data[0] = DELAYED_UTF8
+      ? utf8_pieces[generated_tokens % 3]
+      : (uint8_t)(base + (int)generated_tokens);
   out_text->size = 1;
   ++generated_tokens;
   memset(out_stats, 0, sizeof(*out_stats));
   out_stats->struct_size = sizeof(*out_stats);
   out_stats->prompt_tokens = 2;
-  out_stats->generated_tokens = generated_tokens;
+  out_stats->generated_tokens =
+      UNCHANGED_MIDDLE_COUNT && generated_tokens == 2 ? 1 : generated_tokens;
   *out_done = generated_tokens >= generation_limit ? 1 : 0;
   if (*out_done != 0) {
     out_stats->stop_reason = LLAMA_DART_STOP_REASON_MAX_TOKENS;
@@ -8964,7 +9124,8 @@ LLAMA_DART_EXPORT const char *llama_dart_last_error_message(void) {
 LLAMA_DART_EXPORT void llama_dart_clear_last_error(void) {
   last_error = "";
 }
-''');
+''',
+    );
     final include = Directory('native/llama_dart_bridge/include').absolute.path;
     final args = Platform.isMacOS || Platform.isIOS
         ? <String>['-dynamiclib', source.path, '-I', include, '-o', output]
