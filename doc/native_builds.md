@@ -337,6 +337,23 @@ Current verification:
   to run opt-in warm-up, prompt-only prefill and continuation,
   explicit/automatic context-shift continuation, and deterministic stop-token
   generation coverage.
+- The 2026-09-06 prompt-source policy check on macOS 26.6.2 arm64 with
+  Flutter 3.47.1/Dart 3.13.1 passed `dart analyze --fatal-infos`, the complete
+  Dart and Flutter suites (207 tests and 12 explicit optional-fixture skips
+  each), and host CTest (3/3). The separate weighted command below also passed
+  with the exact 26,671,328-byte `stories15M-q8_0.gguf` fixture at SHA-256
+  `2eda49203f2f044f3dddf29a7dd7cc861ef5a0340f518a19613d73ba6d9c06b6`.
+  It used CPU, context 128, batch 32, one generation/batch thread and disabled
+  KV offload. With the ChatML template and both `enableThinking` values,
+  `contextSize * maximumTokenPieceBytes` bounded source staging, formatted
+  counts matched tokenization, and generation telemetry matched those counts.
+  This generic template check does not qualify a model's private reasoning.
+  The compiled fake bridge separately tested request and returned-plan byte
+  edges, including the numeric reasoning-budget metadata shared by counting
+  and dispatch. No ABI or upstream revision changed. Initial Jinja rendering
+  and the native returned-buffer allocation still precede the size check;
+  these runs do not measure expansion, peak memory, mobile/GPU behavior,
+  sustained performance, or signed-package qualification.
 - The 2026-09-06 streaming-progress check on macOS 26.6.2 arm64 passed the
   complete Dart and Flutter suites (201 tests each; 12 explicit optional-fixture
   skips), native CTest (3/3), and the weighted TinyLlama Q8 CPU test below.

@@ -17,6 +17,30 @@ operation uses a short-lived worker and one temporary vocab-only model load.
 `LlamaEmbeddingEngine` applies the same ownership model to repeated embedding
 work: one worker owns one embedding-enabled context and serializes
 tokenization, metadata inspection, and embedding batches until `close()`.
+Loaded-engine chat, formatting and counting accept an optional positive
+`maximumPromptBytes` allocation policy, independently of the context's token
+limit. They validate raw UTF-8 before snapshots, reserve JSON encoder chunks
+before retention, and check returned native buffer lengths before decoding the
+Dart prompt or chat plan. Media markers and plain-message native descriptors
+count toward their respective staging buffers. A `PromptBufferException`
+retains its type across the existing worker channel; callers can distinguish
+source memory from token-space failures without reading exception text.
+Loaded-engine formatting and counting also accept `reasoningBudgetTokens`;
+pass the generation's value when checking the complete serialized plan. The
+budget changes request/response metadata, so a count that omits it can fit a
+buffer that the actual generation cannot. With explicit thinking enabled,
+the pinned bridge does not include this numeric budget in template inputs;
+a caller may reserve its largest configured budget to bound metadata digits
+before the final output allowance is known, without changing the token count.
+
+The pinned upstream template renderer still materializes its complete result,
+and the bridge creates its initial native return buffer, before that output
+check. This policy bounds downstream copying and tokenization input; it does
+not claim to bound Jinja's internal expansion or prove any bytes-per-token
+relationship. With an explicit policy, chat preflight uses the tokenizer's
+existing size-query result and allocates no second owned token array. Native
+internal tokenizer working memory remains owned by the pinned engine.
+
 Model SHA-256 calculation and in-memory vector-index JSON persistence/loading
 also use short-lived workers because those Dart-only operations can process
 hundreds of megabytes in mobile apps.

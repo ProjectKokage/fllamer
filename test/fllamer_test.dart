@@ -2299,16 +2299,20 @@ void main() {
         expect(progress, orderedEquals(<int>[1, 2]));
         expect(stepped.last.isDone, isTrue);
         expect(stepped.last.telemetry?.generatedTokens, inInclusiveRange(1, 2));
+        final maximumPromptBytes =
+            modelConfig.contextSize * info.maximumTokenPieceBytes!;
         for (final mode in <bool>[false, true]) {
           await engine.reset();
           final messages = <ChatMessage>[ChatMessage.user('Hello')];
           final count = await engine.countChatTokens(
             messages,
             enableThinking: mode,
+            maximumPromptBytes: maximumPromptBytes,
           );
           final formatted = await engine.formatChat(
             messages,
             enableThinking: mode,
+            maximumPromptBytes: maximumPromptBytes,
           );
           expect(
             count,
@@ -2321,6 +2325,7 @@ void main() {
           final reply = await engine
               .chat(
                 messages: messages,
+                maximumPromptBytes: maximumPromptBytes,
                 config: GenerationConfig(
                   maxTokens: 1,
                   enableThinking: mode,

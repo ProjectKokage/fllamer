@@ -1,5 +1,14 @@
 ## Unreleased
 
+- Added optional `maximumPromptBytes` to loaded-engine `chat`, `formatChat`
+  and `countChatTokens`. It bounds raw UTF-8 staging, encoded chat-plan requests
+  and returned formatted buffers before downstream copies, with a typed
+  `PromptBufferException` preserved across worker errors. Upstream template
+  rendering and its initial native return allocation precede the output check.
+  Existing callers that omit the policy retain their behavior; no ABI change.
+  Loaded-engine formatting/counting also accept `reasoningBudgetTokens` so
+  preflight includes the generation plan's bounded reasoning metadata.
+
 - Added content-free `GenerationChunk.generatedTokens` progress events after
   completed native steps, independently of streamed text coalescing. Progress
   preserves one outstanding worker batch and does not act as a timer heartbeat.

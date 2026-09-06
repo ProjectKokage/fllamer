@@ -66,3 +66,9 @@ final class ResourceDisposedException extends LlamaException {
 final class CancelledException extends LlamaException {
   const CancelledException(super.message, {super.cause});
 }
+
+/// An explicitly configured prompt source/wire buffer was exhausted.
+/// This is distinct from model-context token exhaustion.
+final class PromptBufferException extends LlamaException {
+  const PromptBufferException(super.message, {super.cause});
+}

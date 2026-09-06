@@ -8,6 +8,7 @@ import 'config.dart';
 import 'errors.dart';
 import 'model_info.dart';
 import 'native_bridge.dart';
+import 'prompt_source_limits.dart';
 import 'rag.dart';
 
 abstract final class LlamaRuntime {
@@ -678,6 +679,10 @@ final class LlamaEngine {
 
   /// Generates an assistant response for [messages].
   ///
+  /// [maximumPromptBytes] optionally bounds source and wire buffers separately
+  /// from tokens. Native template rendering precedes its returned-buffer check;
+  /// a refusal throws [PromptBufferException] before downstream copies.
+  ///
   /// When [reusePromptPrefix] is true, the native session keeps its existing
   /// text KV state only if its committed token history is an exact prefix of
   /// the newly rendered and tokenized full prompt. A mismatch resets the
@@ -686,8 +691,10 @@ final class LlamaEngine {
     required List<ChatMessage> messages,
     GenerationConfig config = const GenerationConfig(),
     bool reusePromptPrefix = false,
+    int? maximumPromptBytes,
   }) {
     _ensureOpen();
+    _validatePromptSource(messages, maximumPromptBytes);
     final checkedMessages = _snapshotChatMessages(messages);
     final checkedConfig = _snapshotGenerationConfig(config);
     _validateChatMessages(
@@ -700,6 +707,7 @@ final class LlamaEngine {
           checkedMessages,
           checkedConfig,
           reusePromptPrefix: reusePromptPrefix,
+          maximumPromptBytes: maximumPromptBytes,
         )
         .map(
           (chunk) => GenerationChunk(
@@ -863,13 +871,21 @@ final class LlamaEngine {
   }
 
   /// Applies the loaded model's chat template without starting generation.
+  /// [maximumPromptBytes] uses the same source-buffer policy as [chat].
   Future<String> formatChat(
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) async {
     _ensureOpen();
+    GenerationConfig(
+      enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+    ).validate();
+    _validatePromptSource(messages, maximumPromptBytes);
     final checkedMessages = _snapshotChatMessages(messages);
     final checkedToolCalling = _snapshotToolCallingConfig(toolCalling);
     _validateChatMessages(
@@ -882,19 +898,30 @@ final class LlamaEngine {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: checkedToolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
   }
 
   /// Counts a fully templated text-only chat using the already-loaded model.
+  /// [maximumPromptBytes] uses the same source-buffer policy as [chat].
   /// Pass the generation's [enableThinking] value to count that exact rendered
   /// mode, including its private-reasoning prefix and native chat-plan path.
+  /// Include [reasoningBudgetTokens] to charge the same plan metadata as chat.
   Future<int> countChatTokens(
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) async {
     _ensureOpen();
+    GenerationConfig(
+      enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+    ).validate();
+    _validatePromptSource(messages, maximumPromptBytes);
     if (messages.any((message) => message.hasNonTextParts)) {
       throw const UnsupportedFeatureException(
         'LlamaEngine.countChatTokens cannot count model-specific media '
@@ -910,6 +937,8 @@ final class LlamaEngine {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: checkedToolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
   }
 
@@ -1640,5 +1669,18 @@ void _requireEmbeddingContextConfig(LlamaModelConfig config) {
     throw const UnsupportedFeatureException(
       'Speculative decoding is only supported for text generation contexts.',
     );
+  }
+}
+
+void _validatePromptSource(
+  List<ChatMessage> messages,
+  int? maximumPromptBytes,
+) {
+  validateMaximumPromptBytes(maximumPromptBytes);
+  if (maximumPromptBytes == null) return;
+  var bytes = 0;
+  for (final message in messages) {
+    bytes += promptUtf8Bytes(message.text, maximumPromptBytes);
+    checkPromptBufferSize(bytes, maximumPromptBytes);
   }
 }

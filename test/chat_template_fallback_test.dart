@@ -52,6 +52,131 @@ void main() {
       },
     );
 
+    test(
+      'bounded source/wire/formatted refusals retain their type through the worker',
+      () async {
+        final active = fixture;
+        if (active == null) {
+          markTestSkipped('A C compiler is not available for the fake bridge.');
+          return;
+        }
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: 'oversized.gguf',
+            nativeLibraryPath: active.libraryPath,
+          ),
+        );
+        try {
+          final messages = [ChatMessage.user('hello')];
+          await expectLater(
+            engine.formatChat(messages, maximumPromptBytes: 512),
+            throwsA(isA<PromptBufferException>()),
+          );
+          await expectLater(
+            engine.countChatTokens(messages, maximumPromptBytes: 512),
+            throwsA(isA<PromptBufferException>()),
+          );
+          await expectLater(
+            engine.chat(messages: messages, maximumPromptBytes: 512).toList(),
+            throwsA(isA<PromptBufferException>()),
+          );
+          // All failed before generation; one owned worker remains usable.
+          expect(
+            await engine.formatChat(messages, maximumPromptBytes: 4096),
+            'x' * 768,
+          );
+        } finally {
+          await engine.close();
+        }
+      },
+    );
+
+    test(
+      'count and chat charge bounded reasoning metadata at the buffer edge',
+      () async {
+        final active = fixture;
+        if (active == null) {
+          markTestSkipped('A C compiler is not available for the fake bridge.');
+          return;
+        }
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: 'fallback.gguf',
+            nativeLibraryPath: active.libraryPath,
+          ),
+        );
+        try {
+          final messages = [ChatMessage.user('hello')];
+          // This fixture's plan is 163 bytes without the budget, 255 with it.
+          // A count omitting the generation metadata would incorrectly pass.
+          expect(
+            await engine.countChatTokens(
+              messages,
+              enableThinking: true,
+              maximumPromptBytes: 254,
+            ),
+            1,
+          );
+          await expectLater(
+            engine.countChatTokens(
+              messages,
+              enableThinking: true,
+              reasoningBudgetTokens: 8,
+              maximumPromptBytes: 254,
+            ),
+            throwsA(isA<PromptBufferException>()),
+          );
+          await expectLater(
+            engine
+                .chat(
+                  messages: messages,
+                  maximumPromptBytes: 254,
+                  config: const GenerationConfig(
+                    maxTokens: 16,
+                    enableThinking: true,
+                    reasoningBudgetTokens: 8,
+                  ),
+                )
+                .toList(),
+            throwsA(isA<PromptBufferException>()),
+          );
+          expect(
+            await engine.countChatTokens(
+              messages,
+              enableThinking: true,
+              reasoningBudgetTokens: 8,
+              maximumPromptBytes: 255,
+            ),
+            1,
+          );
+          expect(
+            await engine.formatChat(
+              messages,
+              enableThinking: true,
+              reasoningBudgetTokens: 8,
+              maximumPromptBytes: 255,
+            ),
+            'jinja:assistant',
+          );
+          final chunks = await engine
+              .chat(
+                messages: messages,
+                maximumPromptBytes: 255,
+                config: const GenerationConfig(
+                  maxTokens: 16,
+                  enableThinking: true,
+                  reasoningBudgetTokens: 8,
+                ),
+              )
+              .where((chunk) => chunk.generatedTokens == null)
+              .toList();
+          expect(chunks.single.text, 'terminal');
+        } finally {
+          await engine.close();
+        }
+      },
+    );
+
     test('explicit thinking control uses the Jinja plan', () async {
       final active = fixture;
       final activeCounters = counters;
@@ -451,6 +576,7 @@ enum fake_mode {
   MODE_MEDIA = 5,
   MODE_THINKING = 6,
   MODE_OLD_THINKING = 7,
+  MODE_OVERSIZED = 8,
 };
 
 static const char *last_error = "";
@@ -526,6 +652,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
     return fail(LLAMA_DART_ERROR_MODEL_LOAD, "invalid model config");
   }
   if (bytes_contain(config->model_path_data, config->model_path_size,
+                    "oversized")) {
+    current_mode = MODE_OVERSIZED;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
                     "legacy-error")) {
     current_mode = MODE_ERROR;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
@@ -624,7 +753,10 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
                 "media markers were reordered before planning");
   }
 
-  const char *prompt = current_mode == MODE_MEDIA
+  char expanded[769];
+  memset(expanded, 'x', 768);
+  expanded[768] = '\0';
+  const char *prompt = current_mode == MODE_OVERSIZED ? expanded : current_mode == MODE_MEDIA
       ? "jinja:left<__media__>middle<__media__>right:assistant"
       : add_assistant ? "jinja:assistant" : "jinja:no-assistant";
   const char *reasoning_fields =
@@ -657,6 +789,25 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_parse_output(
   ++parse_calls;
   return fail(LLAMA_DART_ERROR_INTERNAL,
               "plain fallback output must not be parsed");
+}
+
+LLAMA_DART_EXPORT llama_dart_result llama_dart_model_tokenize(
+    const llama_dart_model *model, const uint8_t *text_data, size_t text_size,
+    int32_t *tokens, size_t tokens_capacity, size_t *out_token_count,
+    uint8_t add_special, uint8_t parse_special) {
+  (void)model;
+  (void)add_special;
+  (void)parse_special;
+  if (text_data == NULL || text_size == 0 || out_token_count == NULL) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid tokenizer input");
+  }
+  *out_token_count = 1;
+  if (tokens == NULL || tokens_capacity == 0) {
+    return fail(LLAMA_DART_ERROR_BUFFER_TOO_SMALL, "token buffer too small");
+  }
+  tokens[0] = 1;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
 }
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_context_create(

@@ -10,6 +10,7 @@ import 'package:ffi/ffi.dart';
 
 import 'config.dart';
 import 'errors.dart';
+import 'prompt_source_limits.dart';
 import 'ffi/generated_bindings.dart';
 import 'ffi/native_asset_lookup.dart';
 import 'model_info.dart';
@@ -142,6 +143,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     return Isolate.run(
       () => _formatChatInWorker(
@@ -150,6 +153,8 @@ final class NativeLlamaBridge {
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
         enableThinking: enableThinking,
+        reasoningBudgetTokens: reasoningBudgetTokens,
+        maximumPromptBytes: maximumPromptBytes,
       ),
     );
   }
@@ -160,6 +165,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     return Isolate.run(
       () => _countChatTokensInWorker(
@@ -168,6 +175,8 @@ final class NativeLlamaBridge {
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
         enableThinking: enableThinking,
+        reasoningBudgetTokens: reasoningBudgetTokens,
+        maximumPromptBytes: maximumPromptBytes,
       ),
     );
   }
@@ -544,6 +553,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     return _withLoadedModel(
       config,
@@ -553,6 +564,8 @@ final class NativeLlamaBridge {
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
         enableThinking: enableThinking,
+        reasoningBudgetTokens: reasoningBudgetTokens,
+        maximumPromptBytes: maximumPromptBytes,
       ),
     );
   }
@@ -563,14 +576,22 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
-    final prepared = _prepareMultimodalChat(messages, _multimodalMarker);
+    final prepared = _prepareMultimodalChat(
+      messages,
+      _multimodalMarker,
+      maximumPromptBytes: maximumPromptBytes,
+    );
     return _renderPreparedChat(
       model,
       prepared.messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     ).prompt;
   }
 
@@ -582,6 +603,7 @@ final class NativeLlamaBridge {
     String? grammar,
     Map<String, Object?>? jsonSchema,
     bool? enableThinking,
+    int? maximumPromptBytes,
     int? reasoningBudgetTokens,
   }) {
     final parseOutput = _requiresChatPlan(messages, toolCalling);
@@ -596,6 +618,7 @@ final class NativeLlamaBridge {
         grammar: grammar,
         jsonSchema: jsonSchema,
         enableThinking: enableThinking,
+        maximumPromptBytes: maximumPromptBytes,
         reasoningBudgetTokens: reasoningBudgetTokens,
         parseOutput: parseOutput,
       );
@@ -608,6 +631,7 @@ final class NativeLlamaBridge {
           model,
           messages,
           addAssistantPrompt: addAssistantPrompt,
+          maximumPromptBytes: maximumPromptBytes,
         ),
       );
     } on UnsupportedFeatureException {
@@ -622,6 +646,7 @@ final class NativeLlamaBridge {
         grammar: grammar,
         jsonSchema: jsonSchema,
         enableThinking: enableThinking,
+        maximumPromptBytes: maximumPromptBytes,
         reasoningBudgetTokens: reasoningBudgetTokens,
         parseOutput: false,
       );
@@ -660,6 +685,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     return _withLoadedModel(
       config,
@@ -669,6 +696,8 @@ final class NativeLlamaBridge {
         addAssistantPrompt: addAssistantPrompt,
         toolCalling: toolCalling,
         enableThinking: enableThinking,
+        reasoningBudgetTokens: reasoningBudgetTokens,
+        maximumPromptBytes: maximumPromptBytes,
       ),
     );
   }
@@ -679,6 +708,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     final prompt = _formatChat(
       model,
@@ -686,13 +717,44 @@ final class NativeLlamaBridge {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
-    return _tokenize(
-      model,
-      prompt,
-      addSpecial: true,
-      parseSpecial: true,
-    ).length;
+    if (maximumPromptBytes == null) {
+      return _tokenize(
+        model,
+        prompt,
+        addSpecial: true,
+        parseSpecial: true,
+      ).length;
+    }
+    // The native size-query already returns the exact count. A preflight needs
+    // no owned token array (and may be measuring an over-context candidate).
+    final bytes = utf8.encode(prompt);
+    final pointer = calloc<ffi.Uint8>(bytes.length);
+    final count = calloc<ffi.Size>();
+    try {
+      pointer.asTypedList(bytes.length).setAll(0, bytes);
+      final result = _bindings.llama_dart_model_tokenize(
+        model,
+        pointer,
+        bytes.length,
+        ffi.nullptr,
+        0,
+        count,
+        1,
+        1,
+      );
+      if (result == llama_dart_result.LLAMA_DART_ERROR_BUFFER_TOO_SMALL) {
+        _bindings.llama_dart_clear_last_error();
+      } else {
+        _check(result);
+      }
+      return count.value;
+    } finally {
+      calloc.free(count);
+      calloc.free(pointer);
+    }
   }
 
   T _withLoadedModel<T>(
@@ -1251,6 +1313,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     final bridge = tryOpen(config.nativeLibraryPath);
     if (bridge == null) {
@@ -1262,6 +1326,8 @@ final class NativeLlamaBridge {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
   }
 
@@ -1271,6 +1337,8 @@ final class NativeLlamaBridge {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     final bridge = tryOpen(config.nativeLibraryPath);
     if (bridge == null) {
@@ -1282,6 +1350,8 @@ final class NativeLlamaBridge {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
   }
 
@@ -1701,6 +1771,7 @@ final class NativeLlamaBridge {
     String? grammar,
     Map<String, Object?>? jsonSchema,
     bool? enableThinking,
+    int? maximumPromptBytes,
     int? reasoningBudgetTokens,
     required bool parseOutput,
   }) {
@@ -1735,7 +1806,7 @@ final class NativeLlamaBridge {
       'enable_thinking': ?enableThinking,
       'reasoning_budget_tokens': ?reasoningBudgetTokens,
     };
-    final requestBytes = utf8.encode(jsonEncode(request));
+    final requestBytes = encodePromptJson(request, maximumPromptBytes);
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
     final out = calloc<llama_dart_buffer>();
     try {
@@ -1755,12 +1826,18 @@ final class NativeLlamaBridge {
           'Native bridge returned an empty chat plan.',
         );
       }
+      // This buffer was materialized by upstream/native rendering. Bound its
+      // downstream Dart decode/JSON/prompt copies; do not claim renderer bounds.
+      checkPromptBufferSize(size, maximumPromptBytes);
       final planJson = utf8.decode(data.asTypedList(size));
       final decoded = jsonDecode(planJson);
       if (decoded is! Map<Object?, Object?> || decoded['prompt'] is! String) {
         throw const NativeBridgeException(
           'Native bridge returned an invalid chat plan.',
         );
+      }
+      if (maximumPromptBytes != null) {
+        promptUtf8Bytes(decoded['prompt'] as String, maximumPromptBytes);
       }
       final thinkingEndTags = decoded['thinking_end_tags'];
       if (reasoningBudgetTokens != null &&
@@ -1941,7 +2018,18 @@ final class NativeLlamaBridge {
     ffi.Pointer<llama_dart_model> model,
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
+    int? maximumPromptBytes,
   }) {
+    if (maximumPromptBytes != null) {
+      var sourceBytes = ffi.sizeOf<llama_dart_chat_message>() * messages.length;
+      checkPromptBufferSize(sourceBytes, maximumPromptBytes);
+      for (final message in messages) {
+        sourceBytes +=
+            promptUtf8Bytes(message.text, maximumPromptBytes) +
+            _chatRoleName(message.role).length;
+        checkPromptBufferSize(sourceBytes, maximumPromptBytes);
+      }
+    }
     final nativeMessages = calloc<llama_dart_chat_message>(messages.length);
     final allocated = <ffi.Pointer<ffi.Uint8>>[];
     final out = calloc<llama_dart_buffer>();
@@ -1984,6 +2072,9 @@ final class NativeLlamaBridge {
       if (data == ffi.nullptr || size == 0) {
         return '';
       }
+      // Upstream rendering and its native return buffer already exist. Guard
+      // before the Dart decoded copy and subsequent tokenization/FFI copies.
+      checkPromptBufferSize(size, maximumPromptBytes);
       try {
         return utf8.decode(data.asTypedList(size));
       } on FormatException catch (error) {
@@ -2175,6 +2266,7 @@ final class NativeLlamaEngineSession {
     List<ChatMessage> messages,
     GenerationConfig config, {
     required bool reusePromptPrefix,
+    int? maximumPromptBytes,
   }) {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
@@ -2185,6 +2277,7 @@ final class NativeLlamaEngineSession {
         messages,
         config,
         reusePromptPrefix,
+        maximumPromptBytes,
         reply,
       ),
     );
@@ -2630,6 +2723,8 @@ final class NativeLlamaEngineSession {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) async {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
@@ -2641,6 +2736,8 @@ final class NativeLlamaEngineSession {
         addAssistantPrompt,
         toolCalling,
         enableThinking,
+        reasoningBudgetTokens,
+        maximumPromptBytes,
         reply.sendPort,
       ),
     );
@@ -2659,6 +2756,8 @@ final class NativeLlamaEngineSession {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) async {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
@@ -2670,6 +2769,8 @@ final class NativeLlamaEngineSession {
         addAssistantPrompt,
         toolCalling,
         enableThinking,
+        reasoningBudgetTokens,
+        maximumPromptBytes,
         reply.sendPort,
       ),
     );
@@ -2889,7 +2990,23 @@ final class NativeLlamaEngineSession {
 }
 
 ({List<ChatMessage> messages, List<_NativeMediaInput> media})
-_prepareMultimodalChat(List<ChatMessage> messages, String marker) {
+_prepareMultimodalChat(
+  List<ChatMessage> messages,
+  String marker, {
+  int? maximumPromptBytes,
+}) {
+  if (maximumPromptBytes != null) {
+    var bytes = 0;
+    for (final message in messages) {
+      bytes += promptUtf8Bytes(message.text, maximumPromptBytes);
+      for (final part in message.parts) {
+        if (part is! TextPart) {
+          bytes += promptUtf8Bytes(marker, maximumPromptBytes);
+        }
+      }
+      checkPromptBufferSize(bytes, maximumPromptBytes);
+    }
+  }
   final formatted = <ChatMessage>[];
   final media = <_NativeMediaInput>[];
   for (final message in messages) {
@@ -3092,6 +3209,8 @@ final class _NativeEngineHandles {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     return bridge._formatChat(
       model,
@@ -3099,6 +3218,8 @@ final class _NativeEngineHandles {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
   }
 
@@ -3107,6 +3228,8 @@ final class _NativeEngineHandles {
     required bool addAssistantPrompt,
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
+    int? reasoningBudgetTokens,
+    int? maximumPromptBytes,
   }) {
     return bridge._countChatTokens(
       model,
@@ -3114,6 +3237,8 @@ final class _NativeEngineHandles {
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
   }
 
@@ -3583,8 +3708,13 @@ final class _NativeEngineHandles {
     List<ChatMessage> messages,
     GenerationConfig config, {
     required bool reusePromptPrefix,
+    int? maximumPromptBytes,
   }) {
-    final prepared = _prepareMultimodalChat(messages, bridge._multimodalMarker);
+    final prepared = _prepareMultimodalChat(
+      messages,
+      bridge._multimodalMarker,
+      maximumPromptBytes: maximumPromptBytes,
+    );
     final rendered = bridge._renderPreparedChat(
       model,
       prepared.messages,
@@ -3594,6 +3724,7 @@ final class _NativeEngineHandles {
       jsonSchema: config.jsonSchema,
       enableThinking: config.enableThinking,
       reasoningBudgetTokens: config.reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
     );
     return startCompletionStream(
       rendered.prompt,
@@ -4122,6 +4253,8 @@ final class _EngineWorkerFormatChat {
     this.addAssistantPrompt,
     this.toolCalling,
     this.enableThinking,
+    this.reasoningBudgetTokens,
+    this.maximumPromptBytes,
     this.reply,
   );
 
@@ -4129,6 +4262,8 @@ final class _EngineWorkerFormatChat {
   final bool addAssistantPrompt;
   final LlamaToolCallingConfig toolCalling;
   final bool? enableThinking;
+  final int? reasoningBudgetTokens;
+  final int? maximumPromptBytes;
   final SendPort reply;
 }
 
@@ -4138,6 +4273,8 @@ final class _EngineWorkerCountChatTokens {
     this.addAssistantPrompt,
     this.toolCalling,
     this.enableThinking,
+    this.reasoningBudgetTokens,
+    this.maximumPromptBytes,
     this.reply,
   );
 
@@ -4145,6 +4282,8 @@ final class _EngineWorkerCountChatTokens {
   final bool addAssistantPrompt;
   final LlamaToolCallingConfig toolCalling;
   final bool? enableThinking;
+  final int? reasoningBudgetTokens;
+  final int? maximumPromptBytes;
   final SendPort reply;
 }
 
@@ -4215,6 +4354,7 @@ final class _EngineWorkerStreamComplete {
     this.messages,
     this.config,
     this.reusePromptPrefix,
+    this.maximumPromptBytes,
     this.reply,
   );
 
@@ -4222,6 +4362,7 @@ final class _EngineWorkerStreamComplete {
   final List<ChatMessage> messages;
   final GenerationConfig config;
   final bool reusePromptPrefix;
+  final int? maximumPromptBytes;
   final SendPort reply;
 }
 
@@ -4355,6 +4496,9 @@ final class _NativeError {
     if (error is ContextCreateException) {
       return _NativeError('contextCreate', error.message);
     }
+    if (error is PromptBufferException) {
+      return _NativeError('promptBuffer', error.message);
+    }
     if (error is GenerationException) {
       return _NativeError('generation', error.message);
     }
@@ -4396,6 +4540,7 @@ final class _NativeError {
       'modelLoad' => ModelLoadException(message),
       'contextCreate' => ContextCreateException(message),
       'generation' => GenerationException(message),
+      'promptBuffer' => PromptBufferException(message),
       'embedding' => EmbeddingException(message),
       'reranking' => RerankingException(message),
       'lora' => LoraException(message),
@@ -4824,6 +4969,8 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             addAssistantPrompt: message.addAssistantPrompt,
             toolCalling: message.toolCalling,
             enableThinking: message.enableThinking,
+            reasoningBudgetTokens: message.reasoningBudgetTokens,
+            maximumPromptBytes: message.maximumPromptBytes,
           ),
         );
       } catch (error) {
@@ -4841,6 +4988,8 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             addAssistantPrompt: message.addAssistantPrompt,
             toolCalling: message.toolCalling,
             enableThinking: message.enableThinking,
+            reasoningBudgetTokens: message.reasoningBudgetTokens,
+            maximumPromptBytes: message.maximumPromptBytes,
           ),
         );
       } catch (error) {
@@ -4952,6 +5101,7 @@ void _engineWorkerMain(_EngineWorkerStart start) {
           message.messages,
           message.config,
           reusePromptPrefix: message.reusePromptPrefix,
+          maximumPromptBytes: message.maximumPromptBytes,
         );
         streamingId = message.id;
         streamingReply = message.reply;
