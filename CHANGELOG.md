@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Use `code_assets` 2 and `hooks` 2.2 for compatibility with applications
+  using the current native build-hook toolchain.
+
 - Added optional `maximumPromptBytes` to loaded-engine `chat`, `formatChat`
   and `countChatTokens`. It bounds raw UTF-8 staging, encoded chat-plan requests
   and returned formatted buffers before downstream copies, with a typed
