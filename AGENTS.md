@@ -72,6 +72,10 @@ missing hardware/artifacts precisely. A host pass establishes only that target.
 
 ## Delivery
 
+Branch names must not begin with `codex` (case-insensitive), including
+`codex/` and `codex-`. Rename tool-generated defaults before committing or
+pushing; use a descriptive name such as `docs-agent-guides`.
+
 Keep work on a task branch and review the complete diff before handoff. Commit
 only task files; push, publish or release only when requested. Do not merge
 without owner approval. Routine fixes within the requested scope can proceed;
