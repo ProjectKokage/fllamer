@@ -1,7 +1,14 @@
-part of 'native_bridge.dart';
+import 'dart:isolate';
+import 'dart:typed_data';
 
-final class _EngineWorkerStart {
-  const _EngineWorkerStart(
+import 'config.dart';
+import 'errors.dart';
+import 'model_info.dart';
+
+import 'native_engine_handles.dart';
+
+final class EngineWorkerStart {
+  const EngineWorkerStart(
     this.config,
     this.reply, {
     required this.embeddings,
@@ -14,94 +21,94 @@ final class _EngineWorkerStart {
   final EmbeddingPooling pooling;
 }
 
-final class _EngineWorkerReady {
-  const _EngineWorkerReady(this.commands, this.contextAddress);
+final class EngineWorkerReady {
+  const EngineWorkerReady(this.commands, this.contextAddress);
 
   final SendPort commands;
   final int contextAddress;
 }
 
-final class _EngineWorkerClose {
-  const _EngineWorkerClose(this.reply);
+final class EngineWorkerClose {
+  const EngineWorkerClose(this.reply);
 
   final SendPort reply;
 }
 
-final class _EngineWorkerFinalize {
-  const _EngineWorkerFinalize();
+final class EngineWorkerFinalize {
+  const EngineWorkerFinalize();
 }
 
 /// A request the worker runs against the open engine and answers once.
-abstract base class _EngineRequest<T> {
-  const _EngineRequest();
+abstract base class EngineRequest<T> {
+  const EngineRequest();
 
-  T run(_NativeEngineHandles handles);
+  T run(NativeEngineHandles handles);
 }
 
-/// An [_EngineRequest] with the port its answer goes to.
-final class _EngineWorkerRequest {
-  const _EngineWorkerRequest(this.request, this.reply);
+/// An [EngineRequest] with the port its answer goes to.
+final class EngineWorkerRequest {
+  const EngineWorkerRequest(this.request, this.reply);
 
-  final _EngineRequest<Object?> request;
+  final EngineRequest<Object?> request;
   final SendPort reply;
 }
 
-final class _ResetRequest extends _EngineRequest<Null> {
-  const _ResetRequest();
+final class ResetRequest extends EngineRequest<Null> {
+  const ResetRequest();
 
   @override
-  Null run(_NativeEngineHandles handles) {
+  Null run(NativeEngineHandles handles) {
     handles.reset();
     return null;
   }
 }
 
-final class _WarmUpRequest extends _EngineRequest<Null> {
-  const _WarmUpRequest();
+final class WarmUpRequest extends EngineRequest<Null> {
+  const WarmUpRequest();
 
   @override
-  Null run(_NativeEngineHandles handles) {
+  Null run(NativeEngineHandles handles) {
     handles.warmUp();
     return null;
   }
 }
 
-final class _ModelInfoRequest extends _EngineRequest<LlamaModelInfo> {
-  const _ModelInfoRequest();
+final class ModelInfoRequest extends EngineRequest<LlamaModelInfo> {
+  const ModelInfoRequest();
 
   @override
-  LlamaModelInfo run(_NativeEngineHandles handles) {
+  LlamaModelInfo run(NativeEngineHandles handles) {
     return handles.modelInfo();
   }
 }
 
-final class _ModelMetadataRequest extends _EngineRequest<Map<String, String>> {
-  const _ModelMetadataRequest();
+final class ModelMetadataRequest extends EngineRequest<Map<String, String>> {
+  const ModelMetadataRequest();
 
   @override
-  Map<String, String> run(_NativeEngineHandles handles) {
+  Map<String, String> run(NativeEngineHandles handles) {
     return handles.modelMetadata();
   }
 }
 
-final class _ChatTemplateRequest extends _EngineRequest<String> {
-  const _ChatTemplateRequest();
+final class ChatTemplateRequest extends EngineRequest<String> {
+  const ChatTemplateRequest();
 
   @override
-  String run(_NativeEngineHandles handles) {
+  String run(NativeEngineHandles handles) {
     return handles.chatTemplate();
   }
 }
 
-final class _TokenizeRequest extends _EngineRequest<List<int>> {
-  const _TokenizeRequest(this.text, this.addSpecial, this.parseSpecial);
+final class TokenizeRequest extends EngineRequest<List<int>> {
+  const TokenizeRequest(this.text, this.addSpecial, this.parseSpecial);
 
   final String text;
   final bool addSpecial;
   final bool parseSpecial;
 
   @override
-  List<int> run(_NativeEngineHandles handles) {
+  List<int> run(NativeEngineHandles handles) {
     return handles.tokenize(
       text,
       addSpecial: addSpecial,
@@ -110,15 +117,15 @@ final class _TokenizeRequest extends _EngineRequest<List<int>> {
   }
 }
 
-final class _CountTokensRequest extends _EngineRequest<int> {
-  const _CountTokensRequest(this.text, this.addSpecial, this.parseSpecial);
+final class CountTokensRequest extends EngineRequest<int> {
+  const CountTokensRequest(this.text, this.addSpecial, this.parseSpecial);
 
   final String text;
   final bool addSpecial;
   final bool parseSpecial;
 
   @override
-  int run(_NativeEngineHandles handles) {
+  int run(NativeEngineHandles handles) {
     return handles.countTokens(
       text,
       addSpecial: addSpecial,
@@ -127,19 +134,15 @@ final class _CountTokensRequest extends _EngineRequest<int> {
   }
 }
 
-final class _DetokenizeRequest extends _EngineRequest<String> {
-  const _DetokenizeRequest(
-    this.tokens,
-    this.removeSpecial,
-    this.unparseSpecial,
-  );
+final class DetokenizeRequest extends EngineRequest<String> {
+  const DetokenizeRequest(this.tokens, this.removeSpecial, this.unparseSpecial);
 
   final List<int> tokens;
   final bool removeSpecial;
   final bool unparseSpecial;
 
   @override
-  String run(_NativeEngineHandles handles) {
+  String run(NativeEngineHandles handles) {
     return handles.detokenize(
       tokens,
       removeSpecial: removeSpecial,
@@ -148,30 +151,30 @@ final class _DetokenizeRequest extends _EngineRequest<String> {
   }
 }
 
-final class _EmbedTextsRequest extends _EngineRequest<EmbeddingBatch> {
-  const _EmbedTextsRequest(this.texts, this.config);
+final class EmbedTextsRequest extends EngineRequest<EmbeddingBatch> {
+  const EmbedTextsRequest(this.texts, this.config);
 
   final List<String> texts;
   final EmbeddingConfig config;
 
   @override
-  EmbeddingBatch run(_NativeEngineHandles handles) {
-    return _embedTextsWithHandles(handles, texts, config);
+  EmbeddingBatch run(NativeEngineHandles handles) {
+    return embedTextsWithHandles(handles, texts, config);
   }
 }
 
-final class _ChatTemplateCapabilitiesRequest
-    extends _EngineRequest<LlamaChatTemplateCapabilities> {
-  const _ChatTemplateCapabilitiesRequest();
+final class ChatTemplateCapabilitiesRequest
+    extends EngineRequest<LlamaChatTemplateCapabilities> {
+  const ChatTemplateCapabilitiesRequest();
 
   @override
-  LlamaChatTemplateCapabilities run(_NativeEngineHandles handles) {
+  LlamaChatTemplateCapabilities run(NativeEngineHandles handles) {
     return handles.chatTemplateCapabilities();
   }
 }
 
-final class _FormatChatRequest extends _EngineRequest<String> {
-  const _FormatChatRequest(
+final class FormatChatRequest extends EngineRequest<String> {
+  const FormatChatRequest(
     this.messages,
     this.addAssistantPrompt,
     this.toolCalling,
@@ -188,7 +191,7 @@ final class _FormatChatRequest extends _EngineRequest<String> {
   final int? maximumPromptBytes;
 
   @override
-  String run(_NativeEngineHandles handles) {
+  String run(NativeEngineHandles handles) {
     return handles.formatChat(
       messages,
       addAssistantPrompt: addAssistantPrompt,
@@ -200,8 +203,8 @@ final class _FormatChatRequest extends _EngineRequest<String> {
   }
 }
 
-final class _CountChatTokensRequest extends _EngineRequest<int> {
-  const _CountChatTokensRequest(
+final class CountChatTokensRequest extends EngineRequest<int> {
+  const CountChatTokensRequest(
     this.messages,
     this.addAssistantPrompt,
     this.toolCalling,
@@ -218,7 +221,7 @@ final class _CountChatTokensRequest extends _EngineRequest<int> {
   final int? maximumPromptBytes;
 
   @override
-  int run(_NativeEngineHandles handles) {
+  int run(NativeEngineHandles handles) {
     return handles.countChatTokens(
       messages,
       addAssistantPrompt: addAssistantPrompt,
@@ -230,15 +233,15 @@ final class _CountChatTokensRequest extends _EngineRequest<int> {
   }
 }
 
-final class _PrefillRequest extends _EngineRequest<PrefillTelemetry> {
-  const _PrefillRequest(this.prompt, this.addSpecial, this.parseSpecial);
+final class PrefillRequest extends EngineRequest<PrefillTelemetry> {
+  const PrefillRequest(this.prompt, this.addSpecial, this.parseSpecial);
 
   final String prompt;
   final bool? addSpecial;
   final bool parseSpecial;
 
   @override
-  PrefillTelemetry run(_NativeEngineHandles handles) {
+  PrefillTelemetry run(NativeEngineHandles handles) {
     return handles.prefill(
       prompt,
       addSpecial: addSpecial,
@@ -247,14 +250,14 @@ final class _PrefillRequest extends _EngineRequest<PrefillTelemetry> {
   }
 }
 
-final class _ShiftContextRequest extends _EngineRequest<int> {
-  const _ShiftContextRequest(this.keepTokens, this.discardTokens);
+final class ShiftContextRequest extends EngineRequest<int> {
+  const ShiftContextRequest(this.keepTokens, this.discardTokens);
 
   final int keepTokens;
   final int? discardTokens;
 
   @override
-  int run(_NativeEngineHandles handles) {
+  int run(NativeEngineHandles handles) {
     return handles.shiftContext(
       keepTokens: keepTokens,
       discardTokens: discardTokens,
@@ -262,38 +265,38 @@ final class _ShiftContextRequest extends _EngineRequest<int> {
   }
 }
 
-final class _ContextInfoRequest extends _EngineRequest<LlamaContextInfo> {
-  const _ContextInfoRequest();
+final class ContextInfoRequest extends EngineRequest<LlamaContextInfo> {
+  const ContextInfoRequest();
 
   @override
-  LlamaContextInfo run(_NativeEngineHandles handles) {
+  LlamaContextInfo run(NativeEngineHandles handles) {
     return handles.contextInfo();
   }
 }
 
-final class _SaveStateRequest extends _EngineRequest<Uint8List> {
-  const _SaveStateRequest();
+final class SaveStateRequest extends EngineRequest<Uint8List> {
+  const SaveStateRequest();
 
   @override
-  Uint8List run(_NativeEngineHandles handles) {
+  Uint8List run(NativeEngineHandles handles) {
     return handles.saveState();
   }
 }
 
-final class _RestoreStateRequest extends _EngineRequest<Null> {
-  const _RestoreStateRequest(this.state);
+final class RestoreStateRequest extends EngineRequest<Null> {
+  const RestoreStateRequest(this.state);
 
   final Uint8List state;
 
   @override
-  Null run(_NativeEngineHandles handles) {
+  Null run(NativeEngineHandles handles) {
     handles.restoreState(state);
     return null;
   }
 }
 
-final class _EngineWorkerStreamComplete {
-  const _EngineWorkerStreamComplete(
+final class EngineWorkerStreamComplete {
+  const EngineWorkerStreamComplete(
     this.id,
     this.messages,
     this.config,
@@ -310,13 +313,8 @@ final class _EngineWorkerStreamComplete {
   final SendPort reply;
 }
 
-final class _EngineWorkerStreamPrompt {
-  const _EngineWorkerStreamPrompt(
-    this.id,
-    this.prompt,
-    this.config,
-    this.reply,
-  );
+final class EngineWorkerStreamPrompt {
+  const EngineWorkerStreamPrompt(this.id, this.prompt, this.config, this.reply);
 
   final int id;
   final String prompt;
@@ -324,72 +322,72 @@ final class _EngineWorkerStreamPrompt {
   final SendPort reply;
 }
 
-final class _EngineWorkerStreamNext {
-  const _EngineWorkerStreamNext(this.id);
+final class EngineWorkerStreamNext {
+  const EngineWorkerStreamNext(this.id);
 
   final int id;
 }
 
-final class _EngineWorkerStreamDispose {
-  const _EngineWorkerStreamDispose(this.id, this.reply);
+final class EngineWorkerStreamDispose {
+  const EngineWorkerStreamDispose(this.id, this.reply);
 
   final int id;
   final SendPort reply;
 }
 
-final class _LoadLoraRequest extends _EngineRequest<LoraAdapterInfo> {
-  const _LoadLoraRequest(this.config);
+final class LoadLoraRequest extends EngineRequest<LoraAdapterInfo> {
+  const LoadLoraRequest(this.config);
 
   final LoraAdapterConfig config;
 
   @override
-  LoraAdapterInfo run(_NativeEngineHandles handles) {
+  LoraAdapterInfo run(NativeEngineHandles handles) {
     return handles.loadLora(config);
   }
 }
 
-final class _ListLorasRequest extends _EngineRequest<List<LoraAdapterInfo>> {
-  const _ListLorasRequest();
+final class ListLorasRequest extends EngineRequest<List<LoraAdapterInfo>> {
+  const ListLorasRequest();
 
   @override
-  List<LoraAdapterInfo> run(_NativeEngineHandles handles) {
+  List<LoraAdapterInfo> run(NativeEngineHandles handles) {
     return handles.loraAdapters();
   }
 }
 
-final class _SetLoraScaleRequest extends _EngineRequest<Null> {
-  const _SetLoraScaleRequest(this.adapterId, this.scale);
+final class SetLoraScaleRequest extends EngineRequest<Null> {
+  const SetLoraScaleRequest(this.adapterId, this.scale);
 
   final int adapterId;
   final double scale;
 
   @override
-  Null run(_NativeEngineHandles handles) {
+  Null run(NativeEngineHandles handles) {
     handles.setLoraScale(adapterId, scale);
     return null;
   }
 }
 
-final class _UnloadLoraRequest extends _EngineRequest<Null> {
-  const _UnloadLoraRequest(this.adapterId);
+final class UnloadLoraRequest extends EngineRequest<Null> {
+  const UnloadLoraRequest(this.adapterId);
 
   final int adapterId;
 
   @override
-  Null run(_NativeEngineHandles handles) {
+  Null run(NativeEngineHandles handles) {
     handles.unloadLora(adapterId);
     return null;
   }
 }
 
-final class _EngineWorkerStreamProgress {
-  const _EngineWorkerStreamProgress(this.generatedTokens);
+final class EngineWorkerStreamProgress {
+  const EngineWorkerStreamProgress(this.generatedTokens);
 
   final int generatedTokens;
 }
 
-final class _EngineWorkerStreamChunk {
-  const _EngineWorkerStreamChunk(
+final class EngineWorkerStreamChunk {
+  const EngineWorkerStreamChunk(
     this.text,
     this.isDone,
     this.telemetry,
@@ -402,65 +400,65 @@ final class _EngineWorkerStreamChunk {
   final ChatMessage? assistantMessage;
 }
 
-SendPort? _engineWorkerReply(Object? message) {
+SendPort? engineWorkerReply(Object? message) {
   return switch (message) {
-    _EngineWorkerRequest(:final reply) => reply,
-    _EngineWorkerStreamComplete(:final reply) => reply,
-    _EngineWorkerStreamPrompt(:final reply) => reply,
+    EngineWorkerRequest(:final reply) => reply,
+    EngineWorkerStreamComplete(:final reply) => reply,
+    EngineWorkerStreamPrompt(:final reply) => reply,
     _ => null,
   };
 }
 
-final class _EngineWorkerFailure {
-  const _EngineWorkerFailure(this.error);
+final class EngineWorkerFailure {
+  const EngineWorkerFailure(this.error);
 
-  final _NativeError error;
+  final NativeError error;
 }
 
-final class _NativeError {
-  const _NativeError(this.type, this.message);
+final class NativeError {
+  const NativeError(this.type, this.message);
 
-  factory _NativeError.from(Object error) {
+  factory NativeError.from(Object error) {
     if (error is ModelLoadException) {
-      return _NativeError('modelLoad', error.message);
+      return NativeError('modelLoad', error.message);
     }
     if (error is ContextCreateException) {
-      return _NativeError('contextCreate', error.message);
+      return NativeError('contextCreate', error.message);
     }
     if (error is PromptBufferException) {
-      return _NativeError('promptBuffer', error.message);
+      return NativeError('promptBuffer', error.message);
     }
     if (error is GenerationException) {
-      return _NativeError('generation', error.message);
+      return NativeError('generation', error.message);
     }
     if (error is EmbeddingException) {
-      return _NativeError('embedding', error.message);
+      return NativeError('embedding', error.message);
     }
     if (error is RerankingException) {
-      return _NativeError('reranking', error.message);
+      return NativeError('reranking', error.message);
     }
     if (error is LoraException) {
-      return _NativeError('lora', error.message);
+      return NativeError('lora', error.message);
     }
     if (error is UnsupportedFeatureException) {
-      return _NativeError('unsupported', error.message);
+      return NativeError('unsupported', error.message);
     }
     if (error is NativeOutOfMemoryException) {
-      return _NativeError('outOfMemory', error.message);
+      return NativeError('outOfMemory', error.message);
     }
     if (error is CancelledException) {
-      return _NativeError('cancelled', error.message);
+      return NativeError('cancelled', error.message);
     }
     if (error is ResourceDisposedException) {
-      return _NativeError('disposed', error.message);
+      return NativeError('disposed', error.message);
     }
     if (error is NativeBridgeException) {
-      return _NativeError('nativeBridge', error.message);
+      return NativeError('nativeBridge', error.message);
     }
     if (error is LlamaException) {
-      return _NativeError('llama', error.message);
+      return NativeError('llama', error.message);
     }
-    return _NativeError('unknown', error.toString());
+    return NativeError('unknown', error.toString());
   }
 
   final String type;

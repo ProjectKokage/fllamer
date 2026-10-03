@@ -1,30 +1,38 @@
-part of 'native_bridge.dart';
+import 'dart:typed_data';
 
-LlamaModelInfo _inspectModelInWorker(LlamaModelConfig config) {
+import 'config.dart';
+import 'model_info.dart';
+
+import 'native_bridge.dart';
+import 'native_chat.dart';
+import 'native_engine_handles.dart';
+import 'native_model_ops.dart';
+
+LlamaModelInfo inspectModelInWorker(LlamaModelConfig config) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._inspectModel(config);
+  return bridge.loadAndInspectModel(config);
 }
 
-Map<String, String> _modelMetadataInWorker(LlamaModelConfig config) {
+Map<String, String> modelMetadataInWorker(LlamaModelConfig config) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._modelMetadata(config);
+  return bridge.loadAndReadModelMetadata(config);
 }
 
-String _chatTemplateInWorker(LlamaModelConfig config) {
+String chatTemplateInWorker(LlamaModelConfig config) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._chatTemplateModel(config);
+  return bridge.loadAndReadChatTemplate(config);
 }
 
-List<int> _tokenizeInWorker(
+List<int> tokenizeInWorker(
   LlamaModelConfig config,
   String text, {
   required bool addSpecial,
@@ -32,9 +40,9 @@ List<int> _tokenizeInWorker(
 }) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._tokenizeModel(
+  return bridge.loadAndTokenize(
     config,
     text,
     addSpecial: addSpecial,
@@ -42,7 +50,7 @@ List<int> _tokenizeInWorker(
   );
 }
 
-String _detokenizeInWorker(
+String detokenizeInWorker(
   LlamaModelConfig config,
   List<int> tokens, {
   required bool removeSpecial,
@@ -50,9 +58,9 @@ String _detokenizeInWorker(
 }) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._detokenizeModel(
+  return bridge.loadAndDetokenize(
     config,
     tokens,
     removeSpecial: removeSpecial,
@@ -60,50 +68,50 @@ String _detokenizeInWorker(
   );
 }
 
-Float32List _embedTextInWorker(
+Float32List embedTextInWorker(
   LlamaModelConfig config,
   String text,
   EmbeddingConfig embeddingConfig,
 ) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  final handles = bridge._openEngine(
+  final handles = bridge.openEngine(
     config,
     embeddings: true,
     pooling: embeddingConfig.pooling,
   );
   try {
     final embedding = handles.embedText(text, embeddingConfig);
-    return embeddingConfig.normalize ? _normalize(embedding) : embedding;
+    return embeddingConfig.normalize ? normalize(embedding) : embedding;
   } finally {
     handles.close();
   }
 }
 
-EmbeddingBatch _embedTextsInWorker(
+EmbeddingBatch embedTextsInWorker(
   LlamaModelConfig config,
   List<String> texts,
   EmbeddingConfig embeddingConfig,
 ) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  final handles = bridge._openEngine(
+  final handles = bridge.openEngine(
     config,
     embeddings: true,
     pooling: embeddingConfig.pooling,
   );
   try {
-    return _embedTextsWithHandles(handles, texts, embeddingConfig);
+    return embedTextsWithHandles(handles, texts, embeddingConfig);
   } finally {
     handles.close();
   }
 }
 
-String _formatChatInWorker(
+String formatChatInWorker(
   LlamaModelConfig config,
   List<ChatMessage> messages, {
   required bool addAssistantPrompt,
@@ -114,9 +122,9 @@ String _formatChatInWorker(
 }) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._formatChatModel(
+  return bridge.loadAndFormatChat(
     config,
     messages,
     addAssistantPrompt: addAssistantPrompt,
@@ -127,7 +135,7 @@ String _formatChatInWorker(
   );
 }
 
-int _countChatTokensInWorker(
+int countChatTokensInWorker(
   LlamaModelConfig config,
   List<ChatMessage> messages, {
   required bool addAssistantPrompt,
@@ -138,9 +146,9 @@ int _countChatTokensInWorker(
 }) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._countChatTokensModel(
+  return bridge.loadAndCountChatTokens(
     config,
     messages,
     addAssistantPrompt: addAssistantPrompt,
@@ -151,17 +159,17 @@ int _countChatTokensInWorker(
   );
 }
 
-LlamaChatTemplateCapabilities _chatTemplateCapabilitiesInWorker(
+LlamaChatTemplateCapabilities chatTemplateCapabilitiesInWorker(
   LlamaModelConfig config,
 ) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  return bridge._chatTemplateCapabilitiesModel(config);
+  return bridge.loadAndReadChatTemplateCapabilities(config);
 }
 
-List<double> _rerankDocumentsInWorker(
+List<double> rerankDocumentsInWorker(
   LlamaModelConfig config,
   String query,
   List<String> documents,
@@ -169,9 +177,9 @@ List<double> _rerankDocumentsInWorker(
 ) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
   if (bridge == null) {
-    throw _nativeBridgeUnavailable(config.nativeLibraryPath);
+    throw nativeBridgeUnavailable(config.nativeLibraryPath);
   }
-  final handles = bridge._openEngine(
+  final handles = bridge.openEngine(
     config,
     embeddings: true,
     pooling: EmbeddingPooling.rank,

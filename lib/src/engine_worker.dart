@@ -1,27 +1,33 @@
-part of 'native_bridge.dart';
+import 'dart:isolate';
 
-void _engineWorkerMain(_EngineWorkerStart start) {
-  _NativeEngineHandles? handles;
+import 'errors.dart';
+
+import 'engine_worker_protocol.dart';
+import 'native_bridge.dart';
+import 'native_engine_handles.dart';
+
+void engineWorkerMain(EngineWorkerStart start) {
+  NativeEngineHandles? handles;
   final commands = ReceivePort();
   try {
     final bridge = NativeLlamaBridge.tryOpen(start.config.nativeLibraryPath);
     if (bridge == null) {
-      throw _nativeBridgeUnavailable(start.config.nativeLibraryPath);
+      throw nativeBridgeUnavailable(start.config.nativeLibraryPath);
     }
-    handles = bridge._openEngine(
+    handles = bridge.openEngine(
       start.config,
       embeddings: start.embeddings,
       pooling: start.pooling,
     );
     start.reply.send(
-      _EngineWorkerReady(commands.sendPort, handles.context.address),
+      EngineWorkerReady(commands.sendPort, handles.context.address),
     );
   } catch (error) {
-    start.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
+    start.reply.send(EngineWorkerFailure(NativeError.from(error)));
     return;
   }
 
-  _NativeStreamingGeneration? streamingGeneration;
+  NativeStreamingGeneration? streamingGeneration;
   SendPort? streamingReply;
   var streamingId = 0;
   late void Function(Object? message) handleMessage;
@@ -62,17 +68,17 @@ void _engineWorkerMain(_EngineWorkerStart start) {
     try {
       final chunk = generation.next(
         onProgress: (generatedTokens) =>
-            reply.send(_EngineWorkerStreamProgress(generatedTokens)),
+            reply.send(EngineWorkerStreamProgress(generatedTokens)),
       );
       if (chunk.isDone) {
         Object? closeError = closeStreamingGeneration();
         if (closeError != null) {
           closeError =
               closeStreamingGeneration(resetContext: true) ?? closeError;
-          reply.send(_EngineWorkerFailure(_NativeError.from(closeError)));
+          reply.send(EngineWorkerFailure(NativeError.from(closeError)));
         } else {
           reply.send(
-            _EngineWorkerStreamChunk(
+            EngineWorkerStreamChunk(
               chunk.text,
               true,
               chunk.telemetry,
@@ -81,16 +87,16 @@ void _engineWorkerMain(_EngineWorkerStart start) {
           );
         }
       } else {
-        reply.send(_EngineWorkerStreamChunk(chunk.text, false, null, null));
+        reply.send(EngineWorkerStreamChunk(chunk.text, false, null, null));
       }
     } catch (error) {
       final closeError = closeStreamingGeneration(resetContext: true);
-      reply.send(_EngineWorkerFailure(_NativeError.from(closeError ?? error)));
+      reply.send(EngineWorkerFailure(NativeError.from(closeError ?? error)));
     }
   }
 
   handleMessage = (message) {
-    if (message is _EngineWorkerFinalize) {
+    if (message is EngineWorkerFinalize) {
       closeStreamingGeneration();
       try {
         handles?.close();
@@ -100,12 +106,12 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         handles = null;
         commands.close();
       }
-    } else if (message is _EngineWorkerClose) {
+    } else if (message is EngineWorkerClose) {
       final activeReply = streamingReply;
       Object? cleanupError = closeStreamingGeneration();
       activeReply?.send(
-        const _EngineWorkerFailure(
-          _NativeError('cancelled', 'generation cancelled'),
+        const EngineWorkerFailure(
+          NativeError('cancelled', 'generation cancelled'),
         ),
       );
       try {
@@ -118,11 +124,11 @@ void _engineWorkerMain(_EngineWorkerStart start) {
           message.reply.send(null);
         } else {
           message.reply.send(
-            _EngineWorkerFailure(_NativeError.from(cleanupError)),
+            EngineWorkerFailure(NativeError.from(cleanupError)),
           );
         }
       }
-    } else if (message is _EngineWorkerRequest) {
+    } else if (message is EngineWorkerRequest) {
       try {
         final active = handles;
         if (active == null) {
@@ -130,9 +136,9 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         }
         message.reply.send(message.request.run(active));
       } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
+        message.reply.send(EngineWorkerFailure(NativeError.from(error)));
       }
-    } else if (message is _EngineWorkerStreamComplete) {
+    } else if (message is EngineWorkerStreamComplete) {
       try {
         final active = handles;
         if (active == null) {
@@ -150,10 +156,10 @@ void _engineWorkerMain(_EngineWorkerStart start) {
       } catch (error) {
         final closeError = closeStreamingGeneration(resetContext: true);
         message.reply.send(
-          _EngineWorkerFailure(_NativeError.from(closeError ?? error)),
+          EngineWorkerFailure(NativeError.from(closeError ?? error)),
         );
       }
-    } else if (message is _EngineWorkerStreamPrompt) {
+    } else if (message is EngineWorkerStreamPrompt) {
       try {
         final active = handles;
         if (active == null) {
@@ -169,16 +175,16 @@ void _engineWorkerMain(_EngineWorkerStart start) {
       } catch (error) {
         final closeError = closeStreamingGeneration(resetContext: true);
         message.reply.send(
-          _EngineWorkerFailure(_NativeError.from(closeError ?? error)),
+          EngineWorkerFailure(NativeError.from(closeError ?? error)),
         );
       }
-    } else if (message is _EngineWorkerStreamNext) {
+    } else if (message is EngineWorkerStreamNext) {
       stepStreamingGeneration(message.id);
-    } else if (message is _EngineWorkerStreamDispose) {
+    } else if (message is EngineWorkerStreamDispose) {
       if (streamingGeneration != null && streamingId != message.id) {
         message.reply.send(
-          const _EngineWorkerFailure(
-            _NativeError(
+          const EngineWorkerFailure(
+            NativeError(
               'generation',
               'Cannot dispose a generation owned by another stream.',
             ),
@@ -190,7 +196,7 @@ void _engineWorkerMain(_EngineWorkerStart start) {
           message.reply.send(null);
         } else {
           message.reply.send(
-            _EngineWorkerFailure(_NativeError.from(cleanupError)),
+            EngineWorkerFailure(NativeError.from(cleanupError)),
           );
         }
       }
@@ -199,13 +205,13 @@ void _engineWorkerMain(_EngineWorkerStart start) {
 
   commands.listen((message) {
     if (streamingGeneration != null &&
-        message is! _EngineWorkerStreamNext &&
-        message is! _EngineWorkerStreamDispose &&
-        message is! _EngineWorkerClose &&
-        message is! _EngineWorkerFinalize) {
-      _engineWorkerReply(message)?.send(
-        const _EngineWorkerFailure(
-          _NativeError(
+        message is! EngineWorkerStreamNext &&
+        message is! EngineWorkerStreamDispose &&
+        message is! EngineWorkerClose &&
+        message is! EngineWorkerFinalize) {
+      engineWorkerReply(message)?.send(
+        const EngineWorkerFailure(
+          NativeError(
             'generation',
             'Another generation is already active on this engine.',
           ),

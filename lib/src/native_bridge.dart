@@ -3,38 +3,31 @@ import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
 import 'config.dart';
 import 'errors.dart';
-import 'prompt_source_limits.dart';
 import 'ffi/generated_bindings.dart';
 import 'ffi/native_asset_lookup.dart';
 import 'input_validation.dart';
 import 'model_info.dart';
 
-part 'engine_session.dart';
-part 'engine_worker.dart';
-part 'engine_worker_protocol.dart';
-part 'native_chat.dart';
-part 'native_config_mapping.dart';
-part 'native_engine_handles.dart';
-part 'native_model_ops.dart';
-part 'native_one_shot.dart';
+import 'engine_session.dart';
+import 'native_config_mapping.dart';
+import 'native_one_shot.dart';
 
 const _maxJsonSchemaGrammarBytes = 16 * 1024 * 1024;
 
 final class NativeLlamaBridge {
-  NativeLlamaBridge._(this._bindings);
+  NativeLlamaBridge._(this.bindings);
 
   static const expectedAbiVersion = LLAMA_DART_ABI_VERSION;
 
-  final LlamaDartBridgeBindings _bindings;
+  final LlamaDartBridgeBindings bindings;
 
-  int _nextToolCallId = 1;
+  int nextToolCallId = 1;
 
   static NativeLlamaBridge? tryOpen(String? nativeLibraryPath) {
     final explicitPath = nativeLibraryPath;
@@ -57,15 +50,15 @@ final class NativeLlamaBridge {
   }
 
   static Future<LlamaModelInfo> inspectModel(LlamaModelConfig config) {
-    return Isolate.run(() => _inspectModelInWorker(config));
+    return Isolate.run(() => inspectModelInWorker(config));
   }
 
   static Future<Map<String, String>> modelMetadata(LlamaModelConfig config) {
-    return Isolate.run(() => _modelMetadataInWorker(config));
+    return Isolate.run(() => modelMetadataInWorker(config));
   }
 
   static Future<String> chatTemplate(LlamaModelConfig config) {
-    return Isolate.run(() => _chatTemplateInWorker(config));
+    return Isolate.run(() => chatTemplateInWorker(config));
   }
 
   static String jsonSchemaGrammar(Map<String, Object?> schema) {
@@ -85,7 +78,7 @@ final class NativeLlamaBridge {
     required bool parseSpecial,
   }) {
     return Isolate.run(
-      () => _tokenizeInWorker(
+      () => tokenizeInWorker(
         config,
         text,
         addSpecial: addSpecial,
@@ -101,7 +94,7 @@ final class NativeLlamaBridge {
     required bool unparseSpecial,
   }) {
     return Isolate.run(
-      () => _detokenizeInWorker(
+      () => detokenizeInWorker(
         config,
         tokens,
         removeSpecial: removeSpecial,
@@ -115,7 +108,7 @@ final class NativeLlamaBridge {
     String text,
     EmbeddingConfig embeddingConfig,
   ) {
-    return Isolate.run(() => _embedTextInWorker(config, text, embeddingConfig));
+    return Isolate.run(() => embedTextInWorker(config, text, embeddingConfig));
   }
 
   static Future<EmbeddingBatch> embedTexts(
@@ -124,7 +117,7 @@ final class NativeLlamaBridge {
     EmbeddingConfig embeddingConfig,
   ) {
     return Isolate.run(
-      () => _embedTextsInWorker(config, texts, embeddingConfig),
+      () => embedTextsInWorker(config, texts, embeddingConfig),
     );
   }
 
@@ -135,7 +128,7 @@ final class NativeLlamaBridge {
     RerankingConfig rerankingConfig,
   ) {
     return Isolate.run(
-      () => _rerankDocumentsInWorker(config, query, documents, rerankingConfig),
+      () => rerankDocumentsInWorker(config, query, documents, rerankingConfig),
     );
   }
 
@@ -149,7 +142,7 @@ final class NativeLlamaBridge {
     int? maximumPromptBytes,
   }) {
     return Isolate.run(
-      () => _formatChatInWorker(
+      () => formatChatInWorker(
         config,
         messages,
         addAssistantPrompt: addAssistantPrompt,
@@ -171,7 +164,7 @@ final class NativeLlamaBridge {
     int? maximumPromptBytes,
   }) {
     return Isolate.run(
-      () => _countChatTokensInWorker(
+      () => countChatTokensInWorker(
         config,
         messages,
         addAssistantPrompt: addAssistantPrompt,
@@ -186,93 +179,97 @@ final class NativeLlamaBridge {
   static Future<LlamaChatTemplateCapabilities> chatTemplateCapabilities(
     LlamaModelConfig config,
   ) {
-    return Isolate.run(() => _chatTemplateCapabilitiesInWorker(config));
+    return Isolate.run(() => chatTemplateCapabilitiesInWorker(config));
   }
 
   static Future<NativeLlamaEngineSession> startEngine(
     LlamaModelConfig config,
-  ) => _startEngine(config, embeddings: false, pooling: EmbeddingPooling.model);
+  ) => spawnEngineSession(
+    config,
+    embeddings: false,
+    pooling: EmbeddingPooling.model,
+  );
 
   static Future<NativeLlamaEngineSession> startEmbeddingEngine(
     LlamaModelConfig config,
     EmbeddingPooling pooling,
-  ) => _startEngine(config, embeddings: true, pooling: pooling);
+  ) => spawnEngineSession(config, embeddings: true, pooling: pooling);
 
   LlamaRuntimeCapabilities currentCapabilities() {
     final capabilities = calloc<llama_dart_capabilities>();
     try {
       capabilities.ref.struct_size = ffi.sizeOf<llama_dart_capabilities>();
-      _check(_bindings.llama_dart_get_capabilities(capabilities));
+      check(bindings.llama_dart_get_capabilities(capabilities));
       final flags = capabilities.ref.flags;
       return LlamaRuntimeCapabilities(
         nativeBridgeAvailable: true,
         bridgeAbiVersion: capabilities.ref.abi_version,
-        modelLoading: _hasFlag(
+        modelLoading: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_MODEL_LOADING.value,
         ),
-        tokenization: _hasFlag(
+        tokenization: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_TOKENIZATION.value,
         ),
-        textGeneration: _hasFlag(
+        textGeneration: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_TEXT_GENERATION.value,
         ),
-        structuredOutput: _hasFlag(
+        structuredOutput: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_STRUCTURED_OUTPUT.value,
         ),
-        embeddings: _hasFlag(
+        embeddings: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_EMBEDDINGS.value,
         ),
-        reranking: _hasFlag(
+        reranking: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_RERANKING.value,
         ),
         rag: true,
-        multimodal: _hasFlag(
+        multimodal: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_MULTIMODAL.value,
         ),
-        lora: _hasFlag(
+        lora: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_LORA.value,
         ),
-        speculativeDecoding: _hasFlag(
+        speculativeDecoding: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_SPECULATIVE_DECODING.value,
         ),
-        mtp: _hasFlag(
+        mtp: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_MTP.value,
         ),
-        metal: _hasFlag(
+        metal: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_METAL.value,
         ),
-        vulkan: _hasFlag(
+        vulkan: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_VULKAN.value,
         ),
-        toolCalling: _hasFlag(
+        toolCalling: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_TOOL_CALLING.value,
         ),
-        nativeLogging: _hasFlag(
+        nativeLogging: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_LOGGING.value,
         ),
-        prefill: _hasFlag(
+        prefill: hasFlag(
           flags,
           llama_dart_capability_flags.LLAMA_DART_CAP_PREFILL.value,
         ),
-        upstreamCommit: _readOptionalCString(
-          _bindings.llama_dart_upstream_commit(),
+        upstreamCommit: readOptionalCString(
+          bindings.llama_dart_upstream_commit(),
         ),
-        nativeBuildFlags: _readOptionalCString(
-          _bindings.llama_dart_build_flags(),
+        nativeBuildFlags: readOptionalCString(
+          bindings.llama_dart_build_flags(),
         ),
       );
     } finally {
@@ -288,7 +285,7 @@ final class NativeLlamaBridge {
       LlamaLogLevel.warning => llama_dart_log_level.LLAMA_DART_LOG_WARNING,
       LlamaLogLevel.error => llama_dart_log_level.LLAMA_DART_LOG_ERROR,
     };
-    _check(_bindings.llama_dart_log_set_level(nativeLevel.value));
+    check(bindings.llama_dart_log_set_level(nativeLevel.value));
   }
 
   List<LlamaLogRecord> drainLogs() {
@@ -301,7 +298,7 @@ final class NativeLlamaBridge {
         message.ref
           ..data = ffi.nullptr
           ..size = 0;
-        _check(_bindings.llama_dart_log_next(level, message));
+        check(bindings.llama_dart_log_next(level, message));
         final data = message.ref.data;
         final size = message.ref.size;
         if (data == ffi.nullptr) {
@@ -319,26 +316,24 @@ final class NativeLlamaBridge {
         }
         records.add(
           LlamaLogRecord(
-            level: _nativeLogLevelFromValue(level.value),
+            level: nativeLogLevelFromValue(level.value),
             message: utf8.decode(data.asTypedList(size), allowMalformed: true),
           ),
         );
-        _bindings.llama_dart_buffer_free(data);
+        bindings.llama_dart_buffer_free(data);
         message.ref.data = ffi.nullptr;
         message.ref.size = 0;
       }
       return List<LlamaLogRecord>.unmodifiable(records);
     } finally {
-      _bindings.llama_dart_buffer_free(message.ref.data);
+      bindings.llama_dart_buffer_free(message.ref.data);
       calloc.free(message);
       calloc.free(level);
     }
   }
 
-  String get _multimodalMarker {
-    final marker = _readOptionalCString(
-      _bindings.llama_dart_multimodal_marker(),
-    );
+  String get multimodalMarker {
+    final marker = readOptionalCString(bindings.llama_dart_multimodal_marker());
     if (marker == null || marker.isEmpty) {
       throw const NativeBridgeException(
         'Native bridge returned an empty multimodal marker.',
@@ -348,7 +343,7 @@ final class NativeLlamaBridge {
   }
 
   void _ensureAbiVersion() {
-    final actual = _bindings.llama_dart_abi_version();
+    final actual = bindings.llama_dart_abi_version();
     if (actual != LLAMA_DART_ABI_VERSION) {
       throw UnsupportedFeatureException(
         'Native bridge ABI version $actual is incompatible with Dart bindings '
@@ -371,7 +366,7 @@ final class NativeLlamaBridge {
     final out = calloc<llama_dart_buffer>();
     try {
       input.asTypedList(bytes.length).setAll(0, bytes);
-      final result = _bindings.llama_dart_json_schema_to_grammar(
+      final result = bindings.llama_dart_json_schema_to_grammar(
         input,
         bytes.length,
         out,
@@ -379,7 +374,7 @@ final class NativeLlamaBridge {
       if (result == llama_dart_result.LLAMA_DART_ERROR_INVALID_ARGUMENT) {
         throw ArgumentError.value(schema, 'schema', _lastError());
       }
-      _check(result);
+      check(result);
       final data = out.ref.data;
       final size = out.ref.size;
       if (data == ffi.nullptr || size == 0) {
@@ -401,13 +396,13 @@ final class NativeLlamaBridge {
         );
       }
     } finally {
-      _bindings.llama_dart_buffer_free(out.ref.data);
+      bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
       calloc.free(input);
     }
   }
 
-  void _check(llama_dart_result result) {
+  void check(llama_dart_result result) {
     if (result == llama_dart_result.LLAMA_DART_SUCCESS) {
       return;
     }
@@ -443,7 +438,7 @@ final class NativeLlamaBridge {
   }
 
   String _lastError() {
-    final pointer = _bindings.llama_dart_last_error_message();
+    final pointer = bindings.llama_dart_last_error_message();
     if (pointer == ffi.nullptr) {
       return 'Native bridge failed without an error message.';
     }
@@ -454,8 +449,8 @@ final class NativeLlamaBridge {
     return message;
   }
 
-  void _throwIfLastError(String operation) {
-    final pointer = _bindings.llama_dart_last_error_message();
+  void throwIfLastError(String operation) {
+    final pointer = bindings.llama_dart_last_error_message();
     if (pointer == ffi.nullptr) {
       throw NativeBridgeException(
         '$operation failed without an error message.',
@@ -467,12 +462,12 @@ final class NativeLlamaBridge {
     }
   }
 
-  void _cancelContextAddress(int contextAddress) {
+  void cancelContextAddress(int contextAddress) {
     if (contextAddress == 0) {
       return;
     }
-    _check(
-      _bindings.llama_dart_context_cancel(
+    check(
+      bindings.llama_dart_context_cancel(
         ffi.Pointer<llama_dart_context>.fromAddress(contextAddress),
       ),
     );
@@ -492,7 +487,7 @@ final class NativeLlamaBridge {
   }
 }
 
-UnsupportedFeatureException _nativeBridgeUnavailable(String? path) {
+UnsupportedFeatureException nativeBridgeUnavailable(String? path) {
   final location = path ?? 'the default platform library path';
   return UnsupportedFeatureException(
     'Native bridge library was not found or is incompatible: $location',

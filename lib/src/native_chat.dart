@@ -1,7 +1,19 @@
-part of 'native_bridge.dart';
+import 'dart:convert';
+import 'dart:ffi' as ffi;
+import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
+import 'config.dart';
+import 'errors.dart';
+import 'ffi/generated_bindings.dart';
+import 'model_info.dart';
+import 'prompt_source_limits.dart';
+
+import 'native_bridge.dart';
+import 'native_model_ops.dart';
 
 extension NativeChatOps on NativeLlamaBridge {
-  String _formatChatModel(
+  String loadAndFormatChat(
     LlamaModelConfig config,
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
@@ -10,9 +22,9 @@ extension NativeChatOps on NativeLlamaBridge {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) {
-    return _withLoadedModel(
+    return withLoadedModel(
       config,
-      (model) => _formatChat(
+      (model) => formatChatWithModel(
         model,
         messages,
         addAssistantPrompt: addAssistantPrompt,
@@ -24,7 +36,7 @@ extension NativeChatOps on NativeLlamaBridge {
     );
   }
 
-  String _formatChat(
+  String formatChatWithModel(
     ffi.Pointer<llama_dart_model> model,
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
@@ -33,12 +45,12 @@ extension NativeChatOps on NativeLlamaBridge {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) {
-    final prepared = _prepareMultimodalChat(
+    final prepared = prepareMultimodalChat(
       messages,
-      _multimodalMarker,
+      multimodalMarker,
       maximumPromptBytes: maximumPromptBytes,
     );
-    return _renderPreparedChat(
+    return renderPreparedChat(
       model,
       prepared.messages,
       addAssistantPrompt: addAssistantPrompt,
@@ -49,7 +61,7 @@ extension NativeChatOps on NativeLlamaBridge {
     ).prompt;
   }
 
-  _NativeRenderedChat _renderPreparedChat(
+  NativeRenderedChat renderPreparedChat(
     ffi.Pointer<llama_dart_model> model,
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
@@ -76,11 +88,11 @@ extension NativeChatOps on NativeLlamaBridge {
         reasoningBudgetTokens: reasoningBudgetTokens,
         parseOutput: parseOutput,
       );
-      return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
+      return NativeRenderedChat(prompt: plan.prompt, plan: plan);
     }
 
     try {
-      return _NativeRenderedChat(
+      return NativeRenderedChat(
         prompt: _applyChatTemplate(
           model,
           messages,
@@ -104,24 +116,24 @@ extension NativeChatOps on NativeLlamaBridge {
         reasoningBudgetTokens: reasoningBudgetTokens,
         parseOutput: false,
       );
-      return _NativeRenderedChat(prompt: plan.prompt, plan: plan);
+      return NativeRenderedChat(prompt: plan.prompt, plan: plan);
     }
   }
 
-  LlamaChatTemplateCapabilities _chatTemplateCapabilitiesModel(
+  LlamaChatTemplateCapabilities loadAndReadChatTemplateCapabilities(
     LlamaModelConfig config,
   ) {
-    return _withLoadedModel(config, _chatTemplateCapabilities);
+    return withLoadedModel(config, chatTemplateCapabilitiesOfModel);
   }
 
-  LlamaChatTemplateCapabilities _chatTemplateCapabilities(
+  LlamaChatTemplateCapabilities chatTemplateCapabilitiesOfModel(
     ffi.Pointer<llama_dart_model> model,
   ) {
     final out = calloc<llama_dart_chat_template_capabilities>();
     try {
       out.ref.struct_size = ffi.sizeOf<llama_dart_chat_template_capabilities>();
-      _check(
-        _bindings.llama_dart_model_get_chat_template_capabilities(model, out),
+      check(
+        bindings.llama_dart_model_get_chat_template_capabilities(model, out),
       );
       return LlamaChatTemplateCapabilities(
         supportsTools: out.ref.supports_tools != 0,
@@ -133,7 +145,7 @@ extension NativeChatOps on NativeLlamaBridge {
     }
   }
 
-  int _countChatTokensModel(
+  int loadAndCountChatTokens(
     LlamaModelConfig config,
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
@@ -142,9 +154,9 @@ extension NativeChatOps on NativeLlamaBridge {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) {
-    return _withLoadedModel(
+    return withLoadedModel(
       config,
-      (model) => _countChatTokens(
+      (model) => countChatTokensWithModel(
         model,
         messages,
         addAssistantPrompt: addAssistantPrompt,
@@ -156,7 +168,7 @@ extension NativeChatOps on NativeLlamaBridge {
     );
   }
 
-  int _countChatTokens(
+  int countChatTokensWithModel(
     ffi.Pointer<llama_dart_model> model,
     List<ChatMessage> messages, {
     required bool addAssistantPrompt,
@@ -165,7 +177,7 @@ extension NativeChatOps on NativeLlamaBridge {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) {
-    final prompt = _formatChat(
+    final prompt = formatChatWithModel(
       model,
       messages,
       addAssistantPrompt: addAssistantPrompt,
@@ -175,7 +187,7 @@ extension NativeChatOps on NativeLlamaBridge {
       maximumPromptBytes: maximumPromptBytes,
     );
     if (maximumPromptBytes == null) {
-      return _tokenize(
+      return tokenizeWithModel(
         model,
         prompt,
         addSpecial: true,
@@ -189,7 +201,7 @@ extension NativeChatOps on NativeLlamaBridge {
     final count = calloc<ffi.Size>();
     try {
       pointer.asTypedList(bytes.length).setAll(0, bytes);
-      final result = _bindings.llama_dart_model_tokenize(
+      final result = bindings.llama_dart_model_tokenize(
         model,
         pointer,
         bytes.length,
@@ -200,9 +212,9 @@ extension NativeChatOps on NativeLlamaBridge {
         1,
       );
       if (result == llama_dart_result.LLAMA_DART_ERROR_BUFFER_TOO_SMALL) {
-        _bindings.llama_dart_clear_last_error();
+        bindings.llama_dart_clear_last_error();
       } else {
-        _check(result);
+        check(result);
       }
       return count.value;
     } finally {
@@ -211,7 +223,7 @@ extension NativeChatOps on NativeLlamaBridge {
     }
   }
 
-  _NativeChatPlan _createChatPlan(
+  NativeChatPlan _createChatPlan(
     ffi.Pointer<llama_dart_model> model,
     List<ChatMessage> messages,
     LlamaToolCallingConfig toolCalling, {
@@ -259,8 +271,8 @@ extension NativeChatOps on NativeLlamaBridge {
     final out = calloc<llama_dart_buffer>();
     try {
       requestPointer.asTypedList(requestBytes.length).setAll(0, requestBytes);
-      _check(
-        _bindings.llama_dart_model_create_chat_plan(
+      check(
+        bindings.llama_dart_model_create_chat_plan(
           model,
           requestPointer,
           requestBytes.length,
@@ -299,7 +311,7 @@ extension NativeChatOps on NativeLlamaBridge {
           'The native bridge does not support bounded reasoning.',
         );
       }
-      return _NativeChatPlan(
+      return NativeChatPlan(
         json: planJson,
         prompt: decoded['prompt'] as String,
         parseOutput: parseOutput,
@@ -317,14 +329,14 @@ extension NativeChatOps on NativeLlamaBridge {
         cause: error,
       );
     } finally {
-      _bindings.llama_dart_buffer_free(out.ref.data);
+      bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
       calloc.free(requestPointer);
     }
   }
 
   ChatMessage _parseChatOutput(
-    _NativeChatPlan plan,
+    NativeChatPlan plan,
     String output,
     LlamaToolCallingConfig toolCalling,
   ) {
@@ -340,8 +352,8 @@ extension NativeChatOps on NativeLlamaBridge {
       if (outputBytes.isNotEmpty) {
         outputPointer.asTypedList(outputBytes.length).setAll(0, outputBytes);
       }
-      _check(
-        _bindings.llama_dart_chat_parse_output(
+      check(
+        bindings.llama_dart_chat_parse_output(
           planPointer,
           planBytes.length,
           outputPointer,
@@ -430,7 +442,7 @@ extension NativeChatOps on NativeLlamaBridge {
         var id = call.id;
         if (id == null) {
           do {
-            id = 'call_${_nextToolCallId++}';
+            id = 'call_${nextToolCallId++}';
           } while (usedIds.contains(id));
           usedIds.add(id);
         }
@@ -453,7 +465,7 @@ extension NativeChatOps on NativeLlamaBridge {
         cause: error,
       );
     } finally {
-      _bindings.llama_dart_buffer_free(out.ref.data);
+      bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
       if (outputPointer != ffi.nullptr) {
         calloc.free(outputPointer);
@@ -505,8 +517,8 @@ extension NativeChatOps on NativeLlamaBridge {
           ..content_size = content.length;
       }
 
-      _check(
-        _bindings.llama_dart_model_apply_chat_template(
+      check(
+        bindings.llama_dart_model_apply_chat_template(
           model,
           nativeMessages,
           messages.length,
@@ -532,7 +544,7 @@ extension NativeChatOps on NativeLlamaBridge {
         );
       }
     } finally {
-      _bindings.llama_dart_buffer_free(out.ref.data);
+      bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
       for (final pointer in allocated) {
         calloc.free(pointer);
@@ -542,8 +554,8 @@ extension NativeChatOps on NativeLlamaBridge {
   }
 }
 
-({List<ChatMessage> messages, List<_NativeMediaInput> media})
-_prepareMultimodalChat(
+({List<ChatMessage> messages, List<NativeMediaInput> media})
+prepareMultimodalChat(
   List<ChatMessage> messages,
   String marker, {
   int? maximumPromptBytes,
@@ -561,7 +573,7 @@ _prepareMultimodalChat(
     }
   }
   final formatted = <ChatMessage>[];
-  final media = <_NativeMediaInput>[];
+  final media = <NativeMediaInput>[];
   for (final message in messages) {
     if (message.parts.isEmpty) {
       formatted.add(message);
@@ -575,7 +587,7 @@ _prepareMultimodalChat(
         case ImagePart(:final path, :final bytes):
           content.write(marker);
           media.add(
-            _NativeMediaInput(
+            NativeMediaInput(
               type: llama_dart_media_type.LLAMA_DART_MEDIA_IMAGE.value,
               path: path,
               bytes: bytes,
@@ -584,7 +596,7 @@ _prepareMultimodalChat(
         case AudioPart(:final path, :final bytes):
           content.write(marker);
           media.add(
-            _NativeMediaInput(
+            NativeMediaInput(
               type: llama_dart_media_type.LLAMA_DART_MEDIA_AUDIO.value,
               path: path,
               bytes: bytes,
@@ -600,7 +612,7 @@ _prepareMultimodalChat(
   }
   return (
     messages: List<ChatMessage>.unmodifiable(formatted),
-    media: List<_NativeMediaInput>.unmodifiable(media),
+    media: List<NativeMediaInput>.unmodifiable(media),
   );
 }
 
@@ -635,8 +647,8 @@ Map<String, Object?> _chatMessageToOpenAiJson(ChatMessage message) {
   return json;
 }
 
-final class _NativeChatPlan {
-  _NativeChatPlan({
+final class NativeChatPlan {
+  NativeChatPlan({
     required this.json,
     required this.prompt,
     required this.parseOutput,
@@ -649,15 +661,15 @@ final class _NativeChatPlan {
   final Set<String> usedToolCallIds;
 }
 
-final class _NativeRenderedChat {
-  const _NativeRenderedChat({required this.prompt, this.plan});
+final class NativeRenderedChat {
+  const NativeRenderedChat({required this.prompt, this.plan});
 
   final String prompt;
-  final _NativeChatPlan? plan;
+  final NativeChatPlan? plan;
 }
 
-final class _NativeMediaInput {
-  const _NativeMediaInput({
+final class NativeMediaInput {
+  const NativeMediaInput({
     required this.type,
     required this.path,
     required this.bytes,
@@ -668,9 +680,9 @@ final class _NativeMediaInput {
   final Uint8List? bytes;
 }
 
-ChatMessage _parseTerminalChatOutput(
+ChatMessage parseTerminalChatOutput(
   NativeLlamaBridge bridge,
-  _NativeChatPlan plan,
+  NativeChatPlan plan,
   String output,
   LlamaToolCallingConfig toolCalling,
   GenerationStopReason stopReason,

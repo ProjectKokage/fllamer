@@ -1,7 +1,21 @@
-part of 'native_bridge.dart';
+import 'dart:convert';
+import 'dart:ffi' as ffi;
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
+import 'config.dart';
+import 'errors.dart';
+import 'ffi/generated_bindings.dart';
+import 'model_info.dart';
+
+import 'native_bridge.dart';
+import 'native_chat.dart';
+import 'native_config_mapping.dart';
+import 'native_model_ops.dart';
 
 extension NativeEngineOpening on NativeLlamaBridge {
-  _NativeEngineHandles _openEngine(
+  NativeEngineHandles openEngine(
     LlamaModelConfig config, {
     bool embeddings = false,
     EmbeddingPooling pooling = EmbeddingPooling.model,
@@ -15,7 +29,7 @@ extension NativeEngineOpening on NativeLlamaBridge {
         : utf8.encode(config.mmprojPath!);
     final speculativeModelPath = embeddings
         ? const <int>[]
-        : utf8.encode(_speculativeModelPath(config) ?? '');
+        : utf8.encode(nativeSpeculativeModelPath(config) ?? '');
     final pathPointer = calloc<ffi.Uint8>(modelPath.length);
     ffi.Pointer<ffi.Uint8> chatTemplatePointer = ffi.nullptr;
     ffi.Pointer<ffi.Uint8> mmprojPathPointer = ffi.nullptr;
@@ -51,17 +65,17 @@ extension NativeEngineOpening on NativeLlamaBridge {
         ..struct_size = ffi.sizeOf<llama_dart_model_load_config>()
         ..model_path_data = pathPointer
         ..model_path_size = modelPath.length
-        ..n_gpu_layers = _gpuLayers(config)
+        ..n_gpu_layers = gpuLayers(config)
         ..vocab_only = 0
         ..use_mmap = config.useMmap ? 1 : 0
         ..use_mlock = config.useMlock ? 1 : 0
         ..check_tensors = config.checkTensors ? 1 : 0
-        ..gpu_backend = _gpuBackend(config)
+        ..gpu_backend = gpuBackend(config)
         ..chat_template_data = chatTemplatePointer
         ..chat_template_size = chatTemplate.length
-        ..load_mtp = _loadsEmbeddedMtp(config) ? 1 : 0;
+        ..load_mtp = loadsEmbeddedMtp(config) ? 1 : 0;
 
-      _check(_bindings.llama_dart_model_load(loadConfig, outModel));
+      check(bindings.llama_dart_model_load(loadConfig, outModel));
       model = outModel.value;
       if (model == ffi.nullptr) {
         throw const ModelLoadException('Native bridge returned a null model.');
@@ -75,31 +89,31 @@ extension NativeEngineOpening on NativeLlamaBridge {
         ..threads = config.threads ?? 0
         ..batch_threads = config.batchThreads ?? config.threads ?? 0
         ..embeddings = embeddings ? 1 : 0
-        ..pooling_type = embeddings ? _poolingType(pooling) : -1
+        ..pooling_type = embeddings ? poolingType(pooling) : -1
         ..attention_type = -1
-        ..speculative_ngram_n = embeddings ? 0 : _ngramN(config)
-        ..speculative_ngram_m = embeddings ? 0 : _ngramM(config)
+        ..speculative_ngram_n = embeddings ? 0 : ngramN(config)
+        ..speculative_ngram_m = embeddings ? 0 : ngramM(config)
         ..mmproj_path_data = mmprojPathPointer
         ..mmproj_path_size = mmprojPath.length
-        ..mmproj_use_gpu = mmprojPath.isNotEmpty && _gpuLayers(config) != 0
+        ..mmproj_use_gpu = mmprojPath.isNotEmpty && gpuLayers(config) != 0
             ? 1
             : 0
         ..speculative_type = embeddings
             ? llama_dart_speculative_type.LLAMA_DART_SPECULATIVE_NONE.value
-            : _speculativeType(config)
+            : speculativeType(config)
         ..speculative_model_path_data = speculativeModelPathPointer
         ..speculative_model_path_size = speculativeModelPath.length
-        ..speculative_draft_max = embeddings ? 0 : _speculativeDraftMax(config)
-        ..kv_cache_key_type = _kvCacheType(config.kvCache.keyType)
-        ..kv_cache_value_type = _kvCacheType(config.kvCache.valueType)
-        ..flash_attention = _flashAttention(config.kvCache.flashAttention)
+        ..speculative_draft_max = embeddings ? 0 : speculativeDraftMax(config)
+        ..kv_cache_key_type = kvCacheType(config.kvCache.keyType)
+        ..kv_cache_value_type = kvCacheType(config.kvCache.valueType)
+        ..flash_attention = flashAttention(config.kvCache.flashAttention)
         ..kv_cache_offload = config.kvCache.offload ? 1 : 0
         ..swa_full = config.kvCache.swaFull ? 1 : 0
         ..kv_unified = config.kvCache.unified ? 1 : 0
-        ..speculative_ngram_min_draft = embeddings ? 0 : _ngramMinDraft(config);
+        ..speculative_ngram_min_draft = embeddings ? 0 : ngramMinDraft(config);
 
-      _check(
-        _bindings.llama_dart_context_create(model, contextConfig, outContext),
+      check(
+        bindings.llama_dart_context_create(model, contextConfig, outContext),
       );
       context = outContext.value;
       if (context == ffi.nullptr) {
@@ -108,13 +122,13 @@ extension NativeEngineOpening on NativeLlamaBridge {
         );
       }
 
-      return _NativeEngineHandles(bridge: this, model: model, context: context);
+      return NativeEngineHandles(bridge: this, model: model, context: context);
     } catch (_) {
       if (context != ffi.nullptr) {
-        _bindings.llama_dart_context_free(context);
+        bindings.llama_dart_context_free(context);
       }
       if (model != ffi.nullptr) {
-        _bindings.llama_dart_model_free(model);
+        bindings.llama_dart_model_free(model);
       }
       rethrow;
     } finally {
@@ -136,8 +150,8 @@ extension NativeEngineOpening on NativeLlamaBridge {
   }
 }
 
-EmbeddingBatch _embedTextsWithHandles(
-  _NativeEngineHandles handles,
+EmbeddingBatch embedTextsWithHandles(
+  NativeEngineHandles handles,
   List<String> texts,
   EmbeddingConfig embeddingConfig,
 ) {
@@ -149,7 +163,7 @@ EmbeddingBatch _embedTextsWithHandles(
   }
   Float32List embed(String text) {
     final values = handles.embedText(text, embeddingConfig);
-    return embeddingConfig.normalize ? _normalize(values) : values;
+    return embeddingConfig.normalize ? normalize(values) : values;
   }
 
   final first = embed(texts.first);
@@ -181,8 +195,8 @@ EmbeddingBatch _embedTextsWithHandles(
   );
 }
 
-final class _NativeEngineHandles {
-  _NativeEngineHandles({
+final class NativeEngineHandles {
+  NativeEngineHandles({
     required this.bridge,
     required this.model,
     required this.context,
@@ -197,43 +211,43 @@ final class _NativeEngineHandles {
 
   void close() {
     if (context != ffi.nullptr) {
-      bridge._bindings.llama_dart_context_free(context);
-      bridge._throwIfLastError('Native context free');
+      bridge.bindings.llama_dart_context_free(context);
+      bridge.throwIfLastError('Native context free');
       context = ffi.nullptr;
     }
     for (final id in _loraAdapters.keys.toList(growable: false)) {
       final adapter = _loraAdapters[id]!;
-      bridge._bindings.llama_dart_lora_free(adapter.pointer);
-      bridge._throwIfLastError('Native LoRA adapter free');
+      bridge.bindings.llama_dart_lora_free(adapter.pointer);
+      bridge.throwIfLastError('Native LoRA adapter free');
       _loraAdapters.remove(id);
     }
     if (model != ffi.nullptr) {
-      bridge._bindings.llama_dart_model_free(model);
+      bridge.bindings.llama_dart_model_free(model);
       model = ffi.nullptr;
-      bridge._throwIfLastError('Native model free');
+      bridge.throwIfLastError('Native model free');
     }
   }
 
   void reset() {
-    bridge._check(bridge._bindings.llama_dart_context_reset(context));
+    bridge.check(bridge.bindings.llama_dart_context_reset(context));
   }
 
   void warmUp() {
-    bridge._check(bridge._bindings.llama_dart_context_warm_up(context));
+    bridge.check(bridge.bindings.llama_dart_context_warm_up(context));
   }
 
-  LlamaModelInfo modelInfo() => bridge._readModelInfo(model);
+  LlamaModelInfo modelInfo() => bridge.readModelInfo(model);
 
-  Map<String, String> modelMetadata() => bridge._readModelMetadata(model);
+  Map<String, String> modelMetadata() => bridge.readModelMetadata(model);
 
-  String chatTemplate() => bridge._readChatTemplate(model);
+  String chatTemplate() => bridge.readChatTemplate(model);
 
   List<int> tokenize(
     String text, {
     required bool addSpecial,
     required bool parseSpecial,
   }) {
-    return bridge._tokenize(
+    return bridge.tokenizeWithModel(
       model,
       text,
       addSpecial: addSpecial,
@@ -258,7 +272,7 @@ final class _NativeEngineHandles {
     required bool removeSpecial,
     required bool unparseSpecial,
   }) {
-    return bridge._detokenize(
+    return bridge.detokenizeWithModel(
       model,
       tokens,
       removeSpecial: removeSpecial,
@@ -267,7 +281,7 @@ final class _NativeEngineHandles {
   }
 
   LlamaChatTemplateCapabilities chatTemplateCapabilities() {
-    return bridge._chatTemplateCapabilities(model);
+    return bridge.chatTemplateCapabilitiesOfModel(model);
   }
 
   String formatChat(
@@ -278,7 +292,7 @@ final class _NativeEngineHandles {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) {
-    return bridge._formatChat(
+    return bridge.formatChatWithModel(
       model,
       messages,
       addAssistantPrompt: addAssistantPrompt,
@@ -297,7 +311,7 @@ final class _NativeEngineHandles {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) {
-    return bridge._countChatTokens(
+    return bridge.countChatTokensWithModel(
       model,
       messages,
       addAssistantPrompt: addAssistantPrompt,
@@ -311,8 +325,8 @@ final class _NativeEngineHandles {
   int shiftContext({required int keepTokens, required int? discardTokens}) {
     final discarded = calloc<ffi.Uint32>();
     try {
-      bridge._check(
-        bridge._bindings.llama_dart_context_shift(
+      bridge.check(
+        bridge.bindings.llama_dart_context_shift(
           context,
           keepTokens,
           discardTokens ?? 0,
@@ -329,9 +343,7 @@ final class _NativeEngineHandles {
     final info = calloc<llama_dart_context_info>();
     try {
       info.ref.struct_size = ffi.sizeOf<llama_dart_context_info>();
-      bridge._check(
-        bridge._bindings.llama_dart_context_get_info(context, info),
-      );
+      bridge.check(bridge.bindings.llama_dart_context_get_info(context, info));
       return LlamaContextInfo(
         contextSize: info.ref.context_size,
         sequenceContextSize: info.ref.sequence_context_size,
@@ -340,12 +352,12 @@ final class _NativeEngineHandles {
         maxSequences: info.ref.max_sequences,
         supportsVision: info.ref.supports_vision != 0,
         supportsAudio: info.ref.supports_audio != 0,
-        gpuBackend: _gpuBackendFromNative(info.ref.gpu_backend),
+        gpuBackend: gpuBackendFromNative(info.ref.gpu_backend),
         supportsContextShift: info.ref.supports_context_shift != 0,
         usedTokens: info.ref.used_tokens,
-        kvCacheKeyType: _kvCacheTypeFromNative(info.ref.kv_cache_key_type),
-        kvCacheValueType: _kvCacheTypeFromNative(info.ref.kv_cache_value_type),
-        flashAttention: _flashAttentionFromNative(info.ref.flash_attention),
+        kvCacheKeyType: kvCacheTypeFromNative(info.ref.kv_cache_key_type),
+        kvCacheValueType: kvCacheTypeFromNative(info.ref.kv_cache_value_type),
+        flashAttention: flashAttentionFromNative(info.ref.flash_attention),
         kvCacheOffload: info.ref.kv_cache_offload != 0,
         swaFull: info.ref.swa_full != 0,
         kvUnified: info.ref.kv_unified != 0,
@@ -358,9 +370,7 @@ final class _NativeEngineHandles {
   Uint8List saveState() {
     final out = calloc<llama_dart_buffer>();
     try {
-      bridge._check(
-        bridge._bindings.llama_dart_context_state_get(context, out),
-      );
+      bridge.check(bridge.bindings.llama_dart_context_state_get(context, out));
       final data = out.ref.data;
       final size = out.ref.size;
       if (data == ffi.nullptr || size == 0) {
@@ -368,7 +378,7 @@ final class _NativeEngineHandles {
       }
       return Uint8List.fromList(data.asTypedList(size));
     } finally {
-      bridge._bindings.llama_dart_buffer_free(out.ref.data);
+      bridge.bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
     }
   }
@@ -377,8 +387,8 @@ final class _NativeEngineHandles {
     final statePointer = calloc<ffi.Uint8>(state.length);
     try {
       statePointer.asTypedList(state.length).setAll(0, state);
-      bridge._check(
-        bridge._bindings.llama_dart_context_state_set(
+      bridge.check(
+        bridge.bindings.llama_dart_context_state_set(
           context,
           statePointer,
           state.length,
@@ -408,8 +418,8 @@ final class _NativeEngineHandles {
         final stats = calloc<llama_dart_completion_stats>();
         try {
           stats.ref.struct_size = ffi.sizeOf<llama_dart_completion_stats>();
-          bridge._check(
-            bridge._bindings.llama_dart_context_complete(
+          bridge.check(
+            bridge.bindings.llama_dart_context_complete(
               context,
               completionConfig,
               out,
@@ -423,7 +433,7 @@ final class _NativeEngineHandles {
           }
           return _prefillTelemetryFromStats(stats.ref);
         } finally {
-          bridge._bindings.llama_dart_buffer_free(out.ref.data);
+          bridge.bindings.llama_dart_buffer_free(out.ref.data);
           calloc.free(stats);
           calloc.free(out);
         }
@@ -437,8 +447,8 @@ final class _NativeEngineHandles {
     String prompt,
     GenerationConfig config,
     R Function(ffi.Pointer<llama_dart_completion_config> config) run, {
-    List<_NativeMediaInput> media = const <_NativeMediaInput>[],
-    _NativeChatPlan? chatPlan,
+    List<NativeMediaInput> media = const <NativeMediaInput>[],
+    NativeChatPlan? chatPlan,
     llama_dart_add_special_mode addSpecialMode =
         llama_dart_add_special_mode.LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY,
     bool parseSpecial = false,
@@ -563,7 +573,7 @@ final class _NativeEngineHandles {
         ..repeat_penalty = config.repeatPenalty
         ..frequency_penalty = config.frequencyPenalty
         ..presence_penalty = config.presencePenalty
-        ..mirostat = _mirostatMode(config.mirostat)
+        ..mirostat = mirostatMode(config.mirostat)
         ..mirostat_tau = config.mirostatTau
         ..mirostat_eta = config.mirostatEta
         ..grammar_data = grammarPointer
@@ -621,11 +631,11 @@ final class _NativeEngineHandles {
     }
   }
 
-  _NativeStreamingGeneration startCompletionStream(
+  NativeStreamingGeneration startCompletionStream(
     String prompt,
     GenerationConfig config, {
-    List<_NativeMediaInput> media = const <_NativeMediaInput>[],
-    _NativeChatPlan? chatPlan,
+    List<NativeMediaInput> media = const <NativeMediaInput>[],
+    NativeChatPlan? chatPlan,
     bool parseSpecial = false,
     bool reusePromptPrefix = false,
   }) {
@@ -641,8 +651,8 @@ final class _NativeEngineHandles {
           final generationOut = calloc<ffi.Pointer<llama_dart_generation>>();
           ffi.Pointer<llama_dart_generation> generation = ffi.nullptr;
           try {
-            bridge._check(
-              bridge._bindings.llama_dart_generation_start(
+            bridge.check(
+              bridge.bindings.llama_dart_generation_start(
                 context,
                 completionConfig,
                 generationOut,
@@ -654,7 +664,7 @@ final class _NativeEngineHandles {
                 'Native bridge returned a null generation.',
               );
             }
-            return _NativeStreamingGeneration(
+            return NativeStreamingGeneration(
               bridge: bridge,
               generation: generation,
               chunkTokens: config.streamChunkTokens,
@@ -664,7 +674,7 @@ final class _NativeEngineHandles {
             );
           } catch (_) {
             if (generation != ffi.nullptr) {
-              bridge._bindings.llama_dart_generation_free(generation);
+              bridge.bindings.llama_dart_generation_free(generation);
             }
             rethrow;
           } finally {
@@ -685,18 +695,18 @@ final class _NativeEngineHandles {
     }
   }
 
-  _NativeStreamingGeneration startChatStream(
+  NativeStreamingGeneration startChatStream(
     List<ChatMessage> messages,
     GenerationConfig config, {
     required bool reusePromptPrefix,
     int? maximumPromptBytes,
   }) {
-    final prepared = _prepareMultimodalChat(
+    final prepared = prepareMultimodalChat(
       messages,
-      bridge._multimodalMarker,
+      bridge.multimodalMarker,
       maximumPromptBytes: maximumPromptBytes,
     );
-    final rendered = bridge._renderPreparedChat(
+    final rendered = bridge.renderPreparedChat(
       model,
       prepared.messages,
       addAssistantPrompt: true,
@@ -731,12 +741,8 @@ final class _NativeEngineHandles {
         ..add_special = config.addSpecial ? 1 : 0
         ..parse_special = config.parseSpecial ? 1 : 0;
 
-      bridge._check(
-        bridge._bindings.llama_dart_context_embed(
-          context,
-          embeddingConfig,
-          out,
-        ),
+      bridge.check(
+        bridge.bindings.llama_dart_context_embed(context, embeddingConfig, out),
       );
 
       final data = out.ref.data;
@@ -746,7 +752,7 @@ final class _NativeEngineHandles {
       }
       return Float32List.fromList(data.asTypedList(length));
     } finally {
-      bridge._bindings.llama_dart_float_buffer_free(out.ref.data);
+      bridge.bindings.llama_dart_float_buffer_free(out.ref.data);
       calloc.free(out);
       calloc.free(embeddingConfig);
       calloc.free(textPointer);
@@ -774,8 +780,8 @@ final class _NativeEngineHandles {
         ..add_special = config.addSpecial ? 1 : 0
         ..parse_special = config.parseSpecial ? 1 : 0;
 
-      bridge._check(
-        bridge._bindings.llama_dart_context_rerank(
+      bridge.check(
+        bridge.bindings.llama_dart_context_rerank(
           context,
           rerankConfig,
           outScore,
@@ -802,8 +808,8 @@ final class _NativeEngineHandles {
         ..path_data = pathPointer
         ..path_size = pathBytes.length;
 
-      bridge._check(
-        bridge._bindings.llama_dart_lora_load(model, loadConfig, outAdapter),
+      bridge.check(
+        bridge.bindings.llama_dart_lora_load(model, loadConfig, outAdapter),
       );
       final pointer = outAdapter.value;
       if (pointer == ffi.nullptr) {
@@ -825,7 +831,7 @@ final class _NativeEngineHandles {
         _applyLoras();
       } catch (_) {
         _loraAdapters.remove(id);
-        bridge._bindings.llama_dart_lora_free(pointer);
+        bridge.bindings.llama_dart_lora_free(pointer);
         rethrow;
       }
       return adapter.info;
@@ -870,9 +876,9 @@ final class _NativeEngineHandles {
       _loraAdapters[adapterId] = adapter;
       rethrow;
     }
-    bridge._bindings.llama_dart_lora_free(adapter.pointer);
+    bridge.bindings.llama_dart_lora_free(adapter.pointer);
     try {
-      bridge._throwIfLastError('Native LoRA adapter free');
+      bridge.throwIfLastError('Native LoRA adapter free');
     } catch (_) {
       _loraAdapters[adapterId] = adapter;
       rethrow;
@@ -896,8 +902,8 @@ final class _NativeEngineHandles {
     }
     selections.sort((a, b) => a.adapter.id.compareTo(b.adapter.id));
     if (selections.isEmpty) {
-      bridge._check(
-        bridge._bindings.llama_dart_context_set_lora_adapters(
+      bridge.check(
+        bridge.bindings.llama_dart_context_set_lora_adapters(
           context,
           ffi.nullptr,
           ffi.nullptr,
@@ -916,8 +922,8 @@ final class _NativeEngineHandles {
         adapterPointers[i] = selections[i].adapter.pointer;
         nativeScales[i] = selections[i].scale;
       }
-      bridge._check(
-        bridge._bindings.llama_dart_context_set_lora_adapters(
+      bridge.check(
+        bridge.bindings.llama_dart_context_set_lora_adapters(
           context,
           adapterPointers,
           nativeScales,
@@ -931,8 +937,8 @@ final class _NativeEngineHandles {
   }
 }
 
-final class _NativeStreamingGeneration {
-  _NativeStreamingGeneration({
+final class NativeStreamingGeneration {
+  NativeStreamingGeneration({
     required this.bridge,
     required ffi.Pointer<llama_dart_generation> generation,
     required this.chunkTokens,
@@ -944,7 +950,7 @@ final class _NativeStreamingGeneration {
 
   final NativeLlamaBridge bridge;
   final int chunkTokens;
-  final _NativeChatPlan? chatPlan;
+  final NativeChatPlan? chatPlan;
   final LlamaToolCallingConfig toolCalling;
   final void Function()? _onClose;
   final ffi.Pointer<llama_dart_buffer> _out = calloc<llama_dart_buffer>();
@@ -978,8 +984,8 @@ final class _NativeStreamingGeneration {
     while (nativeSteps < chunkTokens) {
       _stats.ref.struct_size = ffi.sizeOf<llama_dart_completion_stats>();
       _done.value = 0;
-      bridge._check(
-        bridge._bindings.llama_dart_generation_next(
+      bridge.check(
+        bridge.bindings.llama_dart_generation_next(
           _generation,
           _out,
           _stats,
@@ -999,7 +1005,7 @@ final class _NativeStreamingGeneration {
           text = _decoder.add(data.asTypedList(size));
         }
       } finally {
-        bridge._bindings.llama_dart_buffer_free(_out.ref.data);
+        bridge.bindings.llama_dart_buffer_free(_out.ref.data);
         _out.ref.data = ffi.nullptr;
         _out.ref.size = 0;
       }
@@ -1018,7 +1024,7 @@ final class _NativeStreamingGeneration {
         final telemetry = _telemetryFromStats(_stats.ref);
         final assistantMessage = chatPlan == null || !chatPlan!.parseOutput
             ? null
-            : _parseTerminalChatOutput(
+            : parseTerminalChatOutput(
                 bridge,
                 chatPlan!,
                 _generated.toString(),
@@ -1050,11 +1056,11 @@ final class _NativeStreamingGeneration {
     }
     _closed = true;
     try {
-      bridge._bindings.llama_dart_buffer_free(_out.ref.data);
+      bridge.bindings.llama_dart_buffer_free(_out.ref.data);
       _out.ref.data = ffi.nullptr;
       _out.ref.size = 0;
       if (_generation != ffi.nullptr) {
-        bridge._bindings.llama_dart_generation_free(_generation);
+        bridge.bindings.llama_dart_generation_free(_generation);
         _generation = ffi.nullptr;
       }
       calloc.free(_done);
@@ -1178,7 +1184,7 @@ final class _StringChunkSink implements StringSink {
   }
 }
 
-Float32List _normalize(Float32List values) {
+Float32List normalize(Float32List values) {
   var sumSquares = 0.0;
   for (final value in values) {
     sumSquares += value * value;

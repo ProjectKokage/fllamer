@@ -1,6 +1,16 @@
-part of 'native_bridge.dart';
+import 'dart:async';
+import 'dart:isolate';
+import 'dart:typed_data';
 
-Future<NativeLlamaEngineSession> _startEngine(
+import 'config.dart';
+import 'errors.dart';
+import 'model_info.dart';
+
+import 'engine_worker.dart';
+import 'engine_worker_protocol.dart';
+import 'native_bridge.dart';
+
+Future<NativeLlamaEngineSession> spawnEngineSession(
   LlamaModelConfig config, {
   required bool embeddings,
   required EmbeddingPooling pooling,
@@ -11,8 +21,8 @@ Future<NativeLlamaEngineSession> _startEngine(
   final Isolate isolate;
   try {
     isolate = await Isolate.spawn(
-      _engineWorkerMain,
-      _EngineWorkerStart(
+      engineWorkerMain,
+      EngineWorkerStart(
         config,
         ready.sendPort,
         embeddings: embeddings,
@@ -29,7 +39,7 @@ Future<NativeLlamaEngineSession> _startEngine(
   }
   final message = await lifecycle.receive(ready);
 
-  if (message is _EngineWorkerReady) {
+  if (message is EngineWorkerReady) {
     return NativeLlamaEngineSession._(
       isolate,
       message.commands,
@@ -40,7 +50,7 @@ Future<NativeLlamaEngineSession> _startEngine(
   }
   isolate.kill(priority: Isolate.immediate);
   await lifecycle.dispose(expected: true);
-  if (message is _EngineWorkerFailure) {
+  if (message is EngineWorkerFailure) {
     throw message.error.toException();
   }
   throw NativeBridgeException('Unexpected engine worker response: $message');
@@ -52,13 +62,13 @@ final class _EngineWorkerLifecycle {
   }
 
   final ReceivePort _port;
-  final StreamController<_EngineWorkerFailure> _failures =
-      StreamController<_EngineWorkerFailure>.broadcast(sync: true);
-  _EngineWorkerFailure? _failure;
+  final StreamController<EngineWorkerFailure> _failures =
+      StreamController<EngineWorkerFailure>.broadcast(sync: true);
+  EngineWorkerFailure? _failure;
   bool _expected = false;
 
-  _EngineWorkerFailure? get failure => _failure;
-  Stream<_EngineWorkerFailure> get failures => _failures.stream;
+  EngineWorkerFailure? get failure => _failure;
+  Stream<EngineWorkerFailure> get failures => _failures.stream;
 
   Future<Object?> receive(ReceivePort reply) {
     final existingFailure = _failure;
@@ -69,7 +79,7 @@ final class _EngineWorkerLifecycle {
 
     final completer = Completer<Object?>();
     late final StreamSubscription<Object?> replySubscription;
-    late final StreamSubscription<_EngineWorkerFailure> failureSubscription;
+    late final StreamSubscription<EngineWorkerFailure> failureSubscription;
 
     void complete(Object? value) {
       if (!completer.isCompleted) {
@@ -104,8 +114,8 @@ final class _EngineWorkerLifecycle {
       final details = event is List<Object?> && event.isNotEmpty
           ? ': ${event.first}'
           : '';
-      final failure = _EngineWorkerFailure(
-        _NativeError(
+      final failure = EngineWorkerFailure(
+        NativeError(
           'nativeBridge',
           'Inference worker exited unexpectedly$details',
         ),
@@ -170,7 +180,7 @@ final class NativeLlamaEngineSession {
       throw const ResourceDisposedException('LlamaEngine is closed.');
     }
     return _streamGeneration(
-      (id, reply) => _EngineWorkerStreamComplete(
+      (id, reply) => EngineWorkerStreamComplete(
         id,
         messages,
         config,
@@ -195,7 +205,7 @@ final class NativeLlamaEngineSession {
       throw const ResourceDisposedException('LlamaEngine is closed.');
     }
     return _streamGeneration(
-      (id, reply) => _EngineWorkerStreamPrompt(id, prompt, config, reply),
+      (id, reply) => EngineWorkerStreamPrompt(id, prompt, config, reply),
     );
   }
 
@@ -222,7 +232,7 @@ final class NativeLlamaEngineSession {
     ReceivePort? reply;
     // stopLifecycleListening cancels it on every terminal path.
     // ignore: cancel_subscriptions
-    StreamSubscription<_EngineWorkerFailure>? lifecycleSubscription;
+    StreamSubscription<EngineWorkerFailure>? lifecycleSubscription;
     var streamId = 0;
     var paused = false;
     var waitingForWorker = false;
@@ -244,7 +254,7 @@ final class NativeLlamaEngineSession {
       }
     }
 
-    void handleWorkerFailure(_EngineWorkerFailure failure) {
+    void handleWorkerFailure(EngineWorkerFailure failure) {
       if (terminalResponseReceived) {
         return;
       }
@@ -268,7 +278,7 @@ final class NativeLlamaEngineSession {
         return;
       }
       waitingForWorker = true;
-      _commands.send(_EngineWorkerStreamNext(streamId));
+      _commands.send(EngineWorkerStreamNext(streamId));
     }
 
     controller =
@@ -315,7 +325,7 @@ final class NativeLlamaEngineSession {
             );
             reply!.listen((message) {
               if (terminalResponseReceived || controller.isClosed) return;
-              if (message is _EngineWorkerStreamProgress) {
+              if (message is EngineWorkerStreamProgress) {
                 // Progress belongs to the outstanding batch. It neither
                 // completes that request nor permits another native batch.
                 controller.add((
@@ -328,7 +338,7 @@ final class NativeLlamaEngineSession {
                 return;
               }
               waitingForWorker = false;
-              if (message is _EngineWorkerStreamChunk) {
+              if (message is EngineWorkerStreamChunk) {
                 if (message.isDone) {
                   terminalResponseReceived = true;
                   releaseSlot();
@@ -352,7 +362,7 @@ final class NativeLlamaEngineSession {
                 } else {
                   scheduleMicrotask(requestNext);
                 }
-              } else if (message is _EngineWorkerFailure) {
+              } else if (message is EngineWorkerFailure) {
                 terminalResponseReceived = true;
                 reply?.close();
                 stopLifecycleListening();
@@ -408,10 +418,10 @@ final class NativeLlamaEngineSession {
             final disposeReply = ReceivePort();
             try {
               _commands.send(
-                _EngineWorkerStreamDispose(streamId, disposeReply.sendPort),
+                EngineWorkerStreamDispose(streamId, disposeReply.sendPort),
               );
               final message = await _lifecycle.receive(disposeReply);
-              if (message is _EngineWorkerFailure) {
+              if (message is EngineWorkerFailure) {
                 throw message.error.toException();
               }
               if (message != null) {
@@ -433,14 +443,14 @@ final class NativeLlamaEngineSession {
   }
 
   /// Sends one request to the worker and returns its answer.
-  Future<T> _request<T>(_EngineRequest<T> request) async {
+  Future<T> _request<T>(EngineRequest<T> request) async {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
     }
     final reply = ReceivePort();
-    _commands.send(_EngineWorkerRequest(request, reply.sendPort));
+    _commands.send(EngineWorkerRequest(request, reply.sendPort));
     final message = await _lifecycle.receive(reply);
-    if (message is _EngineWorkerFailure) {
+    if (message is EngineWorkerFailure) {
       throw message.error.toException();
     }
     if (message is T) {
@@ -449,44 +459,44 @@ final class NativeLlamaEngineSession {
     throw NativeBridgeException('Unexpected engine worker response: $message');
   }
 
-  Future<void> reset() => _request(const _ResetRequest());
+  Future<void> reset() => _request(const ResetRequest());
 
-  Future<void> warmUp() => _request(const _WarmUpRequest());
+  Future<void> warmUp() => _request(const WarmUpRequest());
 
-  Future<LlamaModelInfo> modelInfo() => _request(const _ModelInfoRequest());
+  Future<LlamaModelInfo> modelInfo() => _request(const ModelInfoRequest());
 
   Future<Map<String, String>> modelMetadata() async {
-    final message = await _request(const _ModelMetadataRequest());
+    final message = await _request(const ModelMetadataRequest());
     return Map<String, String>.unmodifiable(message);
   }
 
-  Future<String> chatTemplate() => _request(const _ChatTemplateRequest());
+  Future<String> chatTemplate() => _request(const ChatTemplateRequest());
 
   Future<List<int>> tokenize(
     String text, {
     required bool addSpecial,
     required bool parseSpecial,
-  }) => _request(_TokenizeRequest(text, addSpecial, parseSpecial));
+  }) => _request(TokenizeRequest(text, addSpecial, parseSpecial));
 
   Future<int> countTokens(
     String text, {
     required bool addSpecial,
     required bool parseSpecial,
-  }) => _request(_CountTokensRequest(text, addSpecial, parseSpecial));
+  }) => _request(CountTokensRequest(text, addSpecial, parseSpecial));
 
   Future<String> detokenize(
     List<int> tokens, {
     required bool removeSpecial,
     required bool unparseSpecial,
-  }) => _request(_DetokenizeRequest(tokens, removeSpecial, unparseSpecial));
+  }) => _request(DetokenizeRequest(tokens, removeSpecial, unparseSpecial));
 
   Future<EmbeddingBatch> embedTexts(
     List<String> texts,
     EmbeddingConfig config,
-  ) => _request(_EmbedTextsRequest(texts, config));
+  ) => _request(EmbedTextsRequest(texts, config));
 
   Future<LlamaChatTemplateCapabilities> chatTemplateCapabilities() =>
-      _request(const _ChatTemplateCapabilitiesRequest());
+      _request(const ChatTemplateCapabilitiesRequest());
 
   Future<String> formatChat(
     List<ChatMessage> messages, {
@@ -496,7 +506,7 @@ final class NativeLlamaEngineSession {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) => _request(
-    _FormatChatRequest(
+    FormatChatRequest(
       messages,
       addAssistantPrompt,
       toolCalling,
@@ -514,7 +524,7 @@ final class NativeLlamaEngineSession {
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
   }) => _request(
-    _CountChatTokensRequest(
+    CountChatTokensRequest(
       messages,
       addAssistantPrompt,
       toolCalling,
@@ -528,34 +538,34 @@ final class NativeLlamaEngineSession {
     String prompt, {
     required bool? addSpecial,
     required bool parseSpecial,
-  }) => _request(_PrefillRequest(prompt, addSpecial, parseSpecial));
+  }) => _request(PrefillRequest(prompt, addSpecial, parseSpecial));
 
   Future<int> shiftContext({
     required int keepTokens,
     required int? discardTokens,
-  }) => _request(_ShiftContextRequest(keepTokens, discardTokens));
+  }) => _request(ShiftContextRequest(keepTokens, discardTokens));
 
   Future<LlamaContextInfo> contextInfo() =>
-      _request(const _ContextInfoRequest());
+      _request(const ContextInfoRequest());
 
-  Future<Uint8List> saveState() => _request(const _SaveStateRequest());
+  Future<Uint8List> saveState() => _request(const SaveStateRequest());
 
   Future<void> restoreState(Uint8List state) =>
-      _request(_RestoreStateRequest(state));
+      _request(RestoreStateRequest(state));
 
   Future<LoraAdapterInfo> loadLora(LoraAdapterConfig config) =>
-      _request(_LoadLoraRequest(config));
+      _request(LoadLoraRequest(config));
 
   Future<List<LoraAdapterInfo>> loraAdapters() async {
-    final message = await _request(const _ListLorasRequest());
+    final message = await _request(const ListLorasRequest());
     return List<LoraAdapterInfo>.unmodifiable(message);
   }
 
   Future<void> setLoraScale(int adapterId, double scale) =>
-      _request(_SetLoraScaleRequest(adapterId, scale));
+      _request(SetLoraScaleRequest(adapterId, scale));
 
   Future<void> unloadLora(int adapterId) =>
-      _request(_UnloadLoraRequest(adapterId));
+      _request(UnloadLoraRequest(adapterId));
 
   Future<void> close() async {
     if (_closed) {
@@ -572,7 +582,7 @@ final class NativeLlamaEngineSession {
     }
     _closed = true;
     final reply = ReceivePort();
-    _commands.send(_EngineWorkerClose(reply.sendPort));
+    _commands.send(EngineWorkerClose(reply.sendPort));
     final Object? message;
     try {
       message = await _lifecycle.receive(reply);
@@ -580,7 +590,7 @@ final class NativeLlamaEngineSession {
       _isolate.kill(priority: Isolate.immediate);
       await _lifecycle.dispose(expected: true);
     }
-    if (message is _EngineWorkerFailure) {
+    if (message is EngineWorkerFailure) {
       throw message.error.toException();
     }
     if (message != null) {
@@ -603,7 +613,7 @@ final class NativeLlamaEngineSession {
 
   void _requestCancel() {
     final bridge = NativeLlamaBridge.tryOpen(_nativeLibraryPath);
-    bridge?._cancelContextAddress(_contextAddress);
+    bridge?.cancelContextAddress(_contextAddress);
   }
 }
 
@@ -622,12 +632,12 @@ final class _EngineFinalizerToken {
     try {
       NativeLlamaBridge.tryOpen(
         nativeLibraryPath,
-      )?._cancelContextAddress(contextAddress);
+      )?.cancelContextAddress(contextAddress);
     } catch (_) {
       // Finalizers cannot report cleanup failures to an owning caller.
     }
     try {
-      commands.send(const _EngineWorkerFinalize());
+      commands.send(const EngineWorkerFinalize());
     } catch (_) {
       // The worker may already have terminated during process shutdown.
     }

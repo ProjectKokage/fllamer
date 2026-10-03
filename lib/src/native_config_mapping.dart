@@ -1,6 +1,12 @@
-part of 'native_bridge.dart';
+import 'dart:ffi' as ffi;
 
-String? _readOptionalCString(ffi.Pointer<ffi.Char> pointer) {
+import 'package:ffi/ffi.dart';
+import 'config.dart';
+import 'errors.dart';
+import 'ffi/generated_bindings.dart';
+import 'model_info.dart';
+
+String? readOptionalCString(ffi.Pointer<ffi.Char> pointer) {
   if (pointer == ffi.nullptr) {
     return null;
   }
@@ -8,9 +14,9 @@ String? _readOptionalCString(ffi.Pointer<ffi.Char> pointer) {
   return value.isEmpty ? null : value;
 }
 
-bool _hasFlag(int flags, int flag) => flags & flag != 0;
+bool hasFlag(int flags, int flag) => flags & flag != 0;
 
-int _gpuLayers(LlamaModelConfig config) {
+int gpuLayers(LlamaModelConfig config) {
   return switch (config.gpu.backend) {
     GpuBackend.cpu => 0,
     GpuBackend.auto ||
@@ -19,7 +25,7 @@ int _gpuLayers(LlamaModelConfig config) {
   };
 }
 
-int _gpuBackend(LlamaModelConfig config) {
+int gpuBackend(LlamaModelConfig config) {
   return switch (config.gpu.backend) {
     GpuBackend.auto => llama_dart_gpu_backend.LLAMA_DART_GPU_BACKEND_AUTO.value,
     GpuBackend.cpu => llama_dart_gpu_backend.LLAMA_DART_GPU_BACKEND_CPU.value,
@@ -30,7 +36,7 @@ int _gpuBackend(LlamaModelConfig config) {
   };
 }
 
-GpuBackend _gpuBackendFromNative(int value) {
+GpuBackend gpuBackendFromNative(int value) {
   return switch (llama_dart_gpu_backend.fromValue(value)) {
     llama_dart_gpu_backend.LLAMA_DART_GPU_BACKEND_AUTO => GpuBackend.auto,
     llama_dart_gpu_backend.LLAMA_DART_GPU_BACKEND_CPU => GpuBackend.cpu,
@@ -39,7 +45,7 @@ GpuBackend _gpuBackendFromNative(int value) {
   };
 }
 
-int _kvCacheType(KvCacheType type) {
+int kvCacheType(KvCacheType type) {
   return switch (type) {
     KvCacheType.f32 => llama_dart_kv_cache_type.LLAMA_DART_KV_CACHE_F32.value,
     KvCacheType.f16 => llama_dart_kv_cache_type.LLAMA_DART_KV_CACHE_F16.value,
@@ -59,7 +65,7 @@ int _kvCacheType(KvCacheType type) {
   };
 }
 
-KvCacheType _kvCacheTypeFromNative(int value) {
+KvCacheType kvCacheTypeFromNative(int value) {
   return switch (llama_dart_kv_cache_type.fromValue(value)) {
     llama_dart_kv_cache_type.LLAMA_DART_KV_CACHE_DEFAULT ||
     llama_dart_kv_cache_type.LLAMA_DART_KV_CACHE_F16 => KvCacheType.f16,
@@ -74,7 +80,7 @@ KvCacheType _kvCacheTypeFromNative(int value) {
   };
 }
 
-int _flashAttention(FlashAttentionMode mode) {
+int flashAttention(FlashAttentionMode mode) {
   return switch (mode) {
     FlashAttentionMode.auto =>
       llama_dart_flash_attention_mode.LLAMA_DART_FLASH_ATTENTION_AUTO.value,
@@ -85,7 +91,7 @@ int _flashAttention(FlashAttentionMode mode) {
   };
 }
 
-FlashAttentionMode _flashAttentionFromNative(int value) {
+FlashAttentionMode flashAttentionFromNative(int value) {
   return switch (llama_dart_flash_attention_mode.fromValue(value)) {
     llama_dart_flash_attention_mode.LLAMA_DART_FLASH_ATTENTION_AUTO =>
       FlashAttentionMode.auto,
@@ -96,7 +102,7 @@ FlashAttentionMode _flashAttentionFromNative(int value) {
   };
 }
 
-LlamaLogLevel _nativeLogLevelFromValue(int value) {
+LlamaLogLevel nativeLogLevelFromValue(int value) {
   return switch (llama_dart_log_level.fromValue(value)) {
     llama_dart_log_level.LLAMA_DART_LOG_DISABLED =>
       throw const NativeBridgeException(
@@ -109,7 +115,7 @@ LlamaLogLevel _nativeLogLevelFromValue(int value) {
   };
 }
 
-int _poolingType(EmbeddingPooling pooling) {
+int poolingType(EmbeddingPooling pooling) {
   return switch (pooling) {
     EmbeddingPooling.model => -1,
     EmbeddingPooling.mean => 1,
@@ -119,7 +125,7 @@ int _poolingType(EmbeddingPooling pooling) {
   };
 }
 
-int _ngramN(LlamaModelConfig config) {
+int ngramN(LlamaModelConfig config) {
   final speculation = config.speculativeDecoding;
   if (speculation is NGramSpeculation) {
     return speculation.ngramSize;
@@ -130,7 +136,7 @@ int _ngramN(LlamaModelConfig config) {
   return 0;
 }
 
-int _ngramM(LlamaModelConfig config) {
+int ngramM(LlamaModelConfig config) {
   final speculation = config.speculativeDecoding;
   if (speculation is NGramSpeculation) {
     return speculation.draftLength;
@@ -141,14 +147,14 @@ int _ngramM(LlamaModelConfig config) {
   return 0;
 }
 
-int _ngramMinDraft(LlamaModelConfig config) {
+int ngramMinDraft(LlamaModelConfig config) {
   final speculation = config.speculativeDecoding;
   return speculation is NGramModSpeculation
       ? speculation.minimumDraftLength
       : 0;
 }
 
-String? _speculativeModelPath(LlamaModelConfig config) {
+String? nativeSpeculativeModelPath(LlamaModelConfig config) {
   return switch (config.speculativeDecoding) {
     DraftModelSpeculation(:final draftModelPath) => draftModelPath,
     Eagle3Speculation(:final draftModelPath) => draftModelPath,
@@ -161,14 +167,14 @@ String? _speculativeModelPath(LlamaModelConfig config) {
   };
 }
 
-bool _loadsEmbeddedMtp(LlamaModelConfig config) {
+bool loadsEmbeddedMtp(LlamaModelConfig config) {
   return switch (config.speculativeDecoding) {
     MtpSpeculation(mtpModelPath: null) => true,
     _ => false,
   };
 }
 
-int _speculativeType(LlamaModelConfig config) {
+int speculativeType(LlamaModelConfig config) {
   return switch (config.speculativeDecoding) {
     NoSpeculativeDecoding() =>
       llama_dart_speculative_type.LLAMA_DART_SPECULATIVE_NONE.value,
@@ -197,7 +203,7 @@ int _speculativeType(LlamaModelConfig config) {
   };
 }
 
-int _speculativeDraftMax(LlamaModelConfig config) {
+int speculativeDraftMax(LlamaModelConfig config) {
   return switch (config.speculativeDecoding) {
     DraftModelSpeculation(:final draftLength) ||
     Eagle3Speculation(:final draftLength) ||
@@ -210,7 +216,7 @@ int _speculativeDraftMax(LlamaModelConfig config) {
   };
 }
 
-int _mirostatMode(MirostatMode? mode) {
+int mirostatMode(MirostatMode? mode) {
   return switch (mode) {
     null => 0,
     MirostatMode.v1 => 1,

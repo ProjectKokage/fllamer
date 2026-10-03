@@ -1,4 +1,15 @@
-part of 'native_bridge.dart';
+import 'dart:convert';
+import 'dart:ffi' as ffi;
+import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
+import 'config.dart';
+import 'errors.dart';
+import 'ffi/generated_bindings.dart';
+import 'model_info.dart';
+
+import 'native_bridge.dart';
+import 'native_config_mapping.dart';
 
 const _maxModelDescriptionBytes = 1024 * 1024;
 
@@ -13,27 +24,27 @@ const _maxModelMetadataValueBytes = 16 * 1024 * 1024;
 const _maxModelMetadataTotalBytes = 64 * 1024 * 1024;
 
 extension NativeModelOps on NativeLlamaBridge {
-  LlamaModelInfo _inspectModel(LlamaModelConfig config) {
-    return _withLoadedModel(config, _readModelInfo);
+  LlamaModelInfo loadAndInspectModel(LlamaModelConfig config) {
+    return withLoadedModel(config, readModelInfo);
   }
 
-  Map<String, String> _modelMetadata(LlamaModelConfig config) {
-    return _withLoadedModel(config, _readModelMetadata);
+  Map<String, String> loadAndReadModelMetadata(LlamaModelConfig config) {
+    return withLoadedModel(config, readModelMetadata);
   }
 
-  String _chatTemplateModel(LlamaModelConfig config) {
-    return _withLoadedModel(config, _readChatTemplate);
+  String loadAndReadChatTemplate(LlamaModelConfig config) {
+    return withLoadedModel(config, readChatTemplate);
   }
 
-  List<int> _tokenizeModel(
+  List<int> loadAndTokenize(
     LlamaModelConfig config,
     String text, {
     required bool addSpecial,
     required bool parseSpecial,
   }) {
-    return _withLoadedModel(
+    return withLoadedModel(
       config,
-      (model) => _tokenize(
+      (model) => tokenizeWithModel(
         model,
         text,
         addSpecial: addSpecial,
@@ -42,7 +53,7 @@ extension NativeModelOps on NativeLlamaBridge {
     );
   }
 
-  List<int> _tokenize(
+  List<int> tokenizeWithModel(
     ffi.Pointer<llama_dart_model> model,
     String text, {
     required bool addSpecial,
@@ -53,7 +64,7 @@ extension NativeModelOps on NativeLlamaBridge {
     final outCount = calloc<ffi.Size>();
     try {
       textPointer.asTypedList(textBytes.length).setAll(0, textBytes);
-      final firstResult = _bindings.llama_dart_model_tokenize(
+      final firstResult = bindings.llama_dart_model_tokenize(
         model,
         textPointer,
         textBytes.length,
@@ -64,13 +75,13 @@ extension NativeModelOps on NativeLlamaBridge {
         parseSpecial ? 1 : 0,
       );
       if (firstResult != llama_dart_result.LLAMA_DART_ERROR_BUFFER_TOO_SMALL) {
-        _check(firstResult);
+        check(firstResult);
       }
 
       final tokensPointer = calloc<ffi.Int32>(outCount.value);
       try {
-        _check(
-          _bindings.llama_dart_model_tokenize(
+        check(
+          bindings.llama_dart_model_tokenize(
             model,
             textPointer,
             textBytes.length,
@@ -91,15 +102,15 @@ extension NativeModelOps on NativeLlamaBridge {
     }
   }
 
-  String _detokenizeModel(
+  String loadAndDetokenize(
     LlamaModelConfig config,
     List<int> tokens, {
     required bool removeSpecial,
     required bool unparseSpecial,
   }) {
-    return _withLoadedModel(
+    return withLoadedModel(
       config,
-      (model) => _detokenize(
+      (model) => detokenizeWithModel(
         model,
         tokens,
         removeSpecial: removeSpecial,
@@ -108,7 +119,7 @@ extension NativeModelOps on NativeLlamaBridge {
     );
   }
 
-  String _detokenize(
+  String detokenizeWithModel(
     ffi.Pointer<llama_dart_model> model,
     List<int> tokens, {
     required bool removeSpecial,
@@ -118,7 +129,7 @@ extension NativeModelOps on NativeLlamaBridge {
     final outSize = calloc<ffi.Size>();
     try {
       tokensPointer.asTypedList(tokens.length).setAll(0, tokens);
-      final firstResult = _bindings.llama_dart_model_detokenize(
+      final firstResult = bindings.llama_dart_model_detokenize(
         model,
         tokensPointer,
         tokens.length,
@@ -129,13 +140,13 @@ extension NativeModelOps on NativeLlamaBridge {
         unparseSpecial ? 1 : 0,
       );
       if (firstResult != llama_dart_result.LLAMA_DART_ERROR_BUFFER_TOO_SMALL) {
-        _check(firstResult);
+        check(firstResult);
       }
 
       final textPointer = calloc<ffi.Uint8>(outSize.value);
       try {
-        _check(
-          _bindings.llama_dart_model_detokenize(
+        check(
+          bindings.llama_dart_model_detokenize(
             model,
             tokensPointer,
             tokens.length,
@@ -159,7 +170,7 @@ extension NativeModelOps on NativeLlamaBridge {
     }
   }
 
-  T _withLoadedModel<T>(
+  T withLoadedModel<T>(
     LlamaModelConfig config,
     T Function(ffi.Pointer<llama_dart_model> model) useModel, {
     bool vocabOnly = true,
@@ -187,17 +198,17 @@ extension NativeModelOps on NativeLlamaBridge {
         ..struct_size = ffi.sizeOf<llama_dart_model_load_config>()
         ..model_path_data = pathPointer
         ..model_path_size = modelPath.length
-        ..n_gpu_layers = _gpuLayers(config)
+        ..n_gpu_layers = gpuLayers(config)
         ..vocab_only = vocabOnly ? 1 : 0
         ..use_mmap = config.useMmap ? 1 : 0
         ..use_mlock = config.useMlock ? 1 : 0
         ..check_tensors = config.checkTensors ? 1 : 0
-        ..gpu_backend = _gpuBackend(config)
+        ..gpu_backend = gpuBackend(config)
         ..chat_template_data = chatTemplatePointer
         ..chat_template_size = chatTemplate.length
         ..load_mtp = 0;
 
-      _check(_bindings.llama_dart_model_load(loadConfig, outModel));
+      check(bindings.llama_dart_model_load(loadConfig, outModel));
       model = outModel.value;
       if (model == ffi.nullptr) {
         throw const ModelLoadException('Native bridge returned a null model.');
@@ -205,8 +216,8 @@ extension NativeModelOps on NativeLlamaBridge {
       return useModel(model);
     } finally {
       if (model != ffi.nullptr) {
-        _bindings.llama_dart_model_free(model);
-        _throwIfLastError('Native model free');
+        bindings.llama_dart_model_free(model);
+        throwIfLastError('Native model free');
       }
       calloc.free(outModel);
       calloc.free(loadConfig);
@@ -217,11 +228,11 @@ extension NativeModelOps on NativeLlamaBridge {
     }
   }
 
-  LlamaModelInfo _readModelInfo(ffi.Pointer<llama_dart_model> model) {
+  LlamaModelInfo readModelInfo(ffi.Pointer<llama_dart_model> model) {
     final info = calloc<llama_dart_model_info>();
     try {
       info.ref.struct_size = ffi.sizeOf<llama_dart_model_info>();
-      _check(_bindings.llama_dart_model_get_info(model, info));
+      check(bindings.llama_dart_model_get_info(model, info));
       return LlamaModelInfo(
         description: _readDescription(model),
         chatTemplate: _tryReadChatTemplate(model),
@@ -237,8 +248,8 @@ extension NativeModelOps on NativeLlamaBridge {
         attentionHeadCount: info.ref.n_head,
         keyValueHeadCount: info.ref.n_head_kv,
         fileType: info.ref.ftype,
-        fileTypeName: _readOptionalCString(
-          _bindings.llama_dart_model_file_type_name(info.ref.ftype),
+        fileTypeName: readOptionalCString(
+          bindings.llama_dart_model_file_type_name(info.ref.ftype),
         ),
         sizeBytes: info.ref.size_bytes,
         parameterCount: info.ref.n_params,
@@ -269,7 +280,7 @@ extension NativeModelOps on NativeLlamaBridge {
       final buffer = calloc<ffi.Char>(size);
       final outSize = calloc<ffi.Size>();
       try {
-        final result = _bindings.llama_dart_model_get_description(
+        final result = bindings.llama_dart_model_get_description(
           model,
           buffer,
           size,
@@ -284,7 +295,7 @@ extension NativeModelOps on NativeLlamaBridge {
           size = outSize.value + 1;
           continue;
         }
-        _check(result);
+        check(result);
         return _decodeModelUtf8(buffer, outSize.value, 'description');
       } finally {
         calloc.free(outSize);
@@ -293,10 +304,10 @@ extension NativeModelOps on NativeLlamaBridge {
     }
   }
 
-  String _readChatTemplate(ffi.Pointer<llama_dart_model> model) {
+  String readChatTemplate(ffi.Pointer<llama_dart_model> model) {
     final out = calloc<llama_dart_buffer>();
     try {
-      _check(_bindings.llama_dart_model_get_chat_template(model, out));
+      check(bindings.llama_dart_model_get_chat_template(model, out));
       final data = out.ref.data;
       final size = out.ref.size;
       if (data == ffi.nullptr || size == 0) {
@@ -318,23 +329,23 @@ extension NativeModelOps on NativeLlamaBridge {
         );
       }
     } finally {
-      _bindings.llama_dart_buffer_free(out.ref.data);
+      bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
     }
   }
 
   String? _tryReadChatTemplate(ffi.Pointer<llama_dart_model> model) {
     try {
-      return _readChatTemplate(model);
+      return readChatTemplate(model);
     } on UnsupportedFeatureException {
       return null;
     }
   }
 
-  Map<String, String> _readModelMetadata(ffi.Pointer<llama_dart_model> model) {
+  Map<String, String> readModelMetadata(ffi.Pointer<llama_dart_model> model) {
     final outCount = calloc<ffi.Size>();
     try {
-      _check(_bindings.llama_dart_model_metadata_count(model, outCount));
+      check(bindings.llama_dart_model_metadata_count(model, outCount));
       if (outCount.value > _maxModelMetadataEntries) {
         throw const ModelLoadException(
           'Model metadata exceeds the 65536-entry safety limit.',
@@ -346,7 +357,7 @@ extension NativeModelOps on NativeLlamaBridge {
         final keySize = calloc<ffi.Size>();
         final valueSize = calloc<ffi.Size>();
         try {
-          final firstResult = _bindings.llama_dart_model_metadata_get(
+          final firstResult = bindings.llama_dart_model_metadata_get(
             model,
             i,
             ffi.nullptr,
@@ -358,7 +369,7 @@ extension NativeModelOps on NativeLlamaBridge {
           );
           if (firstResult !=
               llama_dart_result.LLAMA_DART_ERROR_BUFFER_TOO_SMALL) {
-            _check(firstResult);
+            check(firstResult);
           }
           if (keySize.value > _maxModelMetadataKeyBytes) {
             throw ModelLoadException(
@@ -380,8 +391,8 @@ extension NativeModelOps on NativeLlamaBridge {
           final key = calloc<ffi.Char>(keySize.value + 1);
           final value = calloc<ffi.Char>(valueSize.value + 1);
           try {
-            _check(
-              _bindings.llama_dart_model_metadata_get(
+            check(
+              bindings.llama_dart_model_metadata_get(
                 model,
                 i,
                 key,
