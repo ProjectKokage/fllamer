@@ -2196,60 +2196,6 @@ final class NativeLlamaEngineSession {
 
   bool get hasActiveGeneration => _activeStreamId != null;
 
-  Future<
-    ({
-      String text,
-      GenerationTelemetry telemetry,
-      ChatMessage? assistantMessage,
-    })
-  >
-  completeChat(List<ChatMessage> messages, GenerationConfig config) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerComplete(messages, config, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is _EngineWorkerText) {
-      return (
-        text: message.text,
-        telemetry: message.telemetry,
-        assistantMessage: message.assistantMessage,
-      );
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
-
-  Future<
-    ({
-      String text,
-      GenerationTelemetry telemetry,
-      ChatMessage? assistantMessage,
-    })
-  >
-  complete(String prompt, GenerationConfig config) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerCompletePrompt(prompt, config, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is _EngineWorkerText) {
-      return (
-        text: message.text,
-        telemetry: message.telemetry,
-        assistantMessage: message.assistantMessage,
-      );
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
-
   Stream<
     ({
       String text,
@@ -3562,85 +3508,6 @@ final class _NativeEngineHandles {
     }
   }
 
-  ({String text, GenerationTelemetry telemetry, ChatMessage? assistantMessage})
-  complete(
-    String prompt,
-    GenerationConfig config, {
-    List<_NativeMediaInput> media = const <_NativeMediaInput>[],
-    _NativeChatPlan? chatPlan,
-    bool parseSpecial = false,
-  }) {
-    return _withCompletionConfig(
-      prompt,
-      config,
-      (completionConfig) {
-        final out = calloc<llama_dart_buffer>();
-        final stats = calloc<llama_dart_completion_stats>();
-        try {
-          stats.ref.struct_size = ffi.sizeOf<llama_dart_completion_stats>();
-          bridge._check(
-            bridge._bindings.llama_dart_context_complete(
-              context,
-              completionConfig,
-              out,
-              stats,
-            ),
-          );
-
-          final data = out.ref.data;
-          final size = out.ref.size;
-          final telemetry = _telemetryFromStats(stats.ref);
-          final text = data == ffi.nullptr || size == 0
-              ? ''
-              : utf8.decode(data.asTypedList(size), allowMalformed: true);
-          final assistantMessage = chatPlan == null || !chatPlan.parseOutput
-              ? null
-              : _parseTerminalChatOutput(
-                  bridge,
-                  chatPlan,
-                  text,
-                  config.toolCalling,
-                  telemetry.stopReason,
-                );
-          return (
-            text: text,
-            telemetry: telemetry,
-            assistantMessage: assistantMessage,
-          );
-        } finally {
-          bridge._bindings.llama_dart_buffer_free(out.ref.data);
-          calloc.free(stats);
-          calloc.free(out);
-        }
-      },
-      media: media,
-      chatPlan: chatPlan,
-      parseSpecial: parseSpecial,
-    );
-  }
-
-  ({String text, GenerationTelemetry telemetry, ChatMessage? assistantMessage})
-  completeChat(List<ChatMessage> messages, GenerationConfig config) {
-    final prepared = _prepareMultimodalChat(messages, bridge._multimodalMarker);
-    final rendered = bridge._renderPreparedChat(
-      model,
-      prepared.messages,
-      addAssistantPrompt: true,
-      toolCalling: config.toolCalling,
-      grammar: config.grammar,
-      jsonSchema: config.jsonSchema,
-      enableThinking: config.enableThinking,
-      reasoningBudgetTokens: config.reasoningBudgetTokens,
-    );
-    return complete(
-      rendered.prompt,
-      config,
-      media: prepared.media,
-      chatPlan: rendered.plan,
-      parseSpecial: true,
-    );
-  }
-
   _NativeStreamingGeneration startCompletionStream(
     String prompt,
     GenerationConfig config, {
@@ -4333,22 +4200,6 @@ final class _EngineWorkerRestoreState {
   final SendPort reply;
 }
 
-final class _EngineWorkerComplete {
-  const _EngineWorkerComplete(this.messages, this.config, this.reply);
-
-  final List<ChatMessage> messages;
-  final GenerationConfig config;
-  final SendPort reply;
-}
-
-final class _EngineWorkerCompletePrompt {
-  const _EngineWorkerCompletePrompt(this.prompt, this.config, this.reply);
-
-  final String prompt;
-  final GenerationConfig config;
-  final SendPort reply;
-}
-
 final class _EngineWorkerStreamComplete {
   const _EngineWorkerStreamComplete(
     this.id,
@@ -4422,14 +4273,6 @@ final class _EngineWorkerUnloadLora {
   final SendPort reply;
 }
 
-final class _EngineWorkerText {
-  const _EngineWorkerText(this.text, this.telemetry, this.assistantMessage);
-
-  final String text;
-  final GenerationTelemetry telemetry;
-  final ChatMessage? assistantMessage;
-}
-
 final class _EngineWorkerStreamProgress {
   const _EngineWorkerStreamProgress(this.generatedTokens);
 
@@ -4469,8 +4312,6 @@ SendPort? _engineWorkerReply(Object? message) {
     _EngineWorkerContextInfo(:final reply) => reply,
     _EngineWorkerSaveState(:final reply) => reply,
     _EngineWorkerRestoreState(:final reply) => reply,
-    _EngineWorkerComplete(:final reply) => reply,
-    _EngineWorkerCompletePrompt(:final reply) => reply,
     _EngineWorkerStreamComplete(:final reply) => reply,
     _EngineWorkerStreamPrompt(:final reply) => reply,
     _EngineWorkerLoadLora(:final reply) => reply,
@@ -5069,40 +4910,6 @@ void _engineWorkerMain(_EngineWorkerStart start) {
         }
         active.restoreState(message.state);
         message.reply.send(null);
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerComplete) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        final result = active.completeChat(message.messages, message.config);
-        message.reply.send(
-          _EngineWorkerText(
-            result.text,
-            result.telemetry,
-            result.assistantMessage,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerCompletePrompt) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        final result = active.complete(message.prompt, message.config);
-        message.reply.send(
-          _EngineWorkerText(
-            result.text,
-            result.telemetry,
-            result.assistantMessage,
-          ),
-        );
       } catch (error) {
         message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
       }
