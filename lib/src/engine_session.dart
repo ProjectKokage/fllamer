@@ -17,7 +17,7 @@ Future<NativeLlamaEngineSession> spawnEngineSession(
 }) async {
   final ready = ReceivePort();
   final lifecyclePort = ReceivePort();
-  final lifecycle = _EngineWorkerLifecycle(lifecyclePort);
+  final lifecycle = EngineWorkerLifecycle(lifecyclePort);
   final Isolate isolate;
   try {
     isolate = await Isolate.spawn(
@@ -56,8 +56,8 @@ Future<NativeLlamaEngineSession> spawnEngineSession(
   throw NativeBridgeException('Unexpected engine worker response: $message');
 }
 
-final class _EngineWorkerLifecycle {
-  _EngineWorkerLifecycle(this._port) {
+final class EngineWorkerLifecycle {
+  EngineWorkerLifecycle(this._port) {
     _port.listen(_handleEvent);
   }
 
@@ -88,7 +88,16 @@ final class _EngineWorkerLifecycle {
     }
 
     replySubscription = reply.listen(complete);
-    failureSubscription = failures.listen(complete);
+    // An expected close ends the failure stream without an event. Nothing can
+    // answer after that, so a reply still pending ends as a closed engine.
+    failureSubscription = failures.listen(
+      complete,
+      onDone: () => complete(
+        const EngineWorkerFailure(
+          NativeError('disposed', 'LlamaEngine is closed.'),
+        ),
+      ),
+    );
     final racedFailure = _failure;
     if (racedFailure != null) {
       complete(racedFailure);
@@ -153,7 +162,7 @@ final class NativeLlamaEngineSession {
   final SendPort _commands;
   final String? _nativeLibraryPath;
   final int _contextAddress;
-  final _EngineWorkerLifecycle _lifecycle;
+  final EngineWorkerLifecycle _lifecycle;
   final Object _finalizerDetach = Object();
   int _nextStreamId = 1;
   int? _activeStreamId;

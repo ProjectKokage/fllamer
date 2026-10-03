@@ -113,6 +113,9 @@ completion, so an unexpected worker exit fails pending work instead of leaving
 a `Future` or stream waiting forever. Explicit close keeps the worker alive
 until its cleanup reply is delivered, then terminates it; cancellation failure
 cannot skip cleanup after the Dart finalizer has been detached.
+An expected close ends the channel without an event; a reply that is still
+pending then ends with `ResourceDisposedException`, so a stream cancelled while
+`close()` is in flight cannot wait on a worker that has already exited.
 
 LoRA adapters are owned by the loaded model and may be selected by a context.
 The bridge refuses to free a model while LoRA handles remain and refuses to free
