@@ -1,5 +1,19 @@
 ## Unreleased
 
+- Synchronized `third_party/llama.cpp` to
+  `99b95488cac0f00ce3f05af113a8c1e287753f87` (upstream build `b11371`). No ABI
+  or Dart API change. The bridge follows four upstream API changes: the
+  repeat-penalty sampler takes the vocabulary size, the media helpers take init
+  options, llama-common takes its own JSON type, and speculative decoding takes
+  llama-common's batch type. State saved by an earlier pin no longer restores,
+  because upstream's session format changed. The Android Vulkan overlay was
+  ported to upstream's reorganized Vulkan backend and is now version 4; it
+  cross-compiles for arm64-v8a and x86_64 but has not been run on a device, so
+  the Adreno 750 result recorded for the previous pin does not carry over.
+  The package now ships upstream's vendored hash and subprocess sources, which
+  the pinned build links, and registers the rotate-bits, SHA-256 and xxHash
+  notices.
+
 - Use `code_assets` 2 and `hooks` 2.2 for compatibility with applications
   using the current native build-hook toolchain.
 

@@ -4,17 +4,21 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 
 const pinnedDequantFuncsSha256 =
-    'd70cf26d67104b333fdd2dedefdb060ea1409091465cfc81829c1f6d1b14683a';
+    '3b7a5edf6072ee8e44b4a9ddeb89b099d1fb64901d9be419c8ed9701d2f1d68b';
 const patchedDequantFuncsSha256 =
-    '79e3bed12bdb16181293a3123e09c58abe6b1d774d928f59407c5d2ac3eb8e25';
+    'bcaf084f68df8da15dcf2df3d15d45d6a443eccd9b53f26c78792e368079c7a8';
 const pinnedMulMmFuncsSha256 =
-    'b48523e624ca55a8e4441c38e580b7109813a146265f2866f1238549caceebbe';
+    '71f86758ba309b36a9af0420e08abef386a3b3b08545e096cad10e16186ef61e';
 const patchedMulMmFuncsSha256 =
-    'bf170282a7fb3f17e7214814fd0e9ce1656e54d68fce28a8e917201537056d9e';
+    '64ae33bf3fa95dfbed3fc17e2ed1e2e5405d3db193ad8a604b0e84f5536d665c';
+const pinnedMulMmCompSha256 =
+    'abed36cd38b5edc3f0f365fbc71a672576e7cd8a703131e297b416f23c3b1221';
+const patchedMulMmCompSha256 =
+    '0a96c140a076875c6dc0e3fd0f29e5caceba7df8219da2b2067eb2cc1162af15';
 const pinnedGgmlVulkanSha256 =
-    '34691a65d3d436342f26d9b464c49dd6ba3a9f15e5c7344f3176727184820c6b';
+    'e43a39ce1e9443f7c1c00e7bb9f13d56ab5a01e2355973ee740d4324e0e0698b';
 const patchedGgmlVulkanSha256 =
-    '877d2c2d0da802b84dc8962f0047f21c6bff033052fdcbfcfc730f3aec89fe80';
+    '5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc';
 
 const _pinnedQ4_1Dequantize4 =
     '''vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
@@ -45,67 +49,78 @@ const _patchedQ8_0Dequantize4 =
 }''';
 
 const _pinnedQ4_0MatrixLoad =
-    '''            const float d = float(data_a_packed16[ib].d);
-            const uint vui = uint(data_a_packed16[ib].qs[2*iqs]) | (uint(data_a_packed16[ib].qs[2*iqs + 1]) << 16);
-            const vec4 v0 = (vec4(unpack8(vui & 0x0F0F0F0F)) - 8.0f) * d;
-            const vec4 v1 = (vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - 8.0f) * d;''';
+    '''        const float d = float(a_q4_0_p16.data[ib].d);
+        const uint vui = uint(a_q4_0_p16.data[ib].qs[2*iqs]) | (uint(a_q4_0_p16.data[ib].qs[2*iqs + 1]) << 16);
+        const vec4 v0 = (vec4(unpack8(vui & 0x0F0F0F0F)) - 8.0f) * d;
+        const vec4 v1 = (vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - 8.0f) * d;''';
 
 const _patchedQ4_0MatrixLoad =
-    '''            const float d = float(data_a_packed16[ib].d);
-            const uint qsi = 4 * iqs;
-            const uvec4 q = uvec4(data_a[ib].qs[qsi    ],
-                                  data_a[ib].qs[qsi + 1],
-                                  data_a[ib].qs[qsi + 2],
-                                  data_a[ib].qs[qsi + 3]);
-            const vec4 v0 = (vec4(q & 0x0Fu) - 8.0f) * d;
-            const vec4 v1 = (vec4(q >> 4) - 8.0f) * d;''';
+    '''        const float d = float(a_q4_0_p16.data[ib].d);
+        const uint qsi = 4 * iqs;
+        const uvec4 q = uvec4(a_q4_0.data[ib].qs[qsi    ],
+                              a_q4_0.data[ib].qs[qsi + 1],
+                              a_q4_0.data[ib].qs[qsi + 2],
+                              a_q4_0.data[ib].qs[qsi + 3]);
+        const vec4 v0 = (vec4(q & 0x0Fu) - 8.0f) * d;
+        const vec4 v1 = (vec4(q >> 4) - 8.0f) * d;''';
 
 const _pinnedQ4_1MatrixLoad =
-    '''            const vec2 dm = vec2(data_a_packed32[ib].dm);
-            const uint vui = data_a_packed32[ib].qs[iqs];
-            const vec4 v0 = vec4(unpack8(vui & 0x0F0F0F0F)) * dm.x + dm.y;
-            const vec4 v1 = vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;''';
+    '''        const vec2 dm = vec2(a_q4_1_p32.data[ib].dm);
+        const uint vui = a_q4_1_p32.data[ib].qs[iqs];
+        const vec4 v0 = vec4(unpack8(vui & 0x0F0F0F0F)) * dm.x + dm.y;
+        const vec4 v1 = vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;''';
 
 const _patchedQ4_1MatrixLoad =
-    '''            const vec2 dm = vec2(data_a_packed32[ib].dm);
-            const uint qsi = 4 * iqs;
-            const uvec4 q = uvec4(data_a[ib].qs[qsi    ],
-                                  data_a[ib].qs[qsi + 1],
-                                  data_a[ib].qs[qsi + 2],
-                                  data_a[ib].qs[qsi + 3]);
-            const vec4 v0 = vec4(q & 0x0Fu) * dm.x + dm.y;
-            const vec4 v1 = vec4(q >> 4) * dm.x + dm.y;''';
+    '''        const vec2 dm = vec2(a_q4_1_p32.data[ib].dm);
+        const uint qsi = 4 * iqs;
+        const uvec4 q = uvec4(a_q4_1.data[ib].qs[qsi    ],
+                              a_q4_1.data[ib].qs[qsi + 1],
+                              a_q4_1.data[ib].qs[qsi + 2],
+                              a_q4_1.data[ib].qs[qsi + 3]);
+        const vec4 v0 = vec4(q & 0x0Fu) * dm.x + dm.y;
+        const vec4 v1 = vec4(q >> 4) * dm.x + dm.y;''';
 
 const _pinnedQ8_0MatrixLoad =
-    '''            const float d = float(data_a_packed16[ib].d);
-            const i8vec2 v0 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs])).xy; // vec4 used due to #12147
-            const i8vec2 v1 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs + 1])).xy;
-            const vec4 v = vec4(v0.x, v0.y, v1.x, v1.y) * d;''';
+    '''        const float d = float(a_q8_0_p16.data[ib].d);
+        const i8vec2 v0 = unpack8(int32_t(a_q8_0_p16.data[ib].qs[2*iqs])).xy; // vec4 used due to #12147
+        const i8vec2 v1 = unpack8(int32_t(a_q8_0_p16.data[ib].qs[2*iqs + 1])).xy;
+        const vec4 v = vec4(v0.x, v0.y, v1.x, v1.y) * d;''';
 
 const _patchedQ8_0MatrixLoad =
-    '''            const float d = float(data_a_packed16[ib].d);
-            const uint qsi = 4 * iqs;
-            const vec4 v = vec4(int(data_a[ib].qs[qsi    ]),
-                                int(data_a[ib].qs[qsi + 1]),
-                                int(data_a[ib].qs[qsi + 2]),
-                                int(data_a[ib].qs[qsi + 3])) * d;''';
+    '''        const float d = float(a_q8_0_p16.data[ib].d);
+        const uint qsi = 4 * iqs;
+        const vec4 v = vec4(int(a_q8_0.data[ib].qs[qsi    ]),
+                            int(a_q8_0.data[ib].qs[qsi + 1]),
+                            int(a_q8_0.data[ib].qs[qsi + 2]),
+                            int(a_q8_0.data[ib].qs[qsi + 3])) * d;''';
 
-const _pinnedQualcommPredicateInsertion =
-    '''    uint32_t required_subgroup_size;
-};
+const _pinnedMatrixByteViews =
+    '''layout (binding = 0) readonly buffer BUF_TQ2_0    { block_tq2_0 data[];    } a_tq2_0;
+// Packed16 aliases''';
 
-static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {''';
+const _patchedMatrixByteViews =
+    '''layout (binding = 0) readonly buffer BUF_TQ2_0    { block_tq2_0 data[];    } a_tq2_0;
+layout (binding = 0) readonly buffer BUF_Q4_0     { block_q4_0 data[];     } a_q4_0;
+layout (binding = 0) readonly buffer BUF_Q4_1     { block_q4_1 data[];     } a_q4_1;
+layout (binding = 0) readonly buffer BUF_Q8_0     { block_q8_0 data[];     } a_q8_0;
+// Packed16 aliases''';
 
-const _patchedQualcommPredicateInsertion =
-    '''    uint32_t required_subgroup_size;
-};
+const _pinnedQualcommPredicateInsertion = '''    return false;
+#endif
+}
+
+void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {''';
+
+const _patchedQualcommPredicateInsertion = '''    return false;
+#endif
+}
 
 static bool ggml_vk_is_qualcomm_proprietary(const vk_device & device) {
     return device->vendor_id == VK_VENDOR_ID_QUALCOMM &&
            device->driver_id == vk::DriverId::eQualcommProprietary;
 }
 
-static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {''';
+void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {''';
 
 const _pinnedQ4KMatVecF32Registration =
     '''            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f32_f32[w][GGML_TYPE_Q4_K][i], "mul_mat_vec_q4_k_f32_f32", arr_dmmv_q4_k_f32_f32_len[reduc16], arr_dmmv_q4_k_f32_f32_data[reduc16], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);''';
@@ -123,26 +138,58 @@ const _patchedQ4KMatVecF16Registration =
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_f16_f32[w][GGML_TYPE_Q4_K][i], "mul_mat_vec_q4_k_f16_f32", arr_dmmv_q4_k_f16_f32_len[reduc16], arr_dmmv_q4_k_f16_f32_data[reduc16], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_kq, 1, 1}, {wg_size_subgroup16, rm_kq, i+1}, 1, true, use_subgroups16, force_subgroup_size16);
             }''';
 
-const _pinnedQ4KForcedDequant = '''    if (mmp == nullptr) {
-        // Fall back to f16 dequant mul mat
-        mmp = ggml_vk_get_mul_mat_mat_pipeline(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
+const _pinnedQ4KForcedDequant =
+    '''    const std::vector<vk_matmul_pipeline_pair>* mmp_map = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
+    if (mmp_map == nullptr) {
         quantize_y = false;
     }
 
-    const bool qx_needs_dequant = mmp == nullptr || x_non_contig;''';
+    const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
+                              // coopmat1: force f32->f16 conversion so the f16 B-type quant pipeline is
+                              // used, but only when the int8 MMQ path above is not taken.
+                              (ctx->device->coopmat_support && !ctx->device->coopmat2 && !quantize_y &&
+                               ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32) ||
+                              (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
+                              !ggml_vk_dim01_contiguous(src1);
 
-const _patchedQ4KForcedDequant = '''    if (mmp == nullptr) {
+    const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
+
+    if (mmp_map == nullptr) {
         // Fall back to f16 dequant mul mat
-        mmp = ggml_vk_get_mul_mat_mat_pipeline(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
+        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
+    }
+
+    const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;''';
+
+const _patchedQ4KForcedDequant =
+    '''    const std::vector<vk_matmul_pipeline_pair>* mmp_map = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
+    if (ggml_vk_is_qualcomm_proprietary(ctx->device) && src0->type == GGML_TYPE_Q4_K) {
+        mmp_map = nullptr;
+    }
+    if (mmp_map == nullptr) {
         quantize_y = false;
+    }
+
+    const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
+                              // coopmat1: force f32->f16 conversion so the f16 B-type quant pipeline is
+                              // used, but only when the int8 MMQ path above is not taken.
+                              (ctx->device->coopmat_support && !ctx->device->coopmat2 && !quantize_y &&
+                               ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32) ||
+                              (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
+                              !ggml_vk_dim01_contiguous(src1);
+
+    const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
+
+    if (mmp_map == nullptr) {
+        // Fall back to f16 dequant mul mat
+        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
     }
 
     if (ggml_vk_is_qualcomm_proprietary(ctx->device) && src0->type == GGML_TYPE_Q4_K) {
-        mmp = nullptr;
-        quantize_y = false;
+        mmp_map = nullptr;
     }
 
-    const bool qx_needs_dequant = mmp == nullptr || x_non_contig;''';
+    const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;''';
 
 const _pinnedQ4KMatVecDispatch =
     '''    } else if ((dst->ne[1] == 1 || (dst->ne[1] <= mul_mat_vec_max_cols && src1->ne[2] * src1->ne[3] == 1)) &&
@@ -225,6 +272,16 @@ String patchPinnedAndroidVulkanMulMmFuncs(String source) => _patchPinnedShader(
   ],
 );
 
+String patchPinnedAndroidVulkanMulMmComp(String source) => _patchPinnedShader(
+  source,
+  name: 'mul_mm.comp',
+  expectedSourceSha256: pinnedMulMmCompSha256,
+  expectedPatchedSha256: patchedMulMmCompSha256,
+  replacements: const [
+    _ShaderReplacement(_pinnedMatrixByteViews, _patchedMatrixByteViews),
+  ],
+);
+
 String patchPinnedAndroidGgmlVulkan(String source) => _patchPinnedShader(
   source,
   name: 'ggml-vulkan.cpp',
@@ -234,6 +291,7 @@ String patchPinnedAndroidGgmlVulkan(String source) => _patchPinnedShader(
     _ShaderReplacement(
       _pinnedQualcommPredicateInsertion,
       _patchedQualcommPredicateInsertion,
+      retainsPinnedSubstring: true,
     ),
     _ShaderReplacement(
       _pinnedQ4KMatVecF32Registration,
@@ -404,6 +462,11 @@ Future<void> _prepareAndroidVulkanShaderOverlay({
       stagingDirectory,
       'mul_mm_funcs.glsl',
       patchPinnedAndroidVulkanMulMmFuncs,
+    );
+    await _patchOverlayFile(
+      stagingDirectory,
+      'mul_mm.comp',
+      patchPinnedAndroidVulkanMulMmComp,
     );
     await _patchExternalOverlayFile(
       vulkanSourceFile,
