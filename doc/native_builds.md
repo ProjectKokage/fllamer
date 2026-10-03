@@ -240,6 +240,38 @@ own durable app-private model directory before loading it again later.
 
 Current verification:
 
+- On 2026-10-03 the upstream pin moved from `b10217` to `b11371`. Upstream
+  reorganized its Vulkan backend in between, so the Android overlay was ported:
+  the same five payload replacements, three byte views added to `mul_mm.comp`
+  for them, and the same Qualcomm-proprietary K-quant policy in
+  `ggml-vulkan.cpp`. The overlay now pins these normalized source/output
+  SHA-256 pairs: `dequant_funcs.glsl`
+  `3b7a5edf6072ee8e44b4a9ddeb89b099d1fb64901d9be419c8ed9701d2f1d68b` /
+  `bcaf084f68df8da15dcf2df3d15d45d6a443eccd9b53f26c78792e368079c7a8`,
+  `mul_mm_funcs.glsl`
+  `71f86758ba309b36a9af0420e08abef386a3b3b08545e096cad10e16186ef61e` /
+  `64ae33bf3fa95dfbed3fc17e2ed1e2e5405d3db193ad8a604b0e84f5536d665c`,
+  `mul_mm.comp`
+  `abed36cd38b5edc3f0f365fbc71a672576e7cd8a703131e297b416f23c3b1221` /
+  `0a96c140a076875c6dc0e3fd0f29e5caceba7df8219da2b2067eb2cc1162af15`,
+  and `ggml-vulkan.cpp`
+  `e43a39ce1e9443f7c1c00e7bb9f13d56ab5a01e2355973ee740d4324e0e0698b` /
+  `5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc`.
+  Direct offline CMake cross-compiles of the opt-in Vulkan bridge passed for
+  `arm64-v8a` and `x86_64` at Android API 28 from macOS with CMake 4.4.3, NDK
+  `30.0.14904198`, bundled Vulkan-Headers 1.4.357.0 and that NDK's glslc
+  v2022.3. The arm64-v8a library has 16 KiB `LOAD` alignment, depends only on
+  `libm.so`, `libdl.so`, `libvulkan.so` and `libc.so`, and embeds both
+  safe-policy markers. This is compile and link evidence only. On the macOS
+  arm64 host the same pin passed `ctest` (3/3) and `dart test` (208 tests, 12
+  optional-fixture skips), the `LLAMA_DART_TEST_MODEL` tests with a Qwen2.5
+  0.5B Q4_K_M model, and the chat, embeddings and multimodal example CLIs with
+  Qwen3.5 4B Q4_K_M, its BF16 projector and Granite 97M Q8_0. The fixture-pinned
+  tool, multimodal, embedding, reranker, LoRA and speculative tests were not
+  run. No device has
+  run this pin: every device result below was measured on `b10217`, and the
+  ported overlay may be unnecessary or insufficient until an affected Qualcomm
+  device repeats the CPU-oracle check.
 - Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
   Android's explicit opt-in, bundled Vulkan-Hpp pin, selected-NDK `glslc`,
   CPU-only overrides, target-specific header-root propagation, desktop
@@ -276,7 +308,7 @@ Current verification:
   evidence, not Android Vulkan support or a performance result.
 - The final 2026-08-11 overlay also patches `ggml-vulkan.cpp`, preserving the
   pinned submodule, and enables the Qualcomm-proprietary K-quant policy above.
-  It pins the normalized source/output SHA-256 pairs: `ggml-vulkan.cpp`
+  On `b10217` it pinned the normalized source/output SHA-256 pairs: `ggml-vulkan.cpp`
   `34691a65d3d436342f26d9b464c49dd6ba3a9f15e5c7344f3176727184820c6b` /
   `877d2c2d0da802b84dc8962f0047f21c6bff033052fdcbfcfc730f3aec89fe80`,
   `dequant_funcs_cm2.comp`
@@ -285,7 +317,7 @@ Current verification:
   and `mul_mm_cm2.comp`
   `b48523e624ca55a8e4441c38e580b7109813a146265f2866f1238549caceebbe` /
   `bf170282a7fb3f17e7214814fd0e9ce1656e54d68fce28a8e917201537056d9e`.
-  The transform rejects any other input or output.
+  The transform rejected any other input or output.
 - A dependent Flutter native-test harness then exercised the final-source
   arm64-v8a bridge on that same physical device. The Debug APK SHA-256 was
   `916db989df04dc68f4e426cfef238d3672c7b221c53311ad359c47731a816e18`; its

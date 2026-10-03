@@ -236,9 +236,12 @@ void main() async {
   package supplies its pinned headers and Flutter's selected NDK supplies the
   remaining target and host shader-tool inputs.
   Runtime capability metadata distinguishes the artifacts before an app
-  requests Vulkan. One final-source Debug harness run on an Adreno 750 selected
-  Vulkan, matched its bounded CPU oracle, and passed cancellation/reset/recovery
-  and repeat-dispose checks. This is a narrow experimental receipt, not Android
+  requests Vulkan. On the previous upstream pin (`b10217`), one final-source
+  Debug harness run on an Adreno 750 selected Vulkan, matched its bounded CPU
+  oracle, and passed cancellation/reset/recovery and repeat-dispose checks. The
+  current pin carries the same policy ported to upstream's reorganized Vulkan
+  backend; it cross-compiles but has not run on a device. This is a narrow
+  experimental receipt, not Android
   Vulkan support or a speed claim: the Qualcomm-proprietary K-quant policy uses
   a safe Q4_K matrix route and CPU fallback for Q5_K/Q6_K matrix operations.
   Android remains opt-in and unqualified; see [native builds](doc/native_builds.md)
@@ -314,7 +317,9 @@ before persistence or display.
   Debug build, but the latter is compile/package evidence rather than a Metal
   runtime result from iPhone hardware.
 - Android Vulkan product support beyond one Xiaomi 23127PN0CC/Adreno 750
-  Android 16 Debug-harness receipt. That receipt covers a final-source bounded
+  Android 16 Debug-harness receipt, which was measured on the previous upstream
+  pin and has not been repeated on the current one. That receipt covers a
+  final-source bounded
   CPU-oracle run, cancellation, reset/recovery, and repeat disposal. It does not cover
   sustained or thermal behavior, more models, drivers, devices, Android
   lifecycle transitions, signed/release packaging, or performance. The strict
@@ -364,8 +369,9 @@ ctest --test-dir build/native --output-on-failure
 and the published package includes its required source files. Keep upstream
 notices from `third_party/llama.cpp/LICENSE`,
 `third_party/llama.cpp/AUTHORS`, and `third_party/llama.cpp/licenses/` with any
-redistribution. The package manifest registers these files plus cpp-httplib,
-stb, and miniaudio notices as Flutter additional licenses so they are collected
+redistribution. The package manifest registers these files plus the
+cpp-httplib, rotate-bits, SHA-256, xxHash, stb, and miniaudio notices as
+Flutter additional licenses so they are collected
 into generated application notices. This does not decide whether a particular
 application is compatible with GPL-3.0; distributors still need to make that
 product/legal decision and meet the applicable source and notice obligations.
@@ -373,7 +379,7 @@ Model files, adapters, and mmproj files are app-supplied data with their own
 licenses.
 
 The upstream submodule is pinned at
-`ddd4ec1428a6201e18975ea52b07c71e0f9aef26` (`b10217`).
+`99b95488cac0f00ce3f05af113a8c1e287753f87` (`b11371`).
 
 See [doc/feature_matrix.md](doc/feature_matrix.md) and
 [doc/upstream_sync.md](doc/upstream_sync.md). Architecture, native build, and

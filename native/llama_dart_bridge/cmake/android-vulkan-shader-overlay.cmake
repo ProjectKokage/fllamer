@@ -17,10 +17,12 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
 
   set(_overlay_dequant "${overlay_shader_dir}/dequant_funcs.glsl")
   set(_overlay_mul_mm "${overlay_shader_dir}/mul_mm_funcs.glsl")
+  set(_overlay_mul_mm_comp "${overlay_shader_dir}/mul_mm.comp")
   set(_overlay_vulkan "${overlay_shader_dir}/ggml-vulkan.cpp")
   foreach(_overlay_file IN ITEMS
     "${_overlay_dequant}"
     "${_overlay_mul_mm}"
+    "${_overlay_mul_mm_comp}"
     "${_overlay_vulkan}"
   )
     if(NOT EXISTS "${_overlay_file}")
@@ -31,26 +33,34 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
     DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_overlay_dequant}"
     "${_overlay_mul_mm}"
+    "${_overlay_mul_mm_comp}"
     "${_overlay_vulkan}"
   )
   file(SHA256 "${_overlay_dequant}" _overlay_dequant_sha256)
   if(
     NOT _overlay_dequant_sha256 STREQUAL
-    "79e3bed12bdb16181293a3123e09c58abe6b1d774d928f59407c5d2ac3eb8e25"
+    "bcaf084f68df8da15dcf2df3d15d45d6a443eccd9b53f26c78792e368079c7a8"
   )
     message(FATAL_ERROR "Android Vulkan dequant shader overlay is not exact")
   endif()
   file(SHA256 "${_overlay_mul_mm}" _overlay_mul_mm_sha256)
   if(
     NOT _overlay_mul_mm_sha256 STREQUAL
-    "bf170282a7fb3f17e7214814fd0e9ce1656e54d68fce28a8e917201537056d9e"
+    "64ae33bf3fa95dfbed3fc17e2ed1e2e5405d3db193ad8a604b0e84f5536d665c"
   )
     message(FATAL_ERROR "Android Vulkan matrix shader overlay is not exact")
+  endif()
+  file(SHA256 "${_overlay_mul_mm_comp}" _overlay_mul_mm_comp_sha256)
+  if(
+    NOT _overlay_mul_mm_comp_sha256 STREQUAL
+    "0a96c140a076875c6dc0e3fd0f29e5caceba7df8219da2b2067eb2cc1162af15"
+  )
+    message(FATAL_ERROR "Android Vulkan matrix shader views are not exact")
   endif()
   file(SHA256 "${_overlay_vulkan}" _overlay_vulkan_sha256)
   if(
     NOT _overlay_vulkan_sha256 STREQUAL
-    "877d2c2d0da802b84dc8962f0047f21c6bff033052fdcbfcfc730f3aec89fe80"
+    "5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc"
   )
     message(FATAL_ERROR "Android Vulkan native source overlay is not exact")
   endif()
@@ -93,43 +103,43 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
   string(
     FIND
     "${_overlay_mul_mm_text}"
-    [=[const uint vui = uint(data_a_packed16[ib].qs[2*iqs])]=]
+    [=[const uint vui = uint(a_q4_0_p16.data[ib].qs[2*iqs])]=]
     _q4_0_matrix_old
   )
   string(
     FIND
     "${_overlay_mul_mm_text}"
-    [=[const float d = float(data_a_packed16[ib].d);
-            const uint qsi = 4 * iqs;
-            const uvec4 q = uvec4(data_a[ib].qs[qsi]=]
+    [=[const float d = float(a_q4_0_p16.data[ib].d);
+        const uint qsi = 4 * iqs;
+        const uvec4 q = uvec4(a_q4_0.data[ib].qs[qsi]=]
     _q4_0_matrix_new
   )
   string(
     FIND
     "${_overlay_mul_mm_text}"
-    [=[const uint vui = data_a_packed32[ib].qs[iqs];
-            const vec4 v0 = vec4(unpack8(vui & 0x0F0F0F0F)) * dm.x + dm.y;
-            const vec4 v1 = vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;]=]
+    [=[const uint vui = a_q4_1_p32.data[ib].qs[iqs];
+        const vec4 v0 = vec4(unpack8(vui & 0x0F0F0F0F)) * dm.x + dm.y;
+        const vec4 v1 = vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;]=]
     _q4_1_matrix_old
   )
   string(
     FIND
     "${_overlay_mul_mm_text}"
-    [=[const vec2 dm = vec2(data_a_packed32[ib].dm);
-            const uint qsi = 4 * iqs;
-            const uvec4 q = uvec4(data_a[ib].qs[qsi]=]
+    [=[const vec2 dm = vec2(a_q4_1_p32.data[ib].dm);
+        const uint qsi = 4 * iqs;
+        const uvec4 q = uvec4(a_q4_1.data[ib].qs[qsi]=]
     _q4_1_matrix_new
   )
   string(
     FIND
     "${_overlay_mul_mm_text}"
-    [=[const i8vec2 v0 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs])).xy;]=]
+    [=[const i8vec2 v0 = unpack8(int32_t(a_q8_0_p16.data[ib].qs[2*iqs])).xy;]=]
     _q8_0_matrix_old
   )
   string(
     FIND
     "${_overlay_mul_mm_text}"
-    [=[const vec4 v = vec4(int(data_a[ib].qs[qsi    ])]=]
+    [=[const vec4 v = vec4(int(a_q8_0.data[ib].qs[qsi    ])]=]
     _q8_0_matrix_new
   )
   if(
@@ -149,7 +159,9 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
     [=[device->driver_id == vk::DriverId::eQualcommProprietary;]=]
     [=[if (!ggml_vk_is_qualcomm_proprietary(device)) {]=]
     [=[src0->type == GGML_TYPE_Q4_K) {
-        mmp = nullptr;
+        mmp_map = nullptr;
+    }
+    if (mmp_map == nullptr) {
         quantize_y = false;]=]
     [=[mul->src[0]->type == GGML_TYPE_Q4_K) {
             return false;]=]
@@ -274,6 +286,7 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
         "${_overlay_source}"
         "${_overlay_dequant}"
         "${_overlay_mul_mm}"
+        "${_overlay_mul_mm_comp}"
         vulkan-shaders-gen
       COMMENT "Generate fllamer Android Vulkan overlay for ${_shader}"
       VERBATIM
@@ -293,4 +306,8 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
   )
   add_dependencies("${target}" fllamer-android-vulkan-shader-overlay)
   set_property(TARGET "${target}" PROPERTY SOURCES "${_normalized_sources}")
+  # The replaced source includes its sibling headers by quoted name, so the
+  # directory it was taken from stays on the include path.
+  get_filename_component(_vulkan_source_dir "${_vulkan_source}" DIRECTORY)
+  target_include_directories("${target}" PRIVATE "${_vulkan_source_dir}")
 endfunction()

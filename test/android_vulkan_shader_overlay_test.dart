@@ -12,6 +12,7 @@ void main() {
   );
   final dequantFile = File('${shaderDirectory.path}/dequant_funcs.glsl');
   final mulMmFile = File('${shaderDirectory.path}/mul_mm_funcs.glsl');
+  final mulMmCompFile = File('${shaderDirectory.path}/mul_mm.comp');
   final vulkanFile = File(
     'third_party/llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp',
   );
@@ -45,22 +46,44 @@ void main() {
       expect(_sha256(patched), patchedMulMmFuncsSha256);
       expect(
         patched,
-        contains('const float d = float(data_a_packed16[ib].d);'),
+        contains('const float d = float(a_q4_0_p16.data[ib].d);'),
       );
       expect(
         patched,
-        contains('const vec2 dm = vec2(data_a_packed32[ib].dm);'),
+        contains('const vec2 dm = vec2(a_q4_1_p32.data[ib].dm);'),
       );
       expect(
         RegExp(
-          r'const uvec4 q = uvec4\(data_a\[ib\]\.qs\[qsi',
+          r'const uvec4 q = uvec4\(a_q4_[01]\.data\[ib\]\.qs\[qsi',
         ).allMatches(patched),
         hasLength(2),
       );
-      expect(patched, contains('int(data_a[ib].qs[qsi + 3])'));
+      expect(patched, contains('int(a_q8_0.data[ib].qs[qsi + 3])'));
       expect(
         patched,
-        isNot(contains('vec2(float(data_a[ib].d), float(data_a[ib].m))')),
+        isNot(
+          contains('vec2(float(a_q4_1.data[ib].d), float(a_q4_1.data[ib].m))'),
+        ),
+      );
+    });
+
+    test('adds byte views of the three payloads to the matrix shader', () {
+      final source = mulMmCompFile.readAsStringSync();
+      final patched = patchPinnedAndroidVulkanMulMmComp(source);
+
+      expect(_sha256(source), pinnedMulMmCompSha256);
+      expect(_sha256(patched), patchedMulMmCompSha256);
+      for (final view in [
+        '{ block_q4_0 data[];     } a_q4_0;',
+        '{ block_q4_1 data[];     } a_q4_1;',
+        '{ block_q8_0 data[];     } a_q8_0;',
+      ]) {
+        expect(patched, contains(view));
+        expect(source, isNot(contains(view)));
+      }
+      expect(
+        () => patchPinnedAndroidVulkanMulMmComp(patched),
+        throwsA(isA<AndroidVulkanShaderOverlayException>()),
       );
     });
 
@@ -115,7 +138,9 @@ void main() {
         contains(
           'if (ggml_vk_is_qualcomm_proprietary(ctx->device) && '
           'src0->type == GGML_TYPE_Q4_K) {\n'
-          '        mmp = nullptr;\n'
+          '        mmp_map = nullptr;\n'
+          '    }\n'
+          '    if (mmp_map == nullptr) {\n'
           '        quantize_y = false;',
         ),
       );
@@ -217,6 +242,7 @@ void main() {
           await source.create();
           await dequantFile.copy('${source.path}/dequant_funcs.glsl');
           await mulMmFile.copy('${source.path}/mul_mm_funcs.glsl');
+          await mulMmCompFile.copy('${source.path}/mul_mm.comp');
           final pristine = await vulkanFile.readAsString();
           await nativeSource.create(recursive: true);
           await nativeSource.writeAsString(pristine.replaceAll('\n', '\r\n'));
@@ -280,6 +306,7 @@ void main() {
         final unrelated = File('${source.path}/nested/unrelated.comp');
         await sourceDequant.writeAsString(await dequantFile.readAsString());
         await sourceMulMm.writeAsString(await mulMmFile.readAsString());
+        await mulMmCompFile.copy('${source.path}/mul_mm.comp');
         await unrelated.create(recursive: true);
         await unrelated.writeAsBytes([0, 1, 2, 255]);
         await output.create();
@@ -317,6 +344,10 @@ void main() {
             await File('${output.path}/mul_mm_funcs.glsl').readAsString(),
           ),
           patchedMulMmFuncsSha256,
+        );
+        expect(
+          _sha256(await File('${output.path}/mul_mm.comp').readAsString()),
+          patchedMulMmCompSha256,
         );
         expect(
           _sha256(await File('${output.path}/ggml-vulkan.cpp').readAsString()),
@@ -426,6 +457,7 @@ void main() {
           expect(configureDepends, {
             _cmakePath('${overlay.path}/dequant_funcs.glsl'),
             _cmakePath('${overlay.path}/mul_mm_funcs.glsl'),
+            _cmakePath('${overlay.path}/mul_mm.comp'),
             _cmakePath('${overlay.path}/ggml-vulkan.cpp'),
           });
 

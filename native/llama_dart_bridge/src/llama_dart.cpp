@@ -589,6 +589,11 @@ bool string_contains_nul(const std::string &value) {
   return value.find('\0') != std::string::npos;
 }
 
+// llama-common's JSON type keeps key order, like the ordered tree parsed here.
+common_json to_common_json(const nlohmann::ordered_json &value) {
+  return common_json::parse(value.dump());
+}
+
 llama_dart_result parse_json_object(const uint8_t *data, size_t size,
                                     const char *name,
                                     nlohmann::ordered_json *out) {
@@ -1133,8 +1138,17 @@ llama_dart_result decode_tokens_at(llama_dart_context *context,
       std::fill(batch.logits, batch.logits + token_count, 0);
       batch.logits[token_count - 1] = 1;
     }
-    speculative_processed =
-        common_speculative_process(context->speculative.get(), batch);
+    if (context->speculative != nullptr) {
+      // llama-common reads the decoded entries from its own batch type; the
+      // entries mirror the batch the target context just decoded.
+      common_batch decoded_entries;
+      for (int32_t i = 0; i < token_count; ++i) {
+        decoded_entries.add(batch.token[i], batch.pos[i], 0,
+                            batch.logits[i] != 0);
+      }
+      speculative_processed = common_speculative_process(
+          context->speculative.get(), decoded_entries);
+    }
   }
   llama_batch_free(batch);
   if (decoded == 2 || is_cancelled(context)) {
@@ -1351,11 +1365,13 @@ llama_dart_result decode_multimodal_prompt(
     if (media.path_size > 0) {
       const std::string path(
           reinterpret_cast<const char *>(media.path_data), media.path_size);
-      wrapper = mtmd_helper_bitmap_init_from_file(context->multimodal,
-                                                  path.c_str(), false);
+      wrapper = mtmd_helper_bitmap_init_from_file(
+          context->multimodal, path.c_str(), false,
+          mtmd_helper_init_opt_default());
     } else {
       wrapper = mtmd_helper_bitmap_init_from_buf(
-          context->multimodal, media.content_data, media.content_size, false);
+          context->multimodal, media.content_data, media.content_size, false,
+          mtmd_helper_init_opt_default());
     }
     if (wrapper.video_ctx != nullptr) {
       mtmd_helper_video_free(wrapper.video_ctx);
@@ -1711,6 +1727,7 @@ llama_dart_result create_completion_sampler(
          config->presence_penalty != 0.0f)) {
       added = add_sampler(sampler,
                           llama_sampler_init_penalties(
+                              llama_vocab_n_tokens(vocab),
                               config->penalty_last_n, config->repeat_penalty,
                               config->frequency_penalty,
                               config->presence_penalty));
@@ -1823,7 +1840,7 @@ llama_dart_result convert_json_schema_to_grammar(
     const char *begin = reinterpret_cast<const char *>(schema_data);
     nlohmann::ordered_json schema =
         nlohmann::ordered_json::parse(begin, begin + schema_size);
-    *out = json_schema_to_grammar(schema);
+    *out = json_schema_to_grammar(to_common_json(schema));
     if (out->empty()) {
       return fail(LLAMA_DART_ERROR_UNSUPPORTED,
                   "JSON schema produced an empty grammar");
@@ -3843,14 +3860,15 @@ llama_dart_result llama_dart_model_create_chat_plan(
   bool hard_disable_thinking = false;
   try {
     inputs.messages =
-        common_chat_msgs_parse_oaicompat(request.at("messages"));
+        common_chat_msgs_parse_oaicompat(
+            to_common_json(request.at("messages")));
     if (inputs.messages.empty()) {
       return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                   "chat messages must not be empty");
     }
     const nlohmann::ordered_json tools =
         request.value("tools", nlohmann::ordered_json::array());
-    inputs.tools = common_chat_tools_parse_oaicompat(tools);
+    inputs.tools = common_chat_tools_parse_oaicompat(to_common_json(tools));
     const std::string tool_choice = request.value("tool_choice", "auto");
     inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.parallel_tool_calls =

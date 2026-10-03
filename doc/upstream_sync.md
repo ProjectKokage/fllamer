@@ -2,12 +2,14 @@
 
 - Upstream: `https://github.com/ggml-org/llama.cpp`
 - Submodule: `third_party/llama.cpp`
-- Commit: `ddd4ec1428a6201e18975ea52b07c71e0f9aef26`
-- Upstream build tag: `b10217`
-- Sync date: 2026-08-01
+- Commit: `99b95488cac0f00ce3f05af113a8c1e287753f87`
+- Upstream build tag: `b11371`
+- Sync date: 2026-10-03
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
-  `third_party/llama.cpp/licenses/`, plus the package-maintained notices under
+  `third_party/llama.cpp/licenses/`, the vendored notices under
+  `third_party/llama.cpp/vendor/cpp-httplib/` and
+  `third_party/llama.cpp/vendor/hash/`, plus the package-maintained notices under
   `third_party/licenses/` and the independently pinned
   `third_party/vulkan_headers/LICENSE.md`, with redistributed source or
   binaries.
@@ -33,10 +35,12 @@ access. The publish checkout must initialize the submodule before running
 `dart pub publish`.
 
 No package-local changes are carried inside `third_party/llama.cpp`. Opt-in
-Android Vulkan builds instead create a temporary version-3 build-output overlay.
+Android Vulkan builds instead create a temporary version-4 build-output overlay.
 Its pure transform normalizes CRLF to LF, accepts only recorded full-file hashes
 from this exact pin, and applies five q-payload-only shader replacements while
-preserving Q4_0/Q4_1 scale and min fields. It also transforms exactly one
+preserving Q4_0/Q4_1 scale and min fields. The matrix shader `mul_mm.comp`
+gains byte views of the Q4_0, Q4_1 and Q8_0 blocks for those replacements,
+because the pinned shader declares only packed views. It also transforms exactly one
 `ggml-vulkan.cpp` source to install a Qualcomm-vendor plus
 Qualcomm-proprietary-driver K-quant correctness policy: restricted Q4_K routing
 and CPU scheduling fallback for Q5_K/Q6_K matrix operations. An upstream sync
@@ -45,6 +49,14 @@ output hashes, then bump the hook's build-output overlay version; never apply it
 inside the submodule. Metal capability reporting and Gemma 4 generation grammar
 therefore match the pinned upstream commit. fllamer still validates parsed tool
 arguments against the declared schema before exposing them to application code.
+
+The `b11371` sync ported that overlay to upstream's reorganized Vulkan backend
+without changing its intent. The ported overlay cross-compiles for Android, but
+it has not run on a device: the device results in
+[native builds](native_builds.md) were measured on `b10217`. Until an affected
+Qualcomm device repeats the CPU-oracle check, Android Vulkan correctness on
+this pin is unverified in both directions: the patches may no longer be
+needed, or may no longer be enough.
 
 To sync upstream, fetch and inspect an explicit commit, check it out detached
 inside the submodule, and stage the updated gitlink:
@@ -130,6 +142,23 @@ Current bridge integration uses these public upstream C APIs:
 - `llama_sampler_free`
 - `llama_vocab_is_eog`
 - `llama_token_to_piece`
+
+The `b11371` sync adapted the bridge to four upstream API changes without an
+ABI change:
+
+- `llama_sampler_init_penalties` takes the vocabulary size first. The bridge
+  still adds the sampler only for a positive `penalty_last_n`.
+- `mtmd_helper_bitmap_init_from_file` and `_from_buf` take init options; the
+  bridge passes `mtmd_helper_init_opt_default()`.
+- llama-common takes its own `common_json` type. The bridge still parses
+  requests and schemas with nlohmann JSON, which keeps its parse-error
+  contract, and converts at the three calls into llama-common.
+- `common_speculative_process` takes a `common_batch`. The bridge still decodes
+  the target with `llama_decode` and hands llama-common a mirror of the decoded
+  entries, built only when a speculator exists.
+
+Upstream's session format is version 10 on this pin, so
+`llama_state_set_data` rejects state saved by an earlier pin.
 
 `LlamaEngine.warmUp()` follows pinned `common_init_from_params` semantics: it
 uses BOS/EOS tokens with token zero as a fallback, runs encoder and decoder
