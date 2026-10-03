@@ -2466,191 +2466,61 @@ final class NativeLlamaEngineSession {
     return controller.stream;
   }
 
-  Future<void> reset() async {
+  /// Sends one request to the worker and returns its answer.
+  Future<T> _request<T>(_EngineRequest<T> request) async {
     if (_closed) {
       throw const ResourceDisposedException('LlamaEngine is closed.');
     }
     final reply = ReceivePort();
-    _commands.send(_EngineWorkerReset(reply.sendPort));
+    _commands.send(_EngineWorkerRequest(request, reply.sendPort));
     final message = await _lifecycle.receive(reply);
-    if (message == null) {
-      return;
-    }
     if (message is _EngineWorkerFailure) {
       throw message.error.toException();
     }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
-
-  Future<void> warmUp() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerWarmUp(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message == null) {
-      return;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
-
-  Future<LlamaModelInfo> modelInfo() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerModelInfo(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is LlamaModelInfo) {
+    if (message is T) {
       return message;
     }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
     throw NativeBridgeException('Unexpected engine worker response: $message');
   }
+
+  Future<void> reset() => _request(const _ResetRequest());
+
+  Future<void> warmUp() => _request(const _WarmUpRequest());
+
+  Future<LlamaModelInfo> modelInfo() => _request(const _ModelInfoRequest());
 
   Future<Map<String, String>> modelMetadata() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerModelMetadata(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is Map<String, String>) {
-      return Map<String, String>.unmodifiable(message);
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
+    final message = await _request(const _ModelMetadataRequest());
+    return Map<String, String>.unmodifiable(message);
   }
 
-  Future<String> chatTemplate() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerChatTemplate(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is String) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<String> chatTemplate() => _request(const _ChatTemplateRequest());
 
   Future<List<int>> tokenize(
     String text, {
     required bool addSpecial,
     required bool parseSpecial,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerTokenize(text, addSpecial, parseSpecial, reply.sendPort),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is List<int>) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(_TokenizeRequest(text, addSpecial, parseSpecial));
 
   Future<int> countTokens(
     String text, {
     required bool addSpecial,
     required bool parseSpecial,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerCountTokens(text, addSpecial, parseSpecial, reply.sendPort),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is int) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(_CountTokensRequest(text, addSpecial, parseSpecial));
 
   Future<String> detokenize(
     List<int> tokens, {
     required bool removeSpecial,
     required bool unparseSpecial,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerDetokenize(
-        tokens,
-        removeSpecial,
-        unparseSpecial,
-        reply.sendPort,
-      ),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is String) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(_DetokenizeRequest(tokens, removeSpecial, unparseSpecial));
 
   Future<EmbeddingBatch> embedTexts(
     List<String> texts,
     EmbeddingConfig config,
-  ) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerEmbedTexts(texts, config, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is EmbeddingBatch) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  ) => _request(_EmbedTextsRequest(texts, config));
 
-  Future<LlamaChatTemplateCapabilities> chatTemplateCapabilities() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerChatTemplateCapabilities(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is LlamaChatTemplateCapabilities) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<LlamaChatTemplateCapabilities> chatTemplateCapabilities() =>
+      _request(const _ChatTemplateCapabilitiesRequest());
 
   Future<String> formatChat(
     List<ChatMessage> messages, {
@@ -2659,31 +2529,16 @@ final class NativeLlamaEngineSession {
     bool? enableThinking,
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerFormatChat(
-        messages,
-        addAssistantPrompt,
-        toolCalling,
-        enableThinking,
-        reasoningBudgetTokens,
-        maximumPromptBytes,
-        reply.sendPort,
-      ),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is String) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(
+    _FormatChatRequest(
+      messages,
+      addAssistantPrompt,
+      toolCalling,
+      enableThinking,
+      reasoningBudgetTokens,
+      maximumPromptBytes,
+    ),
+  );
 
   Future<int> countChatTokens(
     List<ChatMessage> messages, {
@@ -2692,186 +2547,49 @@ final class NativeLlamaEngineSession {
     bool? enableThinking,
     int? reasoningBudgetTokens,
     int? maximumPromptBytes,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerCountChatTokens(
-        messages,
-        addAssistantPrompt,
-        toolCalling,
-        enableThinking,
-        reasoningBudgetTokens,
-        maximumPromptBytes,
-        reply.sendPort,
-      ),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is int) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(
+    _CountChatTokensRequest(
+      messages,
+      addAssistantPrompt,
+      toolCalling,
+      enableThinking,
+      reasoningBudgetTokens,
+      maximumPromptBytes,
+    ),
+  );
 
   Future<PrefillTelemetry> prefill(
     String prompt, {
     required bool? addSpecial,
     required bool parseSpecial,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerPrefill(prompt, addSpecial, parseSpecial, reply.sendPort),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is PrefillTelemetry) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(_PrefillRequest(prompt, addSpecial, parseSpecial));
 
   Future<int> shiftContext({
     required int keepTokens,
     required int? discardTokens,
-  }) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(
-      _EngineWorkerShiftContext(keepTokens, discardTokens, reply.sendPort),
-    );
-    final message = await _lifecycle.receive(reply);
-    if (message is int) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  }) => _request(_ShiftContextRequest(keepTokens, discardTokens));
 
-  Future<LlamaContextInfo> contextInfo() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerContextInfo(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is LlamaContextInfo) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<LlamaContextInfo> contextInfo() =>
+      _request(const _ContextInfoRequest());
 
-  Future<Uint8List> saveState() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerSaveState(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is Uint8List) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<Uint8List> saveState() => _request(const _SaveStateRequest());
 
-  Future<void> restoreState(Uint8List state) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerRestoreState(state, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message == null) {
-      return;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<void> restoreState(Uint8List state) =>
+      _request(_RestoreStateRequest(state));
 
-  Future<LoraAdapterInfo> loadLora(LoraAdapterConfig config) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerLoadLora(config, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is LoraAdapterInfo) {
-      return message;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<LoraAdapterInfo> loadLora(LoraAdapterConfig config) =>
+      _request(_LoadLoraRequest(config));
 
   Future<List<LoraAdapterInfo>> loraAdapters() async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerListLoras(reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message is List<LoraAdapterInfo>) {
-      return List<LoraAdapterInfo>.unmodifiable(message);
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
+    final message = await _request(const _ListLorasRequest());
+    return List<LoraAdapterInfo>.unmodifiable(message);
   }
 
-  Future<void> setLoraScale(int adapterId, double scale) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerSetLoraScale(adapterId, scale, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message == null) {
-      return;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<void> setLoraScale(int adapterId, double scale) =>
+      _request(_SetLoraScaleRequest(adapterId, scale));
 
-  Future<void> unloadLora(int adapterId) async {
-    if (_closed) {
-      throw const ResourceDisposedException('LlamaEngine is closed.');
-    }
-    final reply = ReceivePort();
-    _commands.send(_EngineWorkerUnloadLora(adapterId, reply.sendPort));
-    final message = await _lifecycle.receive(reply);
-    if (message == null) {
-      return;
-    }
-    if (message is _EngineWorkerFailure) {
-      throw message.error.toException();
-    }
-    throw NativeBridgeException('Unexpected engine worker response: $message');
-  }
+  Future<void> unloadLora(int adapterId) =>
+      _request(_UnloadLoraRequest(adapterId));
 
   Future<void> close() async {
     if (_closed) {
@@ -4018,101 +3736,153 @@ final class _EngineWorkerFinalize {
   const _EngineWorkerFinalize();
 }
 
-final class _EngineWorkerReset {
-  const _EngineWorkerReset(this.reply);
+/// A request the worker runs against the open engine and answers once.
+abstract base class _EngineRequest<T> {
+  const _EngineRequest();
 
+  T run(_NativeEngineHandles handles);
+}
+
+/// An [_EngineRequest] with the port its answer goes to.
+final class _EngineWorkerRequest {
+  const _EngineWorkerRequest(this.request, this.reply);
+
+  final _EngineRequest<Object?> request;
   final SendPort reply;
 }
 
-final class _EngineWorkerWarmUp {
-  const _EngineWorkerWarmUp(this.reply);
+final class _ResetRequest extends _EngineRequest<Null> {
+  const _ResetRequest();
 
-  final SendPort reply;
+  @override
+  Null run(_NativeEngineHandles handles) {
+    handles.reset();
+    return null;
+  }
 }
 
-final class _EngineWorkerModelInfo {
-  const _EngineWorkerModelInfo(this.reply);
+final class _WarmUpRequest extends _EngineRequest<Null> {
+  const _WarmUpRequest();
 
-  final SendPort reply;
+  @override
+  Null run(_NativeEngineHandles handles) {
+    handles.warmUp();
+    return null;
+  }
 }
 
-final class _EngineWorkerModelMetadata {
-  const _EngineWorkerModelMetadata(this.reply);
+final class _ModelInfoRequest extends _EngineRequest<LlamaModelInfo> {
+  const _ModelInfoRequest();
 
-  final SendPort reply;
+  @override
+  LlamaModelInfo run(_NativeEngineHandles handles) {
+    return handles.modelInfo();
+  }
 }
 
-final class _EngineWorkerChatTemplate {
-  const _EngineWorkerChatTemplate(this.reply);
+final class _ModelMetadataRequest extends _EngineRequest<Map<String, String>> {
+  const _ModelMetadataRequest();
 
-  final SendPort reply;
+  @override
+  Map<String, String> run(_NativeEngineHandles handles) {
+    return handles.modelMetadata();
+  }
 }
 
-final class _EngineWorkerTokenize {
-  const _EngineWorkerTokenize(
-    this.text,
-    this.addSpecial,
-    this.parseSpecial,
-    this.reply,
-  );
+final class _ChatTemplateRequest extends _EngineRequest<String> {
+  const _ChatTemplateRequest();
+
+  @override
+  String run(_NativeEngineHandles handles) {
+    return handles.chatTemplate();
+  }
+}
+
+final class _TokenizeRequest extends _EngineRequest<List<int>> {
+  const _TokenizeRequest(this.text, this.addSpecial, this.parseSpecial);
 
   final String text;
   final bool addSpecial;
   final bool parseSpecial;
-  final SendPort reply;
+
+  @override
+  List<int> run(_NativeEngineHandles handles) {
+    return handles.tokenize(
+      text,
+      addSpecial: addSpecial,
+      parseSpecial: parseSpecial,
+    );
+  }
 }
 
-final class _EngineWorkerCountTokens {
-  const _EngineWorkerCountTokens(
-    this.text,
-    this.addSpecial,
-    this.parseSpecial,
-    this.reply,
-  );
+final class _CountTokensRequest extends _EngineRequest<int> {
+  const _CountTokensRequest(this.text, this.addSpecial, this.parseSpecial);
 
   final String text;
   final bool addSpecial;
   final bool parseSpecial;
-  final SendPort reply;
+
+  @override
+  int run(_NativeEngineHandles handles) {
+    return handles.countTokens(
+      text,
+      addSpecial: addSpecial,
+      parseSpecial: parseSpecial,
+    );
+  }
 }
 
-final class _EngineWorkerDetokenize {
-  const _EngineWorkerDetokenize(
+final class _DetokenizeRequest extends _EngineRequest<String> {
+  const _DetokenizeRequest(
     this.tokens,
     this.removeSpecial,
     this.unparseSpecial,
-    this.reply,
   );
 
   final List<int> tokens;
   final bool removeSpecial;
   final bool unparseSpecial;
-  final SendPort reply;
+
+  @override
+  String run(_NativeEngineHandles handles) {
+    return handles.detokenize(
+      tokens,
+      removeSpecial: removeSpecial,
+      unparseSpecial: unparseSpecial,
+    );
+  }
 }
 
-final class _EngineWorkerEmbedTexts {
-  const _EngineWorkerEmbedTexts(this.texts, this.config, this.reply);
+final class _EmbedTextsRequest extends _EngineRequest<EmbeddingBatch> {
+  const _EmbedTextsRequest(this.texts, this.config);
 
   final List<String> texts;
   final EmbeddingConfig config;
-  final SendPort reply;
+
+  @override
+  EmbeddingBatch run(_NativeEngineHandles handles) {
+    return NativeLlamaBridge._embedTextsWithHandles(handles, texts, config);
+  }
 }
 
-final class _EngineWorkerChatTemplateCapabilities {
-  const _EngineWorkerChatTemplateCapabilities(this.reply);
+final class _ChatTemplateCapabilitiesRequest
+    extends _EngineRequest<LlamaChatTemplateCapabilities> {
+  const _ChatTemplateCapabilitiesRequest();
 
-  final SendPort reply;
+  @override
+  LlamaChatTemplateCapabilities run(_NativeEngineHandles handles) {
+    return handles.chatTemplateCapabilities();
+  }
 }
 
-final class _EngineWorkerFormatChat {
-  const _EngineWorkerFormatChat(
+final class _FormatChatRequest extends _EngineRequest<String> {
+  const _FormatChatRequest(
     this.messages,
     this.addAssistantPrompt,
     this.toolCalling,
     this.enableThinking,
     this.reasoningBudgetTokens,
     this.maximumPromptBytes,
-    this.reply,
   );
 
   final List<ChatMessage> messages;
@@ -4121,18 +3891,28 @@ final class _EngineWorkerFormatChat {
   final bool? enableThinking;
   final int? reasoningBudgetTokens;
   final int? maximumPromptBytes;
-  final SendPort reply;
+
+  @override
+  String run(_NativeEngineHandles handles) {
+    return handles.formatChat(
+      messages,
+      addAssistantPrompt: addAssistantPrompt,
+      toolCalling: toolCalling,
+      enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
+    );
+  }
 }
 
-final class _EngineWorkerCountChatTokens {
-  const _EngineWorkerCountChatTokens(
+final class _CountChatTokensRequest extends _EngineRequest<int> {
+  const _CountChatTokensRequest(
     this.messages,
     this.addAssistantPrompt,
     this.toolCalling,
     this.enableThinking,
     this.reasoningBudgetTokens,
     this.maximumPromptBytes,
-    this.reply,
   );
 
   final List<ChatMessage> messages;
@@ -4141,52 +3921,80 @@ final class _EngineWorkerCountChatTokens {
   final bool? enableThinking;
   final int? reasoningBudgetTokens;
   final int? maximumPromptBytes;
-  final SendPort reply;
+
+  @override
+  int run(_NativeEngineHandles handles) {
+    return handles.countChatTokens(
+      messages,
+      addAssistantPrompt: addAssistantPrompt,
+      toolCalling: toolCalling,
+      enableThinking: enableThinking,
+      reasoningBudgetTokens: reasoningBudgetTokens,
+      maximumPromptBytes: maximumPromptBytes,
+    );
+  }
 }
 
-final class _EngineWorkerPrefill {
-  const _EngineWorkerPrefill(
-    this.prompt,
-    this.addSpecial,
-    this.parseSpecial,
-    this.reply,
-  );
+final class _PrefillRequest extends _EngineRequest<PrefillTelemetry> {
+  const _PrefillRequest(this.prompt, this.addSpecial, this.parseSpecial);
 
   final String prompt;
   final bool? addSpecial;
   final bool parseSpecial;
-  final SendPort reply;
+
+  @override
+  PrefillTelemetry run(_NativeEngineHandles handles) {
+    return handles.prefill(
+      prompt,
+      addSpecial: addSpecial,
+      parseSpecial: parseSpecial,
+    );
+  }
 }
 
-final class _EngineWorkerShiftContext {
-  const _EngineWorkerShiftContext(
-    this.keepTokens,
-    this.discardTokens,
-    this.reply,
-  );
+final class _ShiftContextRequest extends _EngineRequest<int> {
+  const _ShiftContextRequest(this.keepTokens, this.discardTokens);
 
   final int keepTokens;
   final int? discardTokens;
-  final SendPort reply;
+
+  @override
+  int run(_NativeEngineHandles handles) {
+    return handles.shiftContext(
+      keepTokens: keepTokens,
+      discardTokens: discardTokens,
+    );
+  }
 }
 
-final class _EngineWorkerContextInfo {
-  const _EngineWorkerContextInfo(this.reply);
+final class _ContextInfoRequest extends _EngineRequest<LlamaContextInfo> {
+  const _ContextInfoRequest();
 
-  final SendPort reply;
+  @override
+  LlamaContextInfo run(_NativeEngineHandles handles) {
+    return handles.contextInfo();
+  }
 }
 
-final class _EngineWorkerSaveState {
-  const _EngineWorkerSaveState(this.reply);
+final class _SaveStateRequest extends _EngineRequest<Uint8List> {
+  const _SaveStateRequest();
 
-  final SendPort reply;
+  @override
+  Uint8List run(_NativeEngineHandles handles) {
+    return handles.saveState();
+  }
 }
 
-final class _EngineWorkerRestoreState {
-  const _EngineWorkerRestoreState(this.state, this.reply);
+final class _RestoreStateRequest extends _EngineRequest<Null> {
+  const _RestoreStateRequest(this.state);
 
   final Uint8List state;
-  final SendPort reply;
+
+  @override
+  Null run(_NativeEngineHandles handles) {
+    handles.restoreState(state);
+    return null;
+  }
 }
 
 final class _EngineWorkerStreamComplete {
@@ -4234,32 +4042,49 @@ final class _EngineWorkerStreamDispose {
   final SendPort reply;
 }
 
-final class _EngineWorkerLoadLora {
-  const _EngineWorkerLoadLora(this.config, this.reply);
+final class _LoadLoraRequest extends _EngineRequest<LoraAdapterInfo> {
+  const _LoadLoraRequest(this.config);
 
   final LoraAdapterConfig config;
-  final SendPort reply;
+
+  @override
+  LoraAdapterInfo run(_NativeEngineHandles handles) {
+    return handles.loadLora(config);
+  }
 }
 
-final class _EngineWorkerListLoras {
-  const _EngineWorkerListLoras(this.reply);
+final class _ListLorasRequest extends _EngineRequest<List<LoraAdapterInfo>> {
+  const _ListLorasRequest();
 
-  final SendPort reply;
+  @override
+  List<LoraAdapterInfo> run(_NativeEngineHandles handles) {
+    return handles.loraAdapters();
+  }
 }
 
-final class _EngineWorkerSetLoraScale {
-  const _EngineWorkerSetLoraScale(this.adapterId, this.scale, this.reply);
+final class _SetLoraScaleRequest extends _EngineRequest<Null> {
+  const _SetLoraScaleRequest(this.adapterId, this.scale);
 
   final int adapterId;
   final double scale;
-  final SendPort reply;
+
+  @override
+  Null run(_NativeEngineHandles handles) {
+    handles.setLoraScale(adapterId, scale);
+    return null;
+  }
 }
 
-final class _EngineWorkerUnloadLora {
-  const _EngineWorkerUnloadLora(this.adapterId, this.reply);
+final class _UnloadLoraRequest extends _EngineRequest<Null> {
+  const _UnloadLoraRequest(this.adapterId);
 
   final int adapterId;
-  final SendPort reply;
+
+  @override
+  Null run(_NativeEngineHandles handles) {
+    handles.unloadLora(adapterId);
+    return null;
+  }
 }
 
 final class _EngineWorkerStreamProgress {
@@ -4284,29 +4109,9 @@ final class _EngineWorkerStreamChunk {
 
 SendPort? _engineWorkerReply(Object? message) {
   return switch (message) {
-    _EngineWorkerReset(:final reply) => reply,
-    _EngineWorkerWarmUp(:final reply) => reply,
-    _EngineWorkerModelInfo(:final reply) => reply,
-    _EngineWorkerModelMetadata(:final reply) => reply,
-    _EngineWorkerChatTemplate(:final reply) => reply,
-    _EngineWorkerTokenize(:final reply) => reply,
-    _EngineWorkerCountTokens(:final reply) => reply,
-    _EngineWorkerDetokenize(:final reply) => reply,
-    _EngineWorkerEmbedTexts(:final reply) => reply,
-    _EngineWorkerChatTemplateCapabilities(:final reply) => reply,
-    _EngineWorkerFormatChat(:final reply) => reply,
-    _EngineWorkerCountChatTokens(:final reply) => reply,
-    _EngineWorkerPrefill(:final reply) => reply,
-    _EngineWorkerShiftContext(:final reply) => reply,
-    _EngineWorkerContextInfo(:final reply) => reply,
-    _EngineWorkerSaveState(:final reply) => reply,
-    _EngineWorkerRestoreState(:final reply) => reply,
+    _EngineWorkerRequest(:final reply) => reply,
     _EngineWorkerStreamComplete(:final reply) => reply,
     _EngineWorkerStreamPrompt(:final reply) => reply,
-    _EngineWorkerLoadLora(:final reply) => reply,
-    _EngineWorkerListLoras(:final reply) => reply,
-    _EngineWorkerSetLoraScale(:final reply) => reply,
-    _EngineWorkerUnloadLora(:final reply) => reply,
     _ => null,
   };
 }
@@ -4676,229 +4481,13 @@ void _engineWorkerMain(_EngineWorkerStart start) {
           );
         }
       }
-    } else if (message is _EngineWorkerReset) {
+    } else if (message is _EngineWorkerRequest) {
       try {
         final active = handles;
         if (active == null) {
           throw const ResourceDisposedException('LlamaEngine is closed.');
         }
-        active.reset();
-        message.reply.send(null);
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerWarmUp) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        active.warmUp();
-        message.reply.send(null);
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerModelInfo) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.modelInfo());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerModelMetadata) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.modelMetadata());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerChatTemplate) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.chatTemplate());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerTokenize) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.tokenize(
-            message.text,
-            addSpecial: message.addSpecial,
-            parseSpecial: message.parseSpecial,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerCountTokens) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.countTokens(
-            message.text,
-            addSpecial: message.addSpecial,
-            parseSpecial: message.parseSpecial,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerDetokenize) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.detokenize(
-            message.tokens,
-            removeSpecial: message.removeSpecial,
-            unparseSpecial: message.unparseSpecial,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerEmbedTexts) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          NativeLlamaBridge._embedTextsWithHandles(
-            active,
-            message.texts,
-            message.config,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerChatTemplateCapabilities) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.chatTemplateCapabilities());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerFormatChat) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.formatChat(
-            message.messages,
-            addAssistantPrompt: message.addAssistantPrompt,
-            toolCalling: message.toolCalling,
-            enableThinking: message.enableThinking,
-            reasoningBudgetTokens: message.reasoningBudgetTokens,
-            maximumPromptBytes: message.maximumPromptBytes,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerCountChatTokens) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.countChatTokens(
-            message.messages,
-            addAssistantPrompt: message.addAssistantPrompt,
-            toolCalling: message.toolCalling,
-            enableThinking: message.enableThinking,
-            reasoningBudgetTokens: message.reasoningBudgetTokens,
-            maximumPromptBytes: message.maximumPromptBytes,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerPrefill) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.prefill(
-            message.prompt,
-            addSpecial: message.addSpecial,
-            parseSpecial: message.parseSpecial,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerShiftContext) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(
-          active.shiftContext(
-            keepTokens: message.keepTokens,
-            discardTokens: message.discardTokens,
-          ),
-        );
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerContextInfo) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.contextInfo());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerSaveState) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.saveState());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerRestoreState) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        active.restoreState(message.state);
-        message.reply.send(null);
+        message.reply.send(message.request.run(active));
       } catch (error) {
         message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
       }
@@ -4963,48 +4552,6 @@ void _engineWorkerMain(_EngineWorkerStart start) {
             _EngineWorkerFailure(_NativeError.from(cleanupError)),
           );
         }
-      }
-    } else if (message is _EngineWorkerLoadLora) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.loadLora(message.config));
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerListLoras) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        message.reply.send(active.loraAdapters());
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerSetLoraScale) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        active.setLoraScale(message.adapterId, message.scale);
-        message.reply.send(null);
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
-      }
-    } else if (message is _EngineWorkerUnloadLora) {
-      try {
-        final active = handles;
-        if (active == null) {
-          throw const ResourceDisposedException('LlamaEngine is closed.');
-        }
-        active.unloadLora(message.adapterId);
-        message.reply.send(null);
-      } catch (error) {
-        message.reply.send(_EngineWorkerFailure(_NativeError.from(error)));
       }
     }
   };
