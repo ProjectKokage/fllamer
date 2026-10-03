@@ -13,6 +13,7 @@ import 'errors.dart';
 import 'prompt_source_limits.dart';
 import 'ffi/generated_bindings.dart';
 import 'ffi/native_asset_lookup.dart';
+import 'input_validation.dart';
 import 'model_info.dart';
 
 const _maxModelDescriptionBytes = 1024 * 1024;
@@ -34,7 +35,7 @@ final class NativeLlamaBridge {
   static NativeLlamaBridge? tryOpen(String? nativeLibraryPath) {
     final explicitPath = nativeLibraryPath;
     if (explicitPath != null) {
-      _validateLibraryPathText(explicitPath, 'nativeLibraryPath');
+      validateSingleLineText(explicitPath, 'nativeLibraryPath');
     }
     if (explicitPath == null) {
       nativeLibraryPathFromEnvironment(Platform.environment);
@@ -1398,18 +1399,6 @@ final class NativeLlamaBridge {
       return LlamaDartBridgeBindings(ffi.DynamicLibrary.open(envPath));
     }
     return LlamaDartBridgeBindings.fromLookup(lookupLlamaDartNativeAssetSymbol);
-  }
-
-  static void _validateLibraryPathText(String path, String name) {
-    if (path.trim().isEmpty) {
-      throw ArgumentError.value(path, name, 'must not be empty');
-    }
-    if (path.contains('\u0000')) {
-      throw ArgumentError.value(path, name, 'must not contain NUL');
-    }
-    if (path.contains('\n') || path.contains('\r')) {
-      throw ArgumentError.value(path, name, 'must not contain line breaks');
-    }
   }
 
   _NativeEngineHandles _openEngine(
@@ -4539,7 +4528,7 @@ String? nativeLibraryPathFromEnvironment(Map<String, String> environment) {
   if (path == null || path.trim().isEmpty) {
     return null;
   }
-  NativeLlamaBridge._validateLibraryPathText(path, 'FLLAMER_NATIVE_LIBRARY');
+  validateSingleLineText(path, 'FLLAMER_NATIVE_LIBRARY');
   return path;
 }
 

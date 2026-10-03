@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'config.dart';
 import 'errors.dart';
+import 'input_validation.dart';
 
 final class Document {
   const Document({
@@ -93,8 +94,8 @@ final class CharacterTextSplitter implements TextSplitter {
   @override
   List<TextChunk> split(Document document) {
     _validateIndexId(document.id, 'document.id');
-    _validateText(document.text, 'document.text');
-    _validateSourceUri(document.sourceUri, 'document.sourceUri');
+    validateNulFreeText(document.text, 'document.text');
+    validateSourceUri(document.sourceUri, 'document.sourceUri');
     final text = document.text;
     if (text.trim().isEmpty) {
       return const <TextChunk>[];
@@ -173,13 +174,13 @@ final class TokenTextSplitter implements AsyncTextSplitter {
   @override
   Future<List<TextChunk>> split(Document document) async {
     _validateIndexId(document.id, 'document.id');
-    _validateText(document.text, 'document.text');
-    _validateSourceUri(document.sourceUri, 'document.sourceUri');
+    validateNulFreeText(document.text, 'document.text');
+    validateSourceUri(document.sourceUri, 'document.sourceUri');
     if (document.text.trim().isEmpty) {
       return const <TextChunk>[];
     }
     final tokens = List<int>.unmodifiable(await tokenize(document.text));
-    _validateTokenIds(tokens);
+    validateTokenIds(tokens);
     if (tokens.isEmpty) {
       return const <TextChunk>[];
     }
@@ -191,7 +192,7 @@ final class TokenTextSplitter implements AsyncTextSplitter {
       final end = math.min(start + maxTokens, tokens.length);
       final text = (await detokenize(tokens.sublist(start, end))).trim();
       if (text.isNotEmpty) {
-        _validateText(text, 'chunk.text');
+        validateNulFreeText(text, 'chunk.text');
         chunks.add(
           TextChunk(
             documentId: document.id,
@@ -258,7 +259,7 @@ final class VectorIndexRetriever implements Retriever {
     if (query.trim().isEmpty) {
       throw ArgumentError.value(query, 'query', 'must not be empty');
     }
-    _validateText(query, 'query');
+    validateNulFreeText(query, 'query');
     if (topK <= 0) {
       throw ArgumentError.value(topK, 'topK', 'must be positive');
     }
@@ -459,7 +460,7 @@ final class InMemoryVectorIndex implements VectorIndex {
   }
 
   static Future<InMemoryVectorIndex> load(String path) async {
-    _validateFilePath(path, 'path');
+    validateSingleLineText(path, 'path');
     return Isolate.run(() => _loadIndexInWorker(path));
   }
 
@@ -487,7 +488,7 @@ final class InMemoryVectorIndex implements VectorIndex {
       _validateIndexId(chunk.id, 'chunk.id');
       _validateChunkText(chunk.text, 'chunk.text');
       _validateChunkTokenCount(chunk.tokenCount);
-      _validateSourceUri(chunk.sourceUri, 'chunk.sourceUri');
+      validateSourceUri(chunk.sourceUri, 'chunk.sourceUri');
       final key = _key(chunk.documentId, chunk.id);
       if (pending.containsKey(key)) {
         throw ArgumentError.value(
@@ -594,7 +595,7 @@ final class InMemoryVectorIndex implements VectorIndex {
 
   @override
   Future<void> persist(String path) async {
-    _validateFilePath(path, 'path');
+    validateSingleLineText(path, 'path');
     await Isolate.run(() async {
       await _rejectIndexFileLink(path);
       await _writeIndexFile(path, jsonEncode(toJson()));
@@ -685,7 +686,7 @@ List<VectorSearchResult> _searchResultsSnapshot(
     _validateIndexId(result.chunk.id, '$name.id');
     _validateChunkText(result.chunk.text, '$name.text');
     _validateChunkTokenCount(result.chunk.tokenCount);
-    _validateSourceUri(result.chunk.sourceUri, '$name.sourceUri');
+    validateSourceUri(result.chunk.sourceUri, '$name.sourceUri');
     if (!result.score.isFinite) {
       throw ArgumentError.value(result.score, '$name.score', 'must be finite');
     }
@@ -775,42 +776,14 @@ void _validateIndexId(String value, String name) {
   if (value.contains('\n') || value.contains('\r')) {
     throw ArgumentError.value(value, name, 'must not contain line breaks');
   }
-  _validateText(value, name);
-}
-
-void _validateText(String value, String name) {
-  if (value.contains('\u0000')) {
-    throw ArgumentError.value(value, name, 'must not contain NUL');
-  }
+  validateNulFreeText(value, name);
 }
 
 void _validateChunkText(String value, String name) {
   if (value.trim().isEmpty) {
     throw ArgumentError.value(value, name, 'must not be empty');
   }
-  _validateText(value, name);
-}
-
-void _validateTokenIds(List<int> tokens) {
-  for (final token in tokens) {
-    if (token < 0 || token > 0x7FFFFFFF) {
-      throw ArgumentError.value(
-        tokens,
-        'tokens',
-        'must contain int32 token ids',
-      );
-    }
-  }
-}
-
-void _validateFilePath(String value, String name) {
-  if (value.trim().isEmpty) {
-    throw ArgumentError.value(value, name, 'must not be empty');
-  }
-  _validateText(value, name);
-  if (value.contains('\n') || value.contains('\r')) {
-    throw ArgumentError.value(value, name, 'must not contain line breaks');
-  }
+  validateNulFreeText(value, name);
 }
 
 Future<String> _readIndexFile(String path) async {
@@ -882,7 +855,7 @@ void _validateVectorValues(Float32List vector) {
 }
 
 Map<String, Object?> _jsonMetadata(Map<Object?, Object?> metadata) {
-  return _jsonObject(metadata, 'chunk.metadata', Set<Object>.identity());
+  return snapshotJsonObject(metadata, 'chunk.metadata', Set<Object>.identity());
 }
 
 Map<String, Object?> _metadataFromJson(Object? value) {
@@ -902,10 +875,10 @@ Uri? _sourceUriFromJson(Object? value) {
   if (text.trim().isEmpty) {
     throw const FormatException('vector index sourceUri must not be empty');
   }
-  if (_containsNulOctet(text)) {
+  if (containsNulOctet(text)) {
     throw const FormatException('vector index sourceUri must not contain NUL');
   }
-  if (_containsLineBreakOctet(text)) {
+  if (containsLineBreakOctet(text)) {
     throw const FormatException(
       'vector index sourceUri must not contain line breaks',
     );
@@ -919,34 +892,6 @@ Uri? _sourceUriFromJson(Object? value) {
       error.offset,
     );
   }
-}
-
-void _validateSourceUri(Uri? value, String name) {
-  final text = value?.toString();
-  if (text == null) {
-    return;
-  }
-  if (text.trim().isEmpty) {
-    throw ArgumentError.value(value, name, 'must not be empty');
-  }
-  if (_containsNulOctet(text)) {
-    throw ArgumentError.value(value, name, 'must not contain NUL');
-  }
-  if (_containsLineBreakOctet(text)) {
-    throw ArgumentError.value(value, name, 'must not contain line breaks');
-  }
-}
-
-bool _containsNulOctet(String value) {
-  return value.contains('\u0000') || value.toLowerCase().contains('%00');
-}
-
-bool _containsLineBreakOctet(String value) {
-  final lower = value.toLowerCase();
-  return value.contains('\n') ||
-      value.contains('\r') ||
-      lower.contains('%0a') ||
-      lower.contains('%0d');
 }
 
 T _fromJsonValidation<T>(T Function() parse) {
@@ -968,65 +913,6 @@ void _rejectUnexpectedKeys(
   if (unexpected.isNotEmpty) {
     throw FormatException('$name contains unsupported key ${unexpected.first}');
   }
-}
-
-Map<String, Object?> _jsonObject(
-  Map<Object?, Object?> value,
-  String name,
-  Set<Object> activeContainers,
-) {
-  if (!activeContainers.add(value)) {
-    throw ArgumentError.value(value, name, 'must not contain cycles');
-  }
-  final result = <String, Object?>{};
-  try {
-    for (final entry in value.entries) {
-      final key = entry.key;
-      if (key is! String) {
-        throw ArgumentError.value(key, name, 'keys must be strings');
-      }
-      if (key.contains('\u0000')) {
-        throw ArgumentError.value(key, name, 'keys must not contain NUL');
-      }
-      result[key] = _jsonValue(entry.value, '$name.$key', activeContainers);
-    }
-    return Map<String, Object?>.unmodifiable(result);
-  } finally {
-    activeContainers.remove(value);
-  }
-}
-
-Object? _jsonValue(Object? value, String name, Set<Object> activeContainers) {
-  if (value == null || value is bool) {
-    return value;
-  }
-  if (value is String) {
-    _validateText(value, name);
-    return value;
-  }
-  if (value is num) {
-    if (!value.isFinite) {
-      throw ArgumentError.value(value, name, 'must be finite');
-    }
-    return value;
-  }
-  if (value is List<Object?>) {
-    if (!activeContainers.add(value)) {
-      throw ArgumentError.value(value, name, 'must not contain cycles');
-    }
-    try {
-      return List<Object?>.unmodifiable(<Object?>[
-        for (var i = 0; i < value.length; i += 1)
-          _jsonValue(value[i], '$name[$i]', activeContainers),
-      ]);
-    } finally {
-      activeContainers.remove(value);
-    }
-  }
-  if (value is Map<Object?, Object?>) {
-    return _jsonObject(value, name, activeContainers);
-  }
-  throw ArgumentError.value(value, name, 'must be a JSON value');
 }
 
 void _validateChunkTokenCount(int tokenCount) {
@@ -1212,7 +1098,7 @@ final class RagPromptBuilder {
       final candidate = <TextChunk>[...included, chunk];
       final candidateContext = _ragContext(header, candidate);
       final tokens = List<int>.unmodifiable(await tokenize(candidateContext));
-      _validateTokenIds(tokens);
+      validateTokenIds(tokens);
       if (tokens.isEmpty) {
         throw ArgumentError.value(
           tokens,
@@ -1298,7 +1184,7 @@ List<TextChunk> _validatedPromptChunks(Iterable<TextChunk> chunks) {
     _validateIndexId(chunk.id, 'chunk.id');
     _validateChunkText(chunk.text, 'chunk.text');
     _validateChunkTokenCount(chunk.tokenCount);
-    _validateSourceUri(chunk.sourceUri, 'chunk.sourceUri');
+    validateSourceUri(chunk.sourceUri, 'chunk.sourceUri');
     final snapshot = _copyPromptChunk(chunk);
     _citationFor(snapshot);
     checked.add(snapshot);
@@ -1324,7 +1210,7 @@ void _validateRagQuestion(String question, String? systemPrompt) {
   if (question.trim().isEmpty) {
     throw ArgumentError.value(question, 'question', 'must not be empty');
   }
-  _validateText(question, 'question');
+  validateNulFreeText(question, 'question');
   final system = systemPrompt;
   if (system != null) {
     if (system.trim().isEmpty) {
@@ -1334,7 +1220,7 @@ void _validateRagQuestion(String question, String? systemPrompt) {
         'must not be empty',
       );
     }
-    _validateText(system, 'systemPrompt');
+    validateNulFreeText(system, 'systemPrompt');
   }
 }
 
