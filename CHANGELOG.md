@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Fixed a wait that could never end: cancelling a generation stream while
+  `close()` was in flight could send its dispose request to a worker that had
+  already exited. A reply still pending when the worker closes now ends with
+  `ResourceDisposedException`.
+
 - Synchronized `third_party/llama.cpp` to
   `99b95488cac0f00ce3f05af113a8c1e287753f87` (upstream build `b11371`). No ABI
   or Dart API change. The bridge follows four upstream API changes: the
