@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import 'config.dart';
+import 'engine_session.dart';
 import 'errors.dart';
 import 'input_validation.dart';
 import 'model_info.dart';

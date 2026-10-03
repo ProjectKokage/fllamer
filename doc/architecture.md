@@ -6,6 +6,24 @@
 - Generated FFI bindings in `lib/src/ffi/generated_bindings.dart`.
 - A narrow C ABI bridge in `native/llama_dart_bridge/`.
 
+The internal Dart side of the bridge is one library per owner. None of them is
+exported from `lib/fllamer.dart`.
+
+| File in `lib/src/` | Owns |
+| --- | --- |
+| `native_bridge.dart` | The opened bindings, the ABI check, error translation, process-wide capabilities and logging, and the static entry points `engine.dart` calls. |
+| `native_config_mapping.dart` | Pure mappings between Dart configuration values and native numbers. |
+| `native_model_ops.dart` | Work on a loaded model: scoped vocab-only loads, metadata and template reads, tokenization. |
+| `native_chat.dart` | Chat rendering, tool-aware chat plans and parsing of chat output. |
+| `native_one_shot.dart` | The bodies that run in short-lived workers for the static helpers. |
+| `native_engine_handles.dart` | The worker-side owner of one model, context and its LoRA adapters, and one streaming generation. |
+| `engine_worker_protocol.dart` | Messages between the caller and the worker, including the typed requests and the error codec. |
+| `engine_worker.dart` | The worker isolate's entry point and its command loop. |
+| `engine_session.dart` | The caller-side session: request sending, the stream protocol, close, cancel and the finalizer. |
+
+The other libraries use four things from the opened bridge: its bindings,
+`check`, `throwIfLastError` and `cancelContextAddress`.
+
 The Dart API never exposes native pointers. Native-backed work is routed through
 a worker isolate in `NativeLlamaEngineSession`, so model loading, tokenization,
 generation, multimodal preprocessing, embeddings, reranking, LoRA changes, and
