@@ -77,6 +77,8 @@ class _InferenceWorkspaceState extends State<InferenceWorkspace> {
   _SelectedFile? _pendingImage;
   LlamaEngine? _engine;
   LlamaContextInfo? _contextInfo;
+  // dispose and the stop action cancel it.
+  // ignore: cancel_subscriptions
   StreamSubscription<GenerationChunk>? _generationSubscription;
   GenerationTelemetry? _lastTelemetry;
   String? _error;
