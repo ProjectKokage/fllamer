@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'errors.dart';
+import 'input_validation.dart';
 
 enum GpuBackend { auto, cpu, metal, vulkan }
 
@@ -155,14 +156,14 @@ final class LlamaModelConfig {
   final SpeculativeDecodingConfig speculativeDecoding;
 
   void validate() {
-    _validatePathText(modelPath, 'modelPath');
+    validateSingleLineText(modelPath, 'modelPath');
     final nativeLibraryPath = this.nativeLibraryPath;
     if (nativeLibraryPath != null) {
-      _validatePathText(nativeLibraryPath, 'nativeLibraryPath');
+      validateSingleLineText(nativeLibraryPath, 'nativeLibraryPath');
     }
     final mmprojPath = this.mmprojPath;
     if (mmprojPath != null) {
-      _validatePathText(mmprojPath, 'mmprojPath');
+      validateSingleLineText(mmprojPath, 'mmprojPath');
     }
     final chatTemplate = this.chatTemplate;
     if (chatTemplate != null) {
@@ -665,18 +666,18 @@ void _validateSpeculativeDecoding(SpeculativeDecodingConfig config) {
     case NoSpeculativeDecoding():
       return;
     case DraftModelSpeculation(:final draftModelPath, :final draftLength):
-      _validatePathText(draftModelPath, 'draftModelPath');
+      validateSingleLineText(draftModelPath, 'draftModelPath');
       _validateSpeculativeDraftLength(draftLength);
     case Eagle3Speculation(:final draftModelPath, :final draftLength):
-      _validatePathText(draftModelPath, 'draftModelPath');
+      validateSingleLineText(draftModelPath, 'draftModelPath');
       _validateSpeculativeDraftLength(draftLength);
     case DFlashSpeculation(:final draftModelPath, :final draftLength):
-      _validatePathText(draftModelPath, 'draftModelPath');
+      validateSingleLineText(draftModelPath, 'draftModelPath');
       _validateSpeculativeDraftLength(draftLength);
     case MtpSpeculation(:final mtpModelPath, :final draftLength):
       final path = mtpModelPath;
       if (path != null) {
-        _validatePathText(path, 'mtpModelPath');
+        validateSingleLineText(path, 'mtpModelPath');
       }
       _validateSpeculativeDraftLength(draftLength);
     case NGramSpeculation(
@@ -771,18 +772,6 @@ void _validateSpeculativeDraftLength(int value) {
       'draftLength',
       'must be between 1 and $_maxSpeculativeDraftLength',
     );
-  }
-}
-
-void _validatePathText(String value, String name) {
-  if (value.trim().isEmpty) {
-    throw ArgumentError.value(value, name, 'must not be empty');
-  }
-  if (value.contains('\u0000')) {
-    throw ArgumentError.value(value, name, 'must not contain NUL');
-  }
-  if (value.contains('\n') || value.contains('\r')) {
-    throw ArgumentError.value(value, name, 'must not contain line breaks');
   }
 }
 
@@ -1052,7 +1041,7 @@ final class LoraAdapterConfig {
   final double scale;
 
   void validate() {
-    _validatePathText(path, 'path');
+    validateSingleLineText(path, 'path');
     _validateFinite(scale, 'scale');
     if (scale < 0) {
       throw ArgumentError.value(scale, 'scale', 'must be non-negative');

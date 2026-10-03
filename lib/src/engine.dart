@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart' as crypto;
 
 import 'config.dart';
 import 'errors.dart';
+import 'input_validation.dart';
 import 'model_info.dart';
 import 'native_bridge.dart';
 import 'prompt_source_limits.dart';
@@ -20,7 +21,7 @@ abstract final class LlamaRuntime {
   }) {
     final path = nativeLibraryPath;
     if (path != null) {
-      _validateFilePath(path, 'nativeLibraryPath');
+      validateSingleLineText(path, 'nativeLibraryPath');
     }
     final bridge = NativeLlamaBridge.tryOpen(path);
     if (bridge == null) {
@@ -35,7 +36,7 @@ abstract final class LlamaRuntime {
   static List<LlamaLogRecord> drainNativeLogs({String? nativeLibraryPath}) {
     final path = nativeLibraryPath;
     if (path != null) {
-      _validateFilePath(path, 'nativeLibraryPath');
+      validateSingleLineText(path, 'nativeLibraryPath');
     }
     final bridge = NativeLlamaBridge.tryOpen(path);
     if (bridge == null) {
@@ -52,7 +53,7 @@ abstract final class LlamaRuntime {
   }) {
     final path = nativeLibraryPath;
     if (path != null) {
-      _validateFilePath(path, 'nativeLibraryPath');
+      validateSingleLineText(path, 'nativeLibraryPath');
     }
     final NativeLlamaBridge? bridge;
     try {
@@ -236,7 +237,7 @@ abstract final class LlamaTokenizer {
     bool parseSpecial = false,
   }) async {
     config.validate();
-    _validateNativeText(text, 'text');
+    validateNulFreeText(text, 'text');
     return NativeLlamaBridge.tokenize(
       config,
       text,
@@ -267,7 +268,7 @@ abstract final class LlamaTokenizer {
   }) async {
     config.validate();
     final checkedTokens = List<int>.unmodifiable(tokens);
-    _validateTokenIds(checkedTokens);
+    validateTokenIds(checkedTokens);
     if (checkedTokens.isEmpty) {
       return '';
     }
@@ -352,7 +353,7 @@ abstract final class LlamaEmbeddings {
     if (text.trim().isEmpty) {
       throw ArgumentError.value(text, 'text', 'must not be empty');
     }
-    _validateNativeText(text, 'text');
+    validateNulFreeText(text, 'text');
     return NativeLlamaBridge.embedText(modelConfig, text, config);
   }
 
@@ -469,7 +470,7 @@ final class LlamaEmbeddingEngine {
     bool parseSpecial = false,
   }) {
     _ensureOpen();
-    _validateNativeText(text, 'text');
+    validateNulFreeText(text, 'text');
     return _native.tokenize(
       text,
       addSpecial: addSpecial,
@@ -483,7 +484,7 @@ final class LlamaEmbeddingEngine {
     bool parseSpecial = false,
   }) {
     _ensureOpen();
-    _validateNativeText(text, 'text');
+    validateNulFreeText(text, 'text');
     return _native.countTokens(
       text,
       addSpecial: addSpecial,
@@ -498,7 +499,7 @@ final class LlamaEmbeddingEngine {
   }) {
     _ensureOpen();
     final checkedTokens = List<int>.unmodifiable(tokens);
-    _validateTokenIds(checkedTokens);
+    validateTokenIds(checkedTokens);
     if (checkedTokens.isEmpty) {
       return Future<String>.value('');
     }
@@ -729,7 +730,7 @@ final class LlamaEngine {
     if (prompt.trim().isEmpty) {
       throw ArgumentError.value(prompt, 'prompt', 'must not be blank');
     }
-    _validateNativeText(prompt, 'prompt');
+    validateNulFreeText(prompt, 'prompt');
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
     if (checkedConfig.enableThinking != null ||
@@ -822,7 +823,7 @@ final class LlamaEngine {
     bool parseSpecial = false,
   }) async {
     _ensureOpen();
-    _validateNativeText(text, 'text');
+    validateNulFreeText(text, 'text');
     return _native.tokenize(
       text,
       addSpecial: addSpecial,
@@ -837,7 +838,7 @@ final class LlamaEngine {
     bool parseSpecial = false,
   }) async {
     _ensureOpen();
-    _validateNativeText(text, 'text');
+    validateNulFreeText(text, 'text');
     return _native.countTokens(
       text,
       addSpecial: addSpecial,
@@ -853,7 +854,7 @@ final class LlamaEngine {
   }) async {
     _ensureOpen();
     final checkedTokens = List<int>.unmodifiable(tokens);
-    _validateTokenIds(checkedTokens);
+    validateTokenIds(checkedTokens);
     if (checkedTokens.isEmpty) {
       return '';
     }
@@ -965,7 +966,7 @@ final class LlamaEngine {
     if (prompt.trim().isEmpty) {
       throw ArgumentError.value(prompt, 'prompt', 'must not be blank');
     }
-    _validateNativeText(prompt, 'prompt');
+    validateNulFreeText(prompt, 'prompt');
     return _native.prefill(
       prompt,
       addSpecial: addSpecial,
@@ -1013,7 +1014,7 @@ final class LlamaEngine {
 
   Future<void> saveStateToFile(String path) async {
     _ensureOpen();
-    _validateFilePath(path, 'path');
+    validateSingleLineText(path, 'path');
     await _rejectStateFileLink(path);
     final state = await saveState();
     try {
@@ -1036,7 +1037,7 @@ final class LlamaEngine {
 
   Future<void> restoreStateFromFile(String path) async {
     _ensureOpen();
-    _validateFilePath(path, 'path');
+    validateSingleLineText(path, 'path');
     await _rejectStateFileLink(path);
     final state = await _readStateFile(path);
     if (state.isEmpty) {
@@ -1131,7 +1132,7 @@ LlamaToolCall _snapshotMessageToolCall(LlamaToolCall call) {
   return LlamaToolCall(
     id: call.id,
     name: call.name,
-    arguments: _snapshotJsonObject(
+    arguments: snapshotJsonObject(
       call.arguments,
       'arguments',
       Set<Object>.identity(),
@@ -1164,7 +1165,7 @@ GenerationConfig _snapshotGenerationConfig(GenerationConfig config) {
     grammar: config.grammar,
     jsonSchema: config.jsonSchema == null
         ? null
-        : _snapshotJsonObject(
+        : snapshotJsonObject(
             config.jsonSchema!,
             'jsonSchema',
             Set<Object>.identity(),
@@ -1307,7 +1308,7 @@ void _validateToolMessageIdentifier(String value, String name) {
   if (value.trim().isEmpty || value.contains(RegExp(r'\s'))) {
     throw ArgumentError.value(value, name, 'must not be empty or whitespace');
   }
-  _validateNativeText(value, name);
+  validateNulFreeText(value, name);
 }
 
 String _firstNonTextPartKind(List<ChatContentPart> parts) {
@@ -1328,7 +1329,7 @@ String _firstNonTextPartKind(List<ChatContentPart> parts) {
 void _validateContentPart(ChatContentPart part) {
   switch (part) {
     case TextPart(:final text):
-      _validateNativeText(text, 'part.text');
+      validateNulFreeText(text, 'part.text');
     case ImagePart(:final path, :final bytes, :final mimeType):
       _validateMediaPart(path, bytes, mimeType, 'image');
     case AudioPart(:final path, :final bytes, :final mimeType):
@@ -1348,7 +1349,7 @@ void _validateMediaPart(
     throw ArgumentError.value(name, 'part', 'must contain a path or bytes');
   }
   if (path != null) {
-    _validateFilePath(path, 'part.path');
+    validateSingleLineText(path, 'part.path');
   }
   if (bytes != null && bytes.isEmpty) {
     throw ArgumentError.value(bytes, 'part.bytes', 'must not be empty');
@@ -1361,7 +1362,7 @@ void _validateMediaPart(
     if (mime.trim().isEmpty) {
       throw ArgumentError.value(mime, 'part.mimeType', 'must not be empty');
     }
-    _validateNativeText(mime, 'part.mimeType');
+    validateNulFreeText(mime, 'part.mimeType');
     if (!mime.startsWith('$name/')) {
       throw ArgumentError.value(
         mime,
@@ -1383,24 +1384,8 @@ void _validateMediaPart(
   }
 }
 
-void _validateNativeText(String text, String name) {
-  if (text.contains('\u0000')) {
-    throw ArgumentError.value(text, name, 'must not contain NUL');
-  }
-}
-
 void _validateModelPath(String path, String name) {
-  _validateFilePath(path, name);
-}
-
-void _validateFilePath(String path, String name) {
-  if (path.trim().isEmpty) {
-    throw ArgumentError.value(path, name, 'must not be empty');
-  }
-  _validateNativeText(path, name);
-  if (path.contains('\n') || path.contains('\r')) {
-    throw ArgumentError.value(path, name, 'must not contain line breaks');
-  }
+  validateSingleLineText(path, name);
 }
 
 Future<int> _modelFileLength(String path) async {
@@ -1480,7 +1465,7 @@ void _validateRerankText(String text, String name) {
   if (text.trim().isEmpty) {
     throw ArgumentError.value(text, name, 'must not be empty');
   }
-  _validateNativeText(text, name);
+  validateNulFreeText(text, name);
 }
 
 List<VectorSearchResult> _snapshotRerankCandidates(
@@ -1490,8 +1475,8 @@ List<VectorSearchResult> _snapshotRerankCandidates(
   final seen = <String>{};
   for (final result in results) {
     final chunk = result.chunk;
-    _validateRagId(chunk.documentId, 'result.chunk.documentId');
-    _validateRagId(chunk.id, 'result.chunk.id');
+    validateSingleLineText(chunk.documentId, 'result.chunk.documentId');
+    validateSingleLineText(chunk.id, 'result.chunk.id');
     _validateRerankText(chunk.text, 'result.chunk.text');
     if (chunk.tokenCount <= 0) {
       throw ArgumentError.value(
@@ -1500,7 +1485,7 @@ List<VectorSearchResult> _snapshotRerankCandidates(
         'must be positive',
       );
     }
-    _validateRagSourceUri(chunk.sourceUri, 'result.chunk.sourceUri');
+    validateSourceUri(chunk.sourceUri, 'result.chunk.sourceUri');
     if (!result.score.isFinite) {
       throw ArgumentError.value(result.score, 'result.score', 'must be finite');
     }
@@ -1525,113 +1510,12 @@ List<VectorSearchResult> _snapshotRerankCandidates(
   return List<VectorSearchResult>.unmodifiable(snapshot);
 }
 
-void _validateRagId(String value, String name) {
-  if (value.trim().isEmpty) {
-    throw ArgumentError.value(value, name, 'must not be empty');
-  }
-  _validateNativeText(value, name);
-  if (value.contains('\n') || value.contains('\r')) {
-    throw ArgumentError.value(value, name, 'must not contain line breaks');
-  }
-}
-
-void _validateRagSourceUri(Uri? value, String name) {
-  final text = value?.toString();
-  if (text == null) {
-    return;
-  }
-  if (text.trim().isEmpty) {
-    throw ArgumentError.value(value, name, 'must not be empty');
-  }
-  final lower = text.toLowerCase();
-  if (text.contains('\u0000') || lower.contains('%00')) {
-    throw ArgumentError.value(value, name, 'must not contain NUL');
-  }
-  if (text.contains('\n') ||
-      text.contains('\r') ||
-      lower.contains('%0a') ||
-      lower.contains('%0d')) {
-    throw ArgumentError.value(value, name, 'must not contain line breaks');
-  }
-}
-
 Map<String, Object?> _snapshotRagMetadata(Map<Object?, Object?> metadata) {
-  return _snapshotJsonObject(
+  return snapshotJsonObject(
     metadata,
     'result.chunk.metadata',
     Set<Object>.identity(),
   );
-}
-
-Map<String, Object?> _snapshotJsonObject(
-  Map<Object?, Object?> value,
-  String name,
-  Set<Object> active,
-) {
-  if (!active.add(value)) {
-    throw ArgumentError.value(value, name, 'must not contain cycles');
-  }
-  final result = <String, Object?>{};
-  try {
-    for (final entry in value.entries) {
-      final key = entry.key;
-      if (key is! String) {
-        throw ArgumentError.value(key, name, 'keys must be strings');
-      }
-      if (key.contains('\u0000')) {
-        throw ArgumentError.value(key, name, 'keys must not contain NUL');
-      }
-      result[key] = _snapshotJsonValue(entry.value, '$name.$key', active);
-    }
-    return Map<String, Object?>.unmodifiable(result);
-  } finally {
-    active.remove(value);
-  }
-}
-
-Object? _snapshotJsonValue(Object? value, String name, Set<Object> active) {
-  if (value == null || value is bool) {
-    return value;
-  }
-  if (value is String) {
-    _validateNativeText(value, name);
-    return value;
-  }
-  if (value is num) {
-    if (!value.isFinite) {
-      throw ArgumentError.value(value, name, 'must be finite');
-    }
-    return value;
-  }
-  if (value is List<Object?>) {
-    if (!active.add(value)) {
-      throw ArgumentError.value(value, name, 'must not contain cycles');
-    }
-    try {
-      return List<Object?>.unmodifiable(<Object?>[
-        for (var i = 0; i < value.length; i += 1)
-          _snapshotJsonValue(value[i], '$name[$i]', active),
-      ]);
-    } finally {
-      active.remove(value);
-    }
-  }
-  if (value is Map<Object?, Object?>) {
-    return _snapshotJsonObject(value, name, active);
-  }
-  throw ArgumentError.value(value, name, 'must be a JSON value');
-}
-
-void _validateTokenIds(List<int> tokens) {
-  for (final token in tokens) {
-    if (token < 0 || token > 0x7FFFFFFF) {
-      throw ArgumentError.value(
-        tokens,
-        'tokens',
-        'must contain int32 token ids',
-      );
-    }
-  }
 }
 
 void _requireSupportedLoadConfig(LlamaModelConfig config) {
