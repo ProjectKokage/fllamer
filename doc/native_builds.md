@@ -262,7 +262,13 @@ Current verification:
   `30.0.14904198`, bundled Vulkan-Headers 1.4.357.0 and that NDK's glslc
   v2022.3. The arm64-v8a library has 16 KiB `LOAD` alignment, depends only on
   `libm.so`, `libdl.so`, `libvulkan.so` and `libc.so`, and embeds both
-  safe-policy markers. This is compile and link evidence only. No device has
+  safe-policy markers. This is compile and link evidence only. On the macOS
+  arm64 host the same pin passed `ctest` (3/3) and `dart test` (208 tests, 12
+  optional-fixture skips), the `LLAMA_DART_TEST_MODEL` tests with a Qwen2.5
+  0.5B Q4_K_M model, and the chat, embeddings and multimodal example CLIs with
+  Qwen3.5 4B Q4_K_M, its BF16 projector and Granite 97M Q8_0. The fixture-pinned
+  tool, multimodal, embedding, reranker, LoRA and speculative tests were not
+  run. No device has
   run this pin: every device result below was measured on `b10217`, and the
   ported overlay may be unnecessary or insufficient until an affected Qualcomm
   device repeats the CPU-oracle check.
