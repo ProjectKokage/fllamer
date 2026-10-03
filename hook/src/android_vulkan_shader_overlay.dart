@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -389,7 +390,8 @@ Future<void> prepareAndroidVulkanShaderOverlay({
   _overlayPreparationTails[key] = current;
   return current.whenComplete(() {
     if (identical(_overlayPreparationTails[key], current)) {
-      _overlayPreparationTails.remove(key);
+      // The removed entry is `current`, which this callback already follows.
+      unawaited(_overlayPreparationTails.remove(key));
     }
   });
 }

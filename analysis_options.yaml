@@ -24,3 +24,14 @@ analyzer:
 
 # For additional information about configuring this file, see
 # https://dart.dev/guides/language/analysis-options
+
+linter:
+  rules:
+    - avoid_dynamic_calls
+    - cancel_subscriptions
+    - close_sinks
+    - discarded_futures
+    - no_adjacent_strings_in_list
+    - only_throw_errors
+    - throw_in_finally
+    - unawaited_futures

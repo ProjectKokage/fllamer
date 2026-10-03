@@ -15,9 +15,6 @@ import 'ffi/generated_bindings.dart';
 import 'ffi/native_asset_lookup.dart';
 import 'model_info.dart';
 
-const _addSpecialNever = 0;
-const _addSpecialAlways = 1;
-const _addSpecialIfContextEmpty = 2;
 const _maxModelDescriptionBytes = 1024 * 1024;
 const _maxChatTemplateBytes = 16 * 1024 * 1024;
 const _maxJsonSchemaGrammarBytes = 16 * 1024 * 1024;
@@ -2322,6 +2319,8 @@ final class NativeLlamaEngineSession {
     >
     controller;
     ReceivePort? reply;
+    // stopLifecycleListening cancels it on every terminal path.
+    // ignore: cancel_subscriptions
     StreamSubscription<_EngineWorkerFailure>? lifecycleSubscription;
     var streamId = 0;
     var paused = false;
@@ -2387,7 +2386,7 @@ final class NativeLlamaEngineSession {
               controller.addError(
                 const ResourceDisposedException('LlamaEngine is closed.'),
               );
-              controller.close();
+              unawaited(controller.close());
               return;
             }
             final existingFailure = _lifecycle.failure;
@@ -2402,7 +2401,7 @@ final class NativeLlamaEngineSession {
                   'Another generation is already active on this engine.',
                 ),
               );
-              controller.close();
+              unawaited(controller.close());
               return;
             }
             streamId = _nextStreamId;
@@ -2447,7 +2446,7 @@ final class NativeLlamaEngineSession {
                   reply?.close();
                   stopLifecycleListening();
                   if (!controller.isClosed) {
-                    controller.close();
+                    unawaited(controller.close());
                   }
                 } else {
                   scheduleMicrotask(requestNext);
@@ -2459,7 +2458,7 @@ final class NativeLlamaEngineSession {
                 releaseSlot();
                 if (!controller.isClosed) {
                   controller.addError(message.error.toException());
-                  controller.close();
+                  unawaited(controller.close());
                 }
               } else {
                 terminalResponseReceived = true;
@@ -2472,7 +2471,7 @@ final class NativeLlamaEngineSession {
                       'Unexpected engine worker response: $message',
                     ),
                   );
-                  controller.close();
+                  unawaited(controller.close());
                 }
               }
             });
@@ -3337,9 +3336,10 @@ final class _NativeEngineHandles {
     required bool parseSpecial,
   }) {
     final addSpecialMode = switch (addSpecial) {
-      true => _addSpecialAlways,
-      false => _addSpecialNever,
-      null => _addSpecialIfContextEmpty,
+      true => llama_dart_add_special_mode.LLAMA_DART_ADD_SPECIAL_ALWAYS,
+      false => llama_dart_add_special_mode.LLAMA_DART_ADD_SPECIAL_NEVER,
+      null =>
+        llama_dart_add_special_mode.LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY,
     };
     return _withCompletionConfig(
       prompt,
@@ -3380,7 +3380,8 @@ final class _NativeEngineHandles {
     R Function(ffi.Pointer<llama_dart_completion_config> config) run, {
     List<_NativeMediaInput> media = const <_NativeMediaInput>[],
     _NativeChatPlan? chatPlan,
-    int addSpecialMode = _addSpecialIfContextEmpty,
+    llama_dart_add_special_mode addSpecialMode =
+        llama_dart_add_special_mode.LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY,
     bool parseSpecial = false,
     bool manageRequestLoras = true,
     bool reusePromptPrefix = false,
@@ -3513,7 +3514,7 @@ final class _NativeEngineHandles {
         ..stop_sequences = stopSequences
         ..stop_sequence_count = stopBytes.length
         ..seed = config.seed ?? 0xFFFFFFFF
-        ..add_special = addSpecialMode
+        ..add_special = addSpecialMode.value
         ..parse_special = parseSpecial ? 1 : 0
         ..media_inputs = mediaInputs
         ..media_input_count = media.length
@@ -4575,14 +4576,28 @@ GenerationTelemetry _telemetryFromStats(llama_dart_completion_stats stats) {
     speculativeAcceptedTokens: stats.speculative_accepted_tokens,
     speculativeDraftMs: stats.speculative_draft_ms,
     speculativeVerifyMs: stats.speculative_verify_ms,
-    stopReason: switch (stats.stop_reason) {
-      1 => GenerationStopReason.endOfGeneration,
-      2 => GenerationStopReason.stopSequence,
-      3 => GenerationStopReason.stopToken,
-      4 => GenerationStopReason.maxTokens,
-      _ => GenerationStopReason.unknown,
-    },
+    stopReason: _stopReason(stats.stop_reason),
   );
+}
+
+GenerationStopReason _stopReason(int nativeValue) {
+  for (final reason in llama_dart_stop_reason.values) {
+    if (reason.value == nativeValue) {
+      return switch (reason) {
+        llama_dart_stop_reason.LLAMA_DART_STOP_REASON_UNKNOWN =>
+          GenerationStopReason.unknown,
+        llama_dart_stop_reason.LLAMA_DART_STOP_REASON_END_OF_GENERATION =>
+          GenerationStopReason.endOfGeneration,
+        llama_dart_stop_reason.LLAMA_DART_STOP_REASON_STOP_SEQUENCE =>
+          GenerationStopReason.stopSequence,
+        llama_dart_stop_reason.LLAMA_DART_STOP_REASON_STOP_TOKEN =>
+          GenerationStopReason.stopToken,
+        llama_dart_stop_reason.LLAMA_DART_STOP_REASON_MAX_TOKENS =>
+          GenerationStopReason.maxTokens,
+      };
+    }
+  }
+  return GenerationStopReason.unknown;
 }
 
 ChatMessage _parseTerminalChatOutput(

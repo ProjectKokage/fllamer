@@ -133,8 +133,8 @@ void main() {
         containsAll([
           '-DLLAMA_DART_ANDROID_VULKAN_HOST_ROOT=/opt/vulkan-sdk/',
           '-DVulkan_GLSLC_EXECUTABLE=/opt/vulkan-sdk/bin/glslc',
-          '-DLLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR='
-              '/tmp/fllamer-vulkan-overlay/',
+          ('-DLLAMA_DART_ANDROID_VULKAN_SHADER_OVERLAY_DIR='
+              '/tmp/fllamer-vulkan-overlay/'),
         ]),
       );
       expect(
