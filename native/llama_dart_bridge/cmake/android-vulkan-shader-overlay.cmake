@@ -60,7 +60,7 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
   file(SHA256 "${_overlay_vulkan}" _overlay_vulkan_sha256)
   if(
     NOT _overlay_vulkan_sha256 STREQUAL
-    "5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc"
+    "1b0d7dbae0ab0c644bcd4ac06ddc345954216c381d50cc99ed007add66f4be00"
   )
     message(FATAL_ERROR "Android Vulkan native source overlay is not exact")
   endif()
@@ -166,6 +166,13 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
     [=[mul->src[0]->type == GGML_TYPE_Q4_K) {
             return false;]=]
     [=[src0_type == GGML_TYPE_Q5_K || src0_type == GGML_TYPE_Q6_K]=]
+    [=[static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);]=]
+    [=[// publish the device only when it is fully built
+        vk_instance.devices[idx] = device;]=]
+    [=[if (device == VK_NULL_HANDLE) {
+        return;
+    }]=]
   )
     string(
       FIND

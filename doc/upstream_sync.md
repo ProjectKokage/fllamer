@@ -35,7 +35,7 @@ access. The publish checkout must initialize the submodule before running
 `dart pub publish`.
 
 No package-local changes are carried inside `third_party/llama.cpp`. Opt-in
-Android Vulkan builds instead create a temporary version-4 build-output overlay.
+Android Vulkan builds instead create a temporary version-5 build-output overlay.
 Its pure transform normalizes CRLF to LF, accepts only recorded full-file hashes
 from this exact pin, and applies five q-payload-only shader replacements while
 preserving Q4_0/Q4_1 scale and min fields. The matrix shader `mul_mm.comp`
@@ -43,7 +43,21 @@ gains byte views of the Q4_0, Q4_1 and Q8_0 blocks for those replacements,
 because the pinned shader declares only packed views. It also transforms exactly one
 `ggml-vulkan.cpp` source to install a Qualcomm-vendor plus
 Qualcomm-proprietary-driver K-quant correctness policy: restricted Q4_K routing
-and CPU scheduling fallback for Q5_K/Q6_K matrix operations. An upstream sync
+and CPU scheduling fallback for Q5_K/Q6_K matrix operations. The same
+`ggml-vulkan.cpp` transform ports upstream commit
+`47f5a64ae12833b9092c6c47b54aa9f310c4f6f1` (#29766, 2026-10-15):
+`ggml_vk_get_device` serializes first creation with a mutex and publishes the
+device into `vk_instance.devices` only after it is fully built, the fence is
+created before the buffer type retains the device, and the device destructor
+returns early for a device that was never created. The pinned source publishes
+the device first, so a creation that throws leaves a device with a zeroed
+buffer type registered; the next model load in the same process then calls
+through its null function pointers and the process ends with SIGSEGV in
+`llama_model_loader::create_tensor`. The Android emulator shows this: its
+Vulkan device fails `createDevice` with `ErrorExtensionNotPresent`, llama.cpp
+reports the load as failed, the application retries on CPU, and the second
+load crashed. A sync that reaches that commit drops this part of the
+transform. An upstream sync
 must revalidate, update, or remove every external transform and its expected
 output hashes, then bump the hook's build-output overlay version; never apply it
 inside the submodule. Metal capability reporting and Gemma 4 generation grammar
@@ -56,7 +70,11 @@ it has not run on a device: the device results in
 [native builds](native_builds.md) were measured on `b10217`. Until an affected
 Qualcomm device repeats the CPU-oracle check, Android Vulkan correctness on
 this pin is unverified in both directions: the patches may no longer be
-needed, or may no longer be enough.
+needed, or may no longer be enough. Overlay version 5 ran on the arm64
+Android 15 emulator through Kokage's native test harness on 2026-11-09: the
+first model load fails on Vulkan and recovers on CPU, and a second load in
+the same process completes and generates. That run exercises the device
+creation path only; the emulator has no Vulkan device that ggml accepts.
 
 To sync upstream, fetch and inspect an explicit commit, check it out detached
 inside the submodule, and stage the updated gitlink:

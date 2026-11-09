@@ -1,5 +1,17 @@
 ## Unreleased
 
+- Fixed a crash on the second on-device model load in one process after a
+  first load whose Vulkan device creation threw. The pinned
+  `ggml_vk_get_device` registered the device before building it, so when
+  creation failed (the Android emulator's device fails `createDevice` with
+  `ErrorExtensionNotPresent`, llama.cpp reports the load as failed and the
+  application retries on CPU) a device with a zeroed buffer type stayed
+  registered, and the next load called through its null function pointers
+  (SIGSEGV in `llama_model_loader::create_tensor`). The Android Vulkan
+  build-output overlay, now version 5, ports upstream `47f5a64ae1` (#29766):
+  first creation is serialized and the device is published only when fully
+  built. No ABI or Dart API change.
+
 - Fixed a wait that could never end: cancelling a generation stream while
   `close()` was in flight could send its dispose request to a worker that had
   already exited. A reply still pending when the worker closes now ends with

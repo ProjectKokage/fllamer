@@ -19,7 +19,7 @@ const patchedMulMmCompSha256 =
 const pinnedGgmlVulkanSha256 =
     'e43a39ce1e9443f7c1c00e7bb9f13d56ab5a01e2355973ee740d4324e0e0698b';
 const patchedGgmlVulkanSha256 =
-    '5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc';
+    '1b0d7dbae0ab0c644bcd4ac06ddc345954216c381d50cc99ed007add66f4be00';
 
 const _pinnedQ4_1Dequantize4 =
     '''vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
@@ -228,6 +228,84 @@ const _patchedQ5KQ6KSupportsOp =
                 }
                 if (op->op == GGML_OP_MUL_MAT_ID) {''';
 
+// Upstream 47f5a64ae1 (#29766) publishes a Vulkan device only after it is
+// fully built and serializes first creation. The pinned source stores the
+// device before building it, so creation that throws leaves a device with a
+// zeroed buffer type published; the next model load then calls through its
+// null function pointers. The next sync that reaches that commit drops this.
+const _pinnedDeviceInitEntry = '''vk_device ggml_vk_get_device(size_t idx) {
+    VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
+
+    if (vk_instance.devices[idx] == nullptr) {
+        VK_LOG_DEBUG("Initializing new vk_device");
+        vk_device device = std::make_shared<vk_device_struct>();
+        vk_instance.devices[idx] = device;
+''';
+
+const _patchedDeviceInitEntry = '''vk_device ggml_vk_get_device(size_t idx) {
+    VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
+
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    if (vk_instance.devices[idx] == nullptr) {
+        VK_LOG_DEBUG("Initializing new vk_device");
+        vk_device device = std::make_shared<vk_device_struct>();
+''';
+
+const _pinnedDeviceInitFence = '''        device->buffer_type = {
+            /* .iface    = */ ggml_backend_vk_buffer_type_interface,
+            /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), idx),
+            /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name, device },
+        };
+
+        device->fence = device->device.createFence({});
+''';
+
+const _patchedDeviceInitFence =
+    '''        device->fence = device->device.createFence({});
+
+        device->buffer_type = {
+            /* .iface    = */ ggml_backend_vk_buffer_type_interface,
+            /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), idx),
+            /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name, device },
+        };
+''';
+
+const _pinnedDeviceInitPublish =
+    '''        } else if (getenv("GGML_VK_FORCE_MMVQ")) {
+            device->mmvq_mode = 1;
+        }
+
+        return device;
+    }
+''';
+
+const _patchedDeviceInitPublish =
+    '''        } else if (getenv("GGML_VK_FORCE_MMVQ")) {
+            device->mmvq_mode = 1;
+        }
+
+        // publish the device only when it is fully built
+        vk_instance.devices[idx] = device;
+
+        return device;
+    }
+''';
+
+const _pinnedDeviceDestructor = '''vk_device_struct::~vk_device_struct() {
+    VK_LOG_DEBUG("destroy device " << name);
+''';
+
+const _patchedDeviceDestructor = '''vk_device_struct::~vk_device_struct() {
+    // the build failed before the device was created, nothing to destroy
+    if (device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    VK_LOG_DEBUG("destroy device " << name);
+''';
+
 final class AndroidVulkanShaderOverlayException implements Exception {
   const AndroidVulkanShaderOverlayException(this.message);
 
@@ -308,6 +386,10 @@ String patchPinnedAndroidGgmlVulkan(String source) => _patchPinnedShader(
     _ShaderReplacement(_pinnedQ4KMatVecDispatch, _patchedQ4KMatVecDispatch),
     _ShaderReplacement(_pinnedQ4KMulMatAddFusion, _patchedQ4KMulMatAddFusion),
     _ShaderReplacement(_pinnedQ5KQ6KSupportsOp, _patchedQ5KQ6KSupportsOp),
+    _ShaderReplacement(_pinnedDeviceInitEntry, _patchedDeviceInitEntry),
+    _ShaderReplacement(_pinnedDeviceInitFence, _patchedDeviceInitFence),
+    _ShaderReplacement(_pinnedDeviceInitPublish, _patchedDeviceInitPublish),
+    _ShaderReplacement(_pinnedDeviceDestructor, _patchedDeviceDestructor),
   ],
 );
 
