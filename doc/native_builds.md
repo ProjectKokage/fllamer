@@ -256,7 +256,9 @@ Current verification:
   `0a96c140a076875c6dc0e3fd0f29e5caceba7df8219da2b2067eb2cc1162af15`,
   and `ggml-vulkan.cpp`
   `e43a39ce1e9443f7c1c00e7bb9f13d56ab5a01e2355973ee740d4324e0e0698b` /
-  `5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc`.
+  `5c3d8a468f7cd742ff4a3ef513d648f350bfd3ee53dbce773895e0531714d3fc`
+  (overlay version 4; version 5 below changes the `ggml-vulkan.cpp` output
+  to `1b0d7dbae0ab0c644bcd4ac06ddc345954216c381d50cc99ed007add66f4be00`).
   Direct offline CMake cross-compiles of the opt-in Vulkan bridge passed for
   `arm64-v8a` and `x86_64` at Android API 28 from macOS with CMake 4.4.3, NDK
   `30.0.14904198`, bundled Vulkan-Headers 1.4.357.0 and that NDK's glslc
@@ -272,6 +274,17 @@ Current verification:
   run this pin: every device result below was measured on `b10217`, and the
   ported overlay may be unnecessary or insufficient until an affected Qualcomm
   device repeats the CPU-oracle check.
+- On 2026-11-09 the overlay became version 5: the `ggml-vulkan.cpp` transform
+  also ports upstream `47f5a64ae1` (#29766) so `ggml_vk_get_device` publishes
+  a device only after it is fully built ([upstream sync](upstream_sync.md)).
+  The arm64 Android 15 emulator reproduced the defect through Kokage's
+  native test harness with the pinned overlay: its Vulkan device fails
+  `createDevice` with `ErrorExtensionNotPresent`, the application recovered
+  on CPU, and the second model load in the same process died with SIGSEGV
+  (null call in `llama_model_loader::create_tensor` from
+  `llama_dart_model_load`). With version 5 the same sequence loads and
+  generates twice. The emulator exercises only the failed-creation path; no
+  device with a working Vulkan driver has run version 5.
 - Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
   Android's explicit opt-in, bundled Vulkan-Hpp pin, selected-NDK `glslc`,
   CPU-only overrides, target-specific header-root propagation, desktop

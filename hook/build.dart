@@ -10,7 +10,7 @@ import 'src/android_vulkan_shader_overlay.dart';
 const _libraryName = 'llama_dart_bridge';
 const _assetName = 'llama_dart_bridge';
 const _cmakeBuildType = 'RelWithDebInfo';
-const _androidVulkanShaderOverlayVersion = '4';
+const _androidVulkanShaderOverlayVersion = '5';
 const minimumIosVersion = 15;
 const maximumDefaultBuildJobs = 4;
 const minimumVulkanCmakeMajor = 3;

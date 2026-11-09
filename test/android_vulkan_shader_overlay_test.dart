@@ -195,6 +195,65 @@ void main() {
       }
     });
 
+    test('publishes a Vulkan device only after it is fully built', () {
+      final source = vulkanFile.readAsStringSync();
+      final patched = patchPinnedAndroidGgmlVulkan(source);
+
+      const publish = 'vk_instance.devices[idx] = device;';
+      expect(
+        _occurrences(source, publish),
+        1,
+        reason:
+            'The pinned source publishes the device once; the overlay '
+            'only moves that statement.',
+      );
+
+      final entry = patched.indexOf(
+        'vk_device ggml_vk_get_device(size_t idx) {',
+      );
+      final exit = patched.indexOf(
+        '\n    return vk_instance.devices[idx];\n}',
+        entry,
+      );
+      expect(entry, greaterThanOrEqualTo(0));
+      expect(exit, greaterThan(entry));
+      final body = patched.substring(entry, exit);
+
+      expect(
+        body,
+        contains(
+          'static std::mutex mutex;\n'
+          '    std::lock_guard<std::mutex> lock(mutex);\n'
+          '\n'
+          '    if (vk_instance.devices[idx] == nullptr) {',
+        ),
+      );
+      expect(_occurrences(body, publish), 1);
+      final publishAt = body.indexOf(publish);
+      final bufferTypeAt = body.indexOf('device->buffer_type = {');
+      final fenceAt = body.indexOf(
+        'device->fence = device->device.createFence({});',
+      );
+      expect(fenceAt, greaterThanOrEqualTo(0));
+      expect(bufferTypeAt, greaterThan(fenceAt));
+      expect(publishAt, greaterThan(bufferTypeAt));
+      expect(body.indexOf('return device;'), greaterThan(publishAt));
+
+      expect(
+        patched,
+        contains(
+          'vk_device_struct::~vk_device_struct() {\n'
+          '    // the build failed before the device was created, nothing to '
+          'destroy\n'
+          '    if (device == VK_NULL_HANDLE) {\n'
+          '        return;\n'
+          '    }\n'
+          '\n'
+          '    VK_LOG_DEBUG("destroy device " << name);',
+        ),
+      );
+    });
+
     test('normalizes native CRLF and rejects mutated or patched input', () {
       final source = vulkanFile.readAsStringSync();
       final patched = patchPinnedAndroidGgmlVulkan(source);
