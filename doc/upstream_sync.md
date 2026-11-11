@@ -263,7 +263,13 @@ loads a chat plan's parser once, `llama_dart_chat_stream_parser_parse` runs
 pinned `common_chat_parse` over all output generated so far, with
 `is_partial` for output that stops anywhere, and returns the response text,
 the reasoning and the size of the tool calls parsed so far. The Dart worker
-calls it once per streamed chunk and publishes what each call adds.
+calls it once per streamed chunk and publishes what each call adds. A partial
+result never ends inside a UTF-8 sequence, and output may contain NUL bytes.
+A chat request's `"separate_reasoning": true` selects reasoning-aware parsing
+without setting `enable_thinking`, which keeps upstream's default `true`.
+`llama_dart_chat_template_capabilities.marks_reasoning` reports whether the
+template, rendered with thinking on, exposes a usable reasoning start marker
+and end marker.
 
 ABI 42 appends `maximum_token_piece_bytes` to `llama_dart_model_info`.
 Model loading scans each vocabulary ID once with pinned

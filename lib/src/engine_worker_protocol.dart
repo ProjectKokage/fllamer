@@ -180,6 +180,7 @@ final class FormatChatRequest extends EngineRequest<String> {
     this.toolCalling,
     this.enableThinking,
     this.reasoningBudgetTokens,
+    this.separateReasoning,
     this.maximumPromptBytes,
   );
 
@@ -188,6 +189,7 @@ final class FormatChatRequest extends EngineRequest<String> {
   final LlamaToolCallingConfig toolCalling;
   final bool? enableThinking;
   final int? reasoningBudgetTokens;
+  final bool separateReasoning;
   final int? maximumPromptBytes;
 
   @override
@@ -198,6 +200,7 @@ final class FormatChatRequest extends EngineRequest<String> {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -210,6 +213,7 @@ final class CountChatTokensRequest extends EngineRequest<int> {
     this.toolCalling,
     this.enableThinking,
     this.reasoningBudgetTokens,
+    this.separateReasoning,
     this.maximumPromptBytes,
   );
 
@@ -218,6 +222,7 @@ final class CountChatTokensRequest extends EngineRequest<int> {
   final LlamaToolCallingConfig toolCalling;
   final bool? enableThinking;
   final int? reasoningBudgetTokens;
+  final bool separateReasoning;
   final int? maximumPromptBytes;
 
   @override
@@ -228,6 +233,7 @@ final class CountChatTokensRequest extends EngineRequest<int> {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }

@@ -1165,6 +1165,7 @@ int main() {
   assert(chat_capabilities.struct_size == sizeof(chat_capabilities));
   assert(chat_capabilities.supports_tools == 0);
   assert(chat_capabilities.supports_tool_calls == 0);
+  assert(chat_capabilities.marks_reasoning == 0);
 
   const char simple_chat_request[] =
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true})";
@@ -1283,6 +1284,7 @@ int main() {
   assert(chat_capabilities.supports_tools == 1);
   assert(chat_capabilities.supports_tool_calls == 1);
   assert(chat_capabilities.supports_parallel_tool_calls == 1);
+  assert(chat_capabilities.marks_reasoning == 1);
 
   prompt = {};
   assert(llama_dart_model_apply_chat_template(
@@ -1375,7 +1377,61 @@ int main() {
          R"({"content":"answer","reasoning_content":"weigh","tool_call_bytes":0})");
   assert(parse_stream("answer", 1) ==
          R"({"content":"answer","reasoning_content":"","tool_call_bytes":0})");
+  // A character whose last bytes have not arrived is left for the next call.
+  assert(parse_stream("caf\xC3", 1) ==
+         R"({"content":"caf","reasoning_content":"","tool_call_bytes":0})");
+  assert(parse_stream("caf\xC3\xA9", 1) ==
+         "{\"content\":\"caf\xC3\xA9\",\"reasoning_content\":\"\","
+         "\"tool_call_bytes\":0}");
+  assert(parse_stream("<|channel>thought\n\xE6\x80", 1) ==
+         R"({"content":"","reasoning_content":"","tool_call_bytes":0})");
+  // Generated output may contain a NUL byte.
+  {
+    const char nul_output[] = {'a', '\0', 'b'};
+    llama_dart_buffer parts{};
+    assert(llama_dart_chat_stream_parser_parse(
+               stream_parser, reinterpret_cast<const uint8_t *>(nul_output),
+               sizeof(nul_output), 1, &parts) == LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(parts.data),
+                           parts.size);
+    llama_dart_buffer_free(parts.data);
+    assert(json ==
+           R"({"content":"a\u0000b","reasoning_content":"","tool_call_bytes":0})");
+  }
   llama_dart_chat_stream_parser_free(stream_parser);
+
+  // A request can ask for the separation alone, without a thinking mode.
+  const char gemma4_separate_reasoning_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"separate_reasoning":true})";
+  llama_dart_buffer separated_plan{};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 gemma4_separate_reasoning_request),
+             std::strlen(gemma4_separate_reasoning_request),
+             &separated_plan) == LLAMA_DART_SUCCESS);
+  const std::string separated_plan_json(
+      reinterpret_cast<const char *>(separated_plan.data),
+      separated_plan.size);
+  assert(separated_plan_json.find(R"("reasoning_budget_tokens":-1)") !=
+         std::string::npos);
+  stream_parser = nullptr;
+  assert(llama_dart_chat_stream_parser_create(
+             separated_plan.data, separated_plan.size, &stream_parser) ==
+         LLAMA_DART_SUCCESS);
+  assert(parse_stream("<|channel>thought\nweigh<channel|>answer", 1) ==
+         R"({"content":"answer","reasoning_content":"weigh","tool_call_bytes":0})");
+  llama_dart_chat_stream_parser_free(stream_parser);
+  llama_dart_buffer_free(separated_plan.data);
+  const char invalid_separate_reasoning_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"separate_reasoning":1})";
+  separated_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 invalid_separate_reasoning_request),
+             std::strlen(invalid_separate_reasoning_request),
+             &separated_plan) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
   llama_dart_chat_stream_parser_free(nullptr);
   stream_parser = reinterpret_cast<llama_dart_chat_stream_parser *>(
       static_cast<uintptr_t>(1));

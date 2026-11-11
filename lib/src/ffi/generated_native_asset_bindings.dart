@@ -1308,6 +1308,9 @@ final class llama_dart_chat_template_capabilities extends ffi.Struct {
 
   @ffi.Uint8()
   external int supports_parallel_tool_calls;
+
+  @ffi.Uint8()
+  external int marks_reasoning;
 }
 
 final class llama_dart_string_view extends ffi.Struct {

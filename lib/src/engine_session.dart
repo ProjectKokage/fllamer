@@ -530,6 +530,7 @@ final class NativeLlamaEngineSession {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) => _request(
     FormatChatRequest(
@@ -538,6 +539,7 @@ final class NativeLlamaEngineSession {
       toolCalling,
       enableThinking,
       reasoningBudgetTokens,
+      separateReasoning,
       maximumPromptBytes,
     ),
   );
@@ -548,6 +550,7 @@ final class NativeLlamaEngineSession {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) => _request(
     CountChatTokensRequest(
@@ -556,6 +559,7 @@ final class NativeLlamaEngineSession {
       toolCalling,
       enableThinking,
       reasoningBudgetTokens,
+      separateReasoning,
       maximumPromptBytes,
     ),
   );

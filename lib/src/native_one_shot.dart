@@ -118,6 +118,7 @@ String formatChatInWorker(
   required LlamaToolCallingConfig toolCalling,
   bool? enableThinking,
   int? reasoningBudgetTokens,
+  bool separateReasoning = false,
   int? maximumPromptBytes,
 }) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
@@ -131,6 +132,7 @@ String formatChatInWorker(
     toolCalling: toolCalling,
     enableThinking: enableThinking,
     reasoningBudgetTokens: reasoningBudgetTokens,
+    separateReasoning: separateReasoning,
     maximumPromptBytes: maximumPromptBytes,
   );
 }
@@ -142,6 +144,7 @@ int countChatTokensInWorker(
   required LlamaToolCallingConfig toolCalling,
   bool? enableThinking,
   int? reasoningBudgetTokens,
+  bool separateReasoning = false,
   int? maximumPromptBytes,
 }) {
   final bridge = NativeLlamaBridge.tryOpen(config.nativeLibraryPath);
@@ -155,6 +158,7 @@ int countChatTokensInWorker(
     toolCalling: toolCalling,
     enableThinking: enableThinking,
     reasoningBudgetTokens: reasoningBudgetTokens,
+    separateReasoning: separateReasoning,
     maximumPromptBytes: maximumPromptBytes,
   );
 }

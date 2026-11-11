@@ -3791,6 +3791,79 @@ llama_dart_result llama_dart_model_apply_chat_template(
   }
 }
 
+namespace {
+// Why the reasoning markers a template exposes cannot be used, or nullptr.
+const char *invalid_reasoning_markers(const common_chat_params &params) {
+  const auto blank = [](const std::string &tag) {
+    return std::all_of(tag.begin(), tag.end(), [](unsigned char character) {
+      return std::isspace(character);
+    });
+  };
+  if (params.thinking_end_tags.size() > kMaxReasoningEndTags) {
+    return "chat template exposes too many thinking end tags";
+  }
+  const std::string &start_tag = params.thinking_start_tag;
+  if (!start_tag.empty() &&
+      (start_tag.size() > kMaxReasoningTagBytes ||
+       string_contains_nul(start_tag) || blank(start_tag))) {
+    return "chat template thinking start tag is invalid";
+  }
+  for (const std::string &end_tag : params.thinking_end_tags) {
+    if (end_tag.empty() || end_tag.size() > kMaxReasoningTagBytes ||
+        string_contains_nul(end_tag) || blank(end_tag)) {
+      return "chat template thinking tags are invalid";
+    }
+  }
+  return nullptr;
+}
+
+// Whether the template, rendered with thinking on, marks its reasoning with a
+// usable start marker and end marker.
+bool template_marks_reasoning(const common_chat_templates *templates) {
+  try {
+    common_chat_msg message;
+    message.role = "user";
+    message.content = "test";
+    common_chat_templates_inputs inputs;
+    inputs.messages = {message};
+    inputs.use_jinja = true;
+    inputs.add_generation_prompt = true;
+    inputs.enable_thinking = true;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    const common_chat_params params =
+        common_chat_templates_apply(templates, inputs);
+    return !params.thinking_start_tag.empty() &&
+           !params.thinking_end_tags.empty() &&
+           invalid_reasoning_markers(params) == nullptr;
+  } catch (const std::bad_alloc &) {
+    throw;
+  } catch (const std::exception &) {
+    // A template the planner cannot render exposes no markers.
+    return false;
+  }
+}
+
+// Removes a trailing UTF-8 sequence whose last bytes have not arrived.
+void drop_incomplete_utf8_tail(std::string *text) {
+  const size_t size = text->size();
+  for (size_t back = 1; back <= 4 && back <= size; ++back) {
+    const unsigned char byte =
+        static_cast<unsigned char>((*text)[size - back]);
+    if ((byte & 0xC0u) == 0x80u) {
+      continue;
+    }
+    const size_t length = (byte & 0xE0u) == 0xC0u   ? 2
+                          : (byte & 0xF0u) == 0xE0u ? 3
+                          : (byte & 0xF8u) == 0xF0u ? 4
+                                                    : 1;
+    if (length > back) {
+      text->resize(size - back);
+    }
+    return;
+  }
+}
+} // namespace
+
 llama_dart_result llama_dart_model_get_chat_template_capabilities(
     const llama_dart_model *model,
     llama_dart_chat_template_capabilities *out_capabilities) {
@@ -3827,6 +3900,8 @@ llama_dart_result llama_dart_model_get_chat_template_capabilities(
         caps.at("supports_tool_calls") ? 1 : 0;
     out_capabilities->supports_parallel_tool_calls =
         caps.at("supports_parallel_tool_calls") ? 1 : 0;
+    out_capabilities->marks_reasoning =
+        template_marks_reasoning(templates.get()) ? 1 : 0;
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   } catch (const std::bad_alloc &) {
@@ -3915,6 +3990,17 @@ llama_dart_result llama_dart_model_create_chat_plan(
       // enable_thinking is omitted, common_chat uses llama.cpp's default true.
       inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     }
+    if (request.contains("separate_reasoning")) {
+      if (!request.at("separate_reasoning").is_boolean()) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "separate_reasoning must be a boolean");
+      }
+      if (request.at("separate_reasoning").get<bool>()) {
+        // Reasoning-aware parsing alone. enable_thinking keeps the value
+        // set above, or llama.cpp's default true.
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+      }
+    }
     inputs.grammar = request.value("grammar", "");
     if (request.contains("json_schema") &&
         !request.at("json_schema").is_null()) {
@@ -3991,31 +4077,8 @@ llama_dart_result llama_dart_model_create_chat_plan(
       return fail(LLAMA_DART_ERROR_UNSUPPORTED,
                   "chat template does not expose thinking tags");
     }
-    if (params.thinking_end_tags.size() > kMaxReasoningEndTags) {
-      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                  "chat template exposes too many thinking end tags");
-    }
-    if (has_thinking_start &&
-        (params.thinking_start_tag.size() > kMaxReasoningTagBytes ||
-         string_contains_nul(params.thinking_start_tag) ||
-         std::all_of(params.thinking_start_tag.begin(),
-                     params.thinking_start_tag.end(),
-                     [](unsigned char character) {
-                       return std::isspace(character);
-                     }))) {
-      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                  "chat template thinking start tag is invalid");
-    }
-    for (const std::string &end_tag : params.thinking_end_tags) {
-      if (end_tag.empty() || end_tag.size() > kMaxReasoningTagBytes ||
-          string_contains_nul(end_tag) ||
-          std::all_of(end_tag.begin(), end_tag.end(),
-                      [](unsigned char character) {
-                        return std::isspace(character);
-                      })) {
-        return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                    "chat template thinking tags are invalid");
-      }
+    if (const char *reason = invalid_reasoning_markers(params)) {
+      return fail(LLAMA_DART_ERROR_UNSUPPORTED, reason);
     }
     // Some reasoning models can emit a thinking start even when their
     // template receives enable_thinking=false. When the applied template
@@ -4159,21 +4222,25 @@ llama_dart_result llama_dart_chat_stream_parser_parse(
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "output_data must not be null when output_size is positive");
   }
-  if (!fits_int32(output_size) || contains_nul(output_data, output_size)) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "chat output is too large or contains NUL");
+  if (!fits_int32(output_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "chat output is too large");
   }
 
   try {
     const std::string output(
         reinterpret_cast<const char *>(output_data), output_size);
-    const common_chat_msg message =
+    common_chat_msg message =
         common_chat_parse(output, is_partial != 0, parser->params);
+    if (is_partial != 0) {
+      // The parser may stop inside a character whose last bytes have not
+      // been generated. They belong to the next call.
+      drop_incomplete_utf8_tail(&message.content);
+      drop_incomplete_utf8_tail(&message.reasoning_content);
+    }
     size_t tool_call_bytes = 0;
     for (const common_chat_tool_call &call : message.tool_calls) {
       tool_call_bytes += call.name.size() + call.arguments.size();
     }
-    // A partial parse may stop inside a multi-byte character.
     const std::string parts_json =
         nlohmann::ordered_json{
             {"content", message.content},

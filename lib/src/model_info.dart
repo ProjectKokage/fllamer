@@ -62,11 +62,17 @@ final class LlamaChatTemplateCapabilities {
     required this.supportsTools,
     required this.supportsToolCalls,
     required this.supportsParallelToolCalls,
+    required this.marksReasoning,
   });
 
   final bool supportsTools;
   final bool supportsToolCalls;
   final bool supportsParallelToolCalls;
+
+  /// Whether the template, rendered with thinking on, marks its reasoning
+  /// with a start marker and an end marker. Such a template accepts
+  /// `GenerationConfig.reasoningBudgetTokens`.
+  final bool marksReasoning;
 }
 
 final class LlamaModelInfo {

@@ -754,7 +754,8 @@ final class LlamaEngine {
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
     if (checkedConfig.enableThinking != null ||
-        checkedConfig.reasoningBudgetTokens != null) {
+        checkedConfig.reasoningBudgetTokens != null ||
+        checkedConfig.separateReasoning) {
       throw const UnsupportedFeatureException(
         'Thinking control requires chat messages and a model chat template.',
       );
@@ -790,7 +791,8 @@ final class LlamaEngine {
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
     if (checkedConfig.enableThinking != null ||
-        checkedConfig.reasoningBudgetTokens != null) {
+        checkedConfig.reasoningBudgetTokens != null ||
+        checkedConfig.separateReasoning) {
       throw const UnsupportedFeatureException(
         'Thinking control requires chat messages and a model chat template.',
       );
@@ -899,12 +901,14 @@ final class LlamaEngine {
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) async {
     _ensureOpen();
     GenerationConfig(
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
     ).validate();
     _validatePromptSource(messages, maximumPromptBytes);
     final checkedMessages = _snapshotChatMessages(messages);
@@ -920,6 +924,7 @@ final class LlamaEngine {
       toolCalling: checkedToolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -935,12 +940,14 @@ final class LlamaEngine {
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) async {
     _ensureOpen();
     GenerationConfig(
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
     ).validate();
     _validatePromptSource(messages, maximumPromptBytes);
     if (messages.any((message) => message.hasNonTextParts)) {
@@ -959,6 +966,7 @@ final class LlamaEngine {
       toolCalling: checkedToolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -1194,6 +1202,7 @@ GenerationConfig _snapshotGenerationConfig(GenerationConfig config) {
     toolCalling: _snapshotToolCallingConfig(config.toolCalling),
     enableThinking: config.enableThinking,
     reasoningBudgetTokens: config.reasoningBudgetTokens,
+    separateReasoning: config.separateReasoning,
   );
 }
 

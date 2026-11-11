@@ -178,11 +178,13 @@ that the plan prompt matches the evaluated prompt, applies lazy grammar state,
 and merges template stops. The worker retains raw streamed text and invokes the
 pinned parser at completion, returning a normalized assistant message with
 typed tool calls on the terminal chunk. For a plan that asked the template
-for tools, a thinking mode or a reasoning budget, the worker also runs the
-parser in partial mode over the retained text after each streamed chunk and
-publishes what it adds to the response text and to the reasoning; the last
-chunk is parsed as complete output, or as partial output when the response
-was cut short. Native pointers and tool execution never cross into the
+for tools, a thinking mode, a reasoning budget or the separation itself, the
+worker also runs the parser in partial mode over the retained text after each
+streamed chunk and publishes what it adds to the response text and to the
+reasoning. The last chunk is parsed as complete output when that reading
+continues what was streamed; a response that was cut short, or whose complete
+reading divides the output differently, ends as it was read while it
+streamed. Native pointers and tool execution never cross into the
 public API.
 When bounded reasoning is requested, the plan retains every template-provided
 reasoning end alternative. The bridge keeps planner grammar deferred only while

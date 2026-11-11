@@ -20,6 +20,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return withLoadedModel(
@@ -31,6 +32,7 @@ extension NativeChatOps on NativeLlamaBridge {
         toolCalling: toolCalling,
         enableThinking: enableThinking,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         maximumPromptBytes: maximumPromptBytes,
       ),
     );
@@ -43,6 +45,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     final prepared = prepareMultimodalChat(
@@ -57,6 +60,7 @@ extension NativeChatOps on NativeLlamaBridge {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     ).prompt;
   }
@@ -71,24 +75,35 @@ extension NativeChatOps on NativeLlamaBridge {
     bool? enableThinking,
     int? maximumPromptBytes,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
   }) {
     final parseOutput = _requiresChatPlan(messages, toolCalling);
-    if (parseOutput ||
-        enableThinking != null ||
-        reasoningBudgetTokens != null) {
-      final plan = _createChatPlan(
-        model,
-        messages,
-        toolCalling,
-        addAssistantPrompt: addAssistantPrompt,
-        grammar: grammar,
-        jsonSchema: jsonSchema,
-        enableThinking: enableThinking,
-        maximumPromptBytes: maximumPromptBytes,
-        reasoningBudgetTokens: reasoningBudgetTokens,
-        parseOutput: parseOutput,
-      );
-      return NativeRenderedChat(prompt: plan.prompt, plan: plan);
+    final needsPlan =
+        parseOutput || enableThinking != null || reasoningBudgetTokens != null;
+    if (needsPlan || separateReasoning) {
+      try {
+        final plan = _createChatPlan(
+          model,
+          messages,
+          toolCalling,
+          addAssistantPrompt: addAssistantPrompt,
+          grammar: grammar,
+          jsonSchema: jsonSchema,
+          enableThinking: enableThinking,
+          maximumPromptBytes: maximumPromptBytes,
+          reasoningBudgetTokens: reasoningBudgetTokens,
+          separateReasoning: separateReasoning,
+          parseOutput: parseOutput,
+        );
+        return NativeRenderedChat(prompt: plan.prompt, plan: plan);
+      } on UnsupportedFeatureException {
+        if (needsPlan) {
+          rethrow;
+        }
+        // Separation alone was asked of a template the planner cannot
+        // render. The legacy formatter renders it, and its output streams as
+        // generated.
+      }
     }
 
     try {
@@ -114,6 +129,7 @@ extension NativeChatOps on NativeLlamaBridge {
         enableThinking: enableThinking,
         maximumPromptBytes: maximumPromptBytes,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         parseOutput: false,
       );
       return NativeRenderedChat(prompt: plan.prompt, plan: plan);
@@ -139,6 +155,7 @@ extension NativeChatOps on NativeLlamaBridge {
         supportsTools: out.ref.supports_tools != 0,
         supportsToolCalls: out.ref.supports_tool_calls != 0,
         supportsParallelToolCalls: out.ref.supports_parallel_tool_calls != 0,
+        marksReasoning: out.ref.marks_reasoning != 0,
       );
     } finally {
       calloc.free(out);
@@ -152,6 +169,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return withLoadedModel(
@@ -163,6 +181,7 @@ extension NativeChatOps on NativeLlamaBridge {
         toolCalling: toolCalling,
         enableThinking: enableThinking,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         maximumPromptBytes: maximumPromptBytes,
       ),
     );
@@ -175,6 +194,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     final prompt = formatChatWithModel(
@@ -184,6 +204,7 @@ extension NativeChatOps on NativeLlamaBridge {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
     if (maximumPromptBytes == null) {
@@ -233,6 +254,7 @@ extension NativeChatOps on NativeLlamaBridge {
     bool? enableThinking,
     int? maximumPromptBytes,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     required bool parseOutput,
   }) {
     var tools = toolCalling.toJson();
@@ -265,6 +287,7 @@ extension NativeChatOps on NativeLlamaBridge {
       'json_schema': ?jsonSchema,
       'enable_thinking': ?enableThinking,
       'reasoning_budget_tokens': ?reasoningBudgetTokens,
+      if (separateReasoning) 'separate_reasoning': true,
     };
     final requestBytes = encodePromptJson(request, maximumPromptBytes);
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
@@ -318,7 +341,8 @@ extension NativeChatOps on NativeLlamaBridge {
         parsesStream:
             parseOutput ||
             enableThinking != null ||
-            reasoningBudgetTokens != null,
+            reasoningBudgetTokens != null ||
+            separateReasoning,
         usedToolCallIds: <String>{
           for (final message in messages) ...<String>{
             for (final call in message.toolCalls)
@@ -749,9 +773,10 @@ final class NativeChatPlan {
 
   /// Whether streamed output is parsed into response text and reasoning.
   ///
-  /// True for a plan that asked the template for tools, a thinking mode or a
-  /// reasoning budget. A plan made only because the legacy formatter could
-  /// not render the template streams its output as generated.
+  /// True for a plan that asked the template for tools, a thinking mode, a
+  /// reasoning budget or the separation itself. A plan made only because the
+  /// legacy formatter could not render the template streams its output as
+  /// generated.
   final bool parsesStream;
   final Set<String> usedToolCallIds;
 }
@@ -784,8 +809,8 @@ final class NativeChatStreamParser {
     final parsed = isDone
         ? _parseComplete(output)
         : _bridge._parseChatStream(_parser, output, partial: true);
-    final text = _added(_text, parsed.text);
-    final reasoningText = _added(_reasoningText, parsed.reasoningText);
+    final text = _added(_text, parsed.text)!;
+    final reasoningText = _added(_reasoningText, parsed.reasoningText)!;
     final writesToolCall = parsed.toolCallBytes > _toolCallBytes;
     _text += text;
     _reasoningText += reasoningText;
@@ -799,16 +824,32 @@ final class NativeChatStreamParser {
     );
   }
 
+  /// Reads the finished response as a complete message when that reading
+  /// continues what was streamed.
+  ///
   /// A response cut short, for example by the token limit, need not be a
-  /// complete message. It is then read the way it was read while it streamed.
+  /// complete message, and a complete reading may divide the output
+  /// differently from the readings made while it streamed. The response is
+  /// then read the way it was read while it streamed, so the last step never
+  /// contradicts text that was already delivered.
   ({String text, String reasoningText, int toolCallBytes}) _parseComplete(
     String output,
   ) {
     try {
-      return _bridge._parseChatStream(_parser, output, partial: false);
+      final complete = _bridge._parseChatStream(
+        _parser,
+        output,
+        partial: false,
+      );
+      if (_added(_text, complete.text, orNull: true) != null &&
+          _added(_reasoningText, complete.reasoningText, orNull: true) !=
+              null) {
+        return complete;
+      }
     } on GenerationException {
-      return _bridge._parseChatStream(_parser, output, partial: true);
+      // Not a complete message.
     }
+    return _bridge._parseChatStream(_parser, output, partial: true);
   }
 
   void close() {
@@ -823,13 +864,17 @@ final class NativeChatStreamParser {
 /// The part of [current] after [delivered], which was already streamed.
 ///
 /// The parser may briefly report less than it did before; nothing is taken
-/// back then. Text that no longer begins with what was streamed is an error.
-String _added(String delivered, String current) {
+/// back then. Text that no longer begins with what was streamed is an error,
+/// or null with [orNull].
+String? _added(String delivered, String current, {bool orNull = false}) {
   if (current.startsWith(delivered)) {
     return current.substring(delivered.length);
   }
   if (delivered.startsWith(current)) {
     return '';
+  }
+  if (orNull) {
+    return null;
   }
   throw const GenerationException(
     'The chat parser changed output that was already streamed.',

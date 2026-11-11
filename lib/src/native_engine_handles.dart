@@ -290,6 +290,7 @@ final class NativeEngineHandles {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return bridge.formatChatWithModel(
@@ -299,6 +300,7 @@ final class NativeEngineHandles {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -309,6 +311,7 @@ final class NativeEngineHandles {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return bridge.countChatTokensWithModel(
@@ -318,6 +321,7 @@ final class NativeEngineHandles {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -715,6 +719,7 @@ final class NativeEngineHandles {
       jsonSchema: config.jsonSchema,
       enableThinking: config.enableThinking,
       reasoningBudgetTokens: config.reasoningBudgetTokens,
+      separateReasoning: config.separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
     return startCompletionStream(

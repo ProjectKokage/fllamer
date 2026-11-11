@@ -239,6 +239,12 @@ typedef struct llama_dart_chat_template_capabilities {
   uint8_t supports_tools;
   uint8_t supports_tool_calls;
   uint8_t supports_parallel_tool_calls;
+  /*
+   * Nonzero when the template, rendered with thinking on, marks its reasoning
+   * with a start marker and at least one end marker. Such a template accepts
+   * reasoning_budget_tokens in a chat request.
+   */
+  uint8_t marks_reasoning;
 } llama_dart_chat_template_capabilities;
 
 typedef struct llama_dart_string_view {
@@ -420,7 +426,10 @@ llama_dart_model_get_chat_template_capabilities(
 /*
  * Renders an OpenAI-shaped JSON chat request through the pinned upstream
  * Jinja template machinery. The result is an opaque JSON plan consumed by
- * completion and llama_dart_chat_parse_output.
+ * completion and llama_dart_chat_parse_output. A plan separates reasoning
+ * from the response text when the request carries enable_thinking,
+ * reasoning_budget_tokens, or "separate_reasoning": true, which asks for the
+ * separation alone and leaves thinking at the upstream default.
  */
 LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
     const llama_dart_model *model, const uint8_t *request_data,
@@ -446,7 +455,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_create(
  * JSON object {"content": string, "reasoning_content": string,
  * "tool_call_bytes": integer}. The strings hold the whole text parsed so far,
  * not a delta; the integer is the size of the names and arguments of the
- * tool calls parsed so far.
+ * tool calls parsed so far. A partial result never ends inside a UTF-8
+ * sequence: an incomplete trailing sequence is left for the next call.
+ * Output may contain NUL bytes.
  */
 LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_parse(
     const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
