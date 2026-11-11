@@ -129,6 +129,10 @@ struct llama_dart_lora_adapter {
   size_t active_contexts = 0;
 };
 
+struct llama_dart_chat_stream_parser {
+  common_chat_parser_params params;
+};
+
 namespace {
 using llama_dart_bridge_internal::decode_state_snapshot;
 using llama_dart_bridge_internal::finalize_state_snapshot;
@@ -4042,6 +4046,18 @@ llama_dart_result llama_dart_model_create_chat_plan(
   }
 }
 
+namespace {
+void load_chat_parser_params(const parsed_chat_plan &plan,
+                             common_chat_parser_params *params) {
+  params->format = plan.format;
+  params->generation_prompt = plan.generation_prompt;
+  params->parse_tool_calls = true;
+  if (!plan.parser.empty()) {
+    params->parser.load(plan.parser);
+  }
+}
+} // namespace
+
 llama_dart_result llama_dart_chat_parse_output(
     const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
     size_t output_size, llama_dart_buffer *out_message_json) {
@@ -4069,12 +4085,7 @@ llama_dart_result llama_dart_chat_parse_output(
 
   try {
     common_chat_parser_params parser_params;
-    parser_params.format = plan.format;
-    parser_params.generation_prompt = plan.generation_prompt;
-    parser_params.parse_tool_calls = true;
-    if (!plan.parser.empty()) {
-      parser_params.parser.load(plan.parser);
-    }
+    load_chat_parser_params(plan, &parser_params);
     const std::string output(
         reinterpret_cast<const char *>(output_data), output_size);
     const common_chat_msg message =
@@ -4097,6 +4108,101 @@ llama_dart_result llama_dart_chat_parse_output(
     return fail(LLAMA_DART_ERROR_INTERNAL,
                 "unknown chat output parsing failure");
   }
+}
+
+llama_dart_result llama_dart_chat_stream_parser_create(
+    const uint8_t *plan_data, size_t plan_size,
+    llama_dart_chat_stream_parser **out_parser) {
+  if (out_parser == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_parser must not be null");
+  }
+  *out_parser = nullptr;
+
+  parsed_chat_plan plan;
+  const llama_dart_result parsed =
+      parse_chat_plan(plan_data, plan_size, &plan);
+  if (parsed != LLAMA_DART_SUCCESS) {
+    return parsed;
+  }
+
+  try {
+    auto parser = std::make_unique<llama_dart_chat_stream_parser>();
+    load_chat_parser_params(plan, &parser->params);
+    *out_parser = parser.release();
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail_parts(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                      "chat plan parser is invalid: ", error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat stream parser creation failure");
+  }
+}
+
+llama_dart_result llama_dart_chat_stream_parser_parse(
+    const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
+    size_t output_size, uint8_t is_partial, llama_dart_buffer *out_parts_json) {
+  if (out_parts_json == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_parts_json must not be null");
+  }
+  out_parts_json->data = nullptr;
+  out_parts_json->size = 0;
+  if (parser == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "parser must not be null");
+  }
+  if (output_data == nullptr && output_size > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "output_data must not be null when output_size is positive");
+  }
+  if (!fits_int32(output_size) || contains_nul(output_data, output_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat output is too large or contains NUL");
+  }
+
+  try {
+    const std::string output(
+        reinterpret_cast<const char *>(output_data), output_size);
+    const common_chat_msg message =
+        common_chat_parse(output, is_partial != 0, parser->params);
+    size_t tool_call_bytes = 0;
+    for (const common_chat_tool_call &call : message.tool_calls) {
+      tool_call_bytes += call.name.size() + call.arguments.size();
+    }
+    // A partial parse may stop inside a multi-byte character.
+    const std::string parts_json =
+        nlohmann::ordered_json{
+            {"content", message.content},
+            {"reasoning_content", message.reasoning_content},
+            {"tool_call_bytes", tool_call_bytes},
+        }
+            .dump(-1, ' ', false,
+                  nlohmann::ordered_json::error_handler_t::replace);
+    const llama_dart_result copied = copy_to_buffer(parts_json, out_parts_json);
+    if (copied != LLAMA_DART_SUCCESS) {
+      return copied;
+    }
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail_parts(LLAMA_DART_ERROR_GENERATION,
+                      "failed to parse chat output: ", error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat output parsing failure");
+  }
+}
+
+void llama_dart_chat_stream_parser_free(
+    llama_dart_chat_stream_parser *parser) {
+  delete parser;
+  last_error.clear();
 }
 
 llama_dart_result llama_dart_json_schema_to_grammar(

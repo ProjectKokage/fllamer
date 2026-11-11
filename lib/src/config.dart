@@ -404,7 +404,9 @@ final class GenerationConfig {
   /// Non-null values are applied only by [LlamaEngine.chat]. When `false` and
   /// the selected template exposes paired reasoning markers, native sampling
   /// also closes any unexpected reasoning block immediately before allowing
-  /// the public response to continue.
+  /// the public response to continue. A non-null value also has the stream
+  /// parsed: `GenerationChunk.text` is the response text and
+  /// `GenerationChunk.reasoningText` the reasoning.
   final bool? enableThinking;
 
   /// Maximum tokens counted inside each chat-template reasoning block.

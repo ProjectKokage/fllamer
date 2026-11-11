@@ -258,6 +258,13 @@ state only when its committed token history is an exact prefix of the newly
 tokenized full prompt; a mismatch clears the context before evaluating the
 full prompt.
 
+ABI 43 adds the chat stream parser: `llama_dart_chat_stream_parser_create`
+loads a chat plan's parser once, `llama_dart_chat_stream_parser_parse` runs
+pinned `common_chat_parse` over all output generated so far, with
+`is_partial` for output that stops anywhere, and returns the response text,
+the reasoning and the size of the tool calls parsed so far. The Dart worker
+calls it once per streamed chunk and publishes what each call adds.
+
 ABI 42 appends `maximum_token_piece_bytes` to `llama_dart_model_info`.
 Model loading scans each vocabulary ID once with pinned
 `llama_token_to_piece(vocab, token, buffer, 0, 0, true)`. A negative return is

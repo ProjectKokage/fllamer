@@ -315,6 +315,10 @@ extension NativeChatOps on NativeLlamaBridge {
         json: planJson,
         prompt: decoded['prompt'] as String,
         parseOutput: parseOutput,
+        parsesStream:
+            parseOutput ||
+            enableThinking != null ||
+            reasoningBudgetTokens != null,
         usedToolCallIds: <String>{
           for (final message in messages) ...<String>{
             for (final call in message.toolCalls)
@@ -332,6 +336,89 @@ extension NativeChatOps on NativeLlamaBridge {
       bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
       calloc.free(requestPointer);
+    }
+  }
+
+  ffi.Pointer<llama_dart_chat_stream_parser> _createChatStreamParser(
+    NativeChatPlan plan,
+  ) {
+    final planBytes = utf8.encode(plan.json);
+    final planPointer = calloc<ffi.Uint8>(planBytes.length);
+    final out = calloc<ffi.Pointer<llama_dart_chat_stream_parser>>();
+    try {
+      planPointer.asTypedList(planBytes.length).setAll(0, planBytes);
+      check(
+        bindings.llama_dart_chat_stream_parser_create(
+          planPointer,
+          planBytes.length,
+          out,
+        ),
+      );
+      final parser = out.value;
+      if (parser == ffi.nullptr) {
+        throw const NativeBridgeException(
+          'Native bridge returned a null chat stream parser.',
+        );
+      }
+      return parser;
+    } finally {
+      calloc.free(out);
+      calloc.free(planPointer);
+    }
+  }
+
+  ({String text, String reasoningText, int toolCallBytes}) _parseChatStream(
+    ffi.Pointer<llama_dart_chat_stream_parser> parser,
+    String output, {
+    required bool partial,
+  }) {
+    final outputBytes = utf8.encode(output);
+    final outputPointer = outputBytes.isEmpty
+        ? ffi.nullptr
+        : calloc<ffi.Uint8>(outputBytes.length);
+    final out = calloc<llama_dart_buffer>();
+    try {
+      if (outputBytes.isNotEmpty) {
+        outputPointer.asTypedList(outputBytes.length).setAll(0, outputBytes);
+      }
+      check(
+        bindings.llama_dart_chat_stream_parser_parse(
+          parser,
+          outputPointer,
+          outputBytes.length,
+          partial ? 1 : 0,
+          out,
+        ),
+      );
+      final data = out.ref.data;
+      final size = out.ref.size;
+      final decoded = data == ffi.nullptr || size == 0
+          ? null
+          : jsonDecode(utf8.decode(data.asTypedList(size)));
+      if (decoded is! Map<String, Object?> ||
+          decoded['content'] is! String ||
+          decoded['reasoning_content'] is! String ||
+          decoded['tool_call_bytes'] is! int) {
+        throw const GenerationException(
+          'Native bridge returned invalid parsed chat output.',
+        );
+      }
+      return (
+        text: decoded['content']! as String,
+        reasoningText: decoded['reasoning_content']! as String,
+        toolCallBytes: decoded['tool_call_bytes']! as int,
+      );
+    } on FormatException catch (error) {
+      throw GenerationException(
+        'Native bridge returned invalid parsed chat output.',
+        cause: error,
+      );
+    } finally {
+      bindings.llama_dart_buffer_free(out.ref.data);
+      calloc.free(out);
+      if (outputPointer != ffi.nullptr) {
+        calloc.free(outputPointer);
+      }
     }
   }
 
@@ -652,13 +739,101 @@ final class NativeChatPlan {
     required this.json,
     required this.prompt,
     required this.parseOutput,
+    required this.parsesStream,
     required Set<String> usedToolCallIds,
   }) : usedToolCallIds = Set<String>.unmodifiable(usedToolCallIds);
 
   final String json;
   final String prompt;
   final bool parseOutput;
+
+  /// Whether streamed output is parsed into response text and reasoning.
+  ///
+  /// True for a plan that asked the template for tools, a thinking mode or a
+  /// reasoning budget. A plan made only because the legacy formatter could
+  /// not render the template streams its output as generated.
+  final bool parsesStream;
   final Set<String> usedToolCallIds;
+}
+
+/// Separates a planned chat response's text from its reasoning while the
+/// response is generated, using the pinned upstream chat parser.
+final class NativeChatStreamParser {
+  NativeChatStreamParser(this._bridge, NativeChatPlan plan)
+    : _parser = _bridge._createChatStreamParser(plan);
+
+  final NativeLlamaBridge _bridge;
+  ffi.Pointer<llama_dart_chat_stream_parser> _parser;
+  String _text = '';
+  String _reasoningText = '';
+  int _toolCallBytes = 0;
+
+  /// Parses [output], everything generated so far, and returns what it adds
+  /// to the response text and to the reasoning since the previous call, and
+  /// whether a tool call grew.
+  ///
+  /// Before [isDone] the parser may withhold a trailing piece that could still
+  /// become template markup. The last call releases it.
+  ({String text, String reasoningText, bool writesToolCall}) advance(
+    String output, {
+    required bool isDone,
+  }) {
+    if (_parser == ffi.nullptr) {
+      throw const ResourceDisposedException('Chat stream parser is closed.');
+    }
+    final parsed = isDone
+        ? _parseComplete(output)
+        : _bridge._parseChatStream(_parser, output, partial: true);
+    final text = _added(_text, parsed.text);
+    final reasoningText = _added(_reasoningText, parsed.reasoningText);
+    final writesToolCall = parsed.toolCallBytes > _toolCallBytes;
+    _text += text;
+    _reasoningText += reasoningText;
+    if (writesToolCall) {
+      _toolCallBytes = parsed.toolCallBytes;
+    }
+    return (
+      text: text,
+      reasoningText: reasoningText,
+      writesToolCall: writesToolCall,
+    );
+  }
+
+  /// A response cut short, for example by the token limit, need not be a
+  /// complete message. It is then read the way it was read while it streamed.
+  ({String text, String reasoningText, int toolCallBytes}) _parseComplete(
+    String output,
+  ) {
+    try {
+      return _bridge._parseChatStream(_parser, output, partial: false);
+    } on GenerationException {
+      return _bridge._parseChatStream(_parser, output, partial: true);
+    }
+  }
+
+  void close() {
+    if (_parser == ffi.nullptr) {
+      return;
+    }
+    _bridge.bindings.llama_dart_chat_stream_parser_free(_parser);
+    _parser = ffi.nullptr;
+  }
+}
+
+/// The part of [current] after [delivered], which was already streamed.
+///
+/// The parser may briefly report less than it did before; nothing is taken
+/// back then. Text that no longer begins with what was streamed is an error.
+String _added(String delivered, String current) {
+  if (current.startsWith(delivered)) {
+    return current.substring(delivered.length);
+  }
+  if (delivered.startsWith(current)) {
+    return '';
+  }
+  throw const GenerationException(
+    'The chat parser changed output that was already streamed.',
+  );
 }
 
 final class NativeRenderedChat {

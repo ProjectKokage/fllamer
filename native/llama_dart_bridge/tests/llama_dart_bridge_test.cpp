@@ -1344,6 +1344,54 @@ int main() {
          std::string::npos);
   assert(gemma4_thinking_off_plan.find(
              R"("reasoning_budget_tokens":0)") != std::string::npos);
+
+  // The stream parser separates reasoning from the response text for output
+  // that stops anywhere, using the plan's own parser.
+  llama_dart_chat_stream_parser *stream_parser = nullptr;
+  assert(llama_dart_chat_stream_parser_create(
+             chat_plan.data, chat_plan.size, &stream_parser) ==
+         LLAMA_DART_SUCCESS);
+  assert(stream_parser != nullptr);
+  const auto parse_stream = [&](const char *output, uint8_t is_partial) {
+    llama_dart_buffer parts{};
+    assert(llama_dart_chat_stream_parser_parse(
+               stream_parser, reinterpret_cast<const uint8_t *>(output),
+               std::strlen(output), is_partial, &parts) ==
+           LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(parts.data),
+                           parts.size);
+    llama_dart_buffer_free(parts.data);
+    return json;
+  };
+  assert(parse_stream("", 1) == R"({"content":"","reasoning_content":"","tool_call_bytes":0})");
+  assert(parse_stream("<|channel>thought\nweigh", 1) ==
+         R"({"content":"","reasoning_content":"weigh","tool_call_bytes":0})");
+  // A piece that could still become the end marker is withheld.
+  assert(parse_stream("<|channel>thought\nweigh<chan", 1) ==
+         R"({"content":"","reasoning_content":"weigh","tool_call_bytes":0})");
+  assert(parse_stream("<|channel>thought\nweigh<channel|>ans", 1) ==
+         R"({"content":"ans","reasoning_content":"weigh","tool_call_bytes":0})");
+  assert(parse_stream("<|channel>thought\nweigh<channel|>answer", 0) ==
+         R"({"content":"answer","reasoning_content":"weigh","tool_call_bytes":0})");
+  assert(parse_stream("answer", 1) ==
+         R"({"content":"answer","reasoning_content":"","tool_call_bytes":0})");
+  llama_dart_chat_stream_parser_free(stream_parser);
+  llama_dart_chat_stream_parser_free(nullptr);
+  stream_parser = reinterpret_cast<llama_dart_chat_stream_parser *>(
+      static_cast<uintptr_t>(1));
+  assert(llama_dart_chat_stream_parser_create(
+             invalid_chat_plan, sizeof(invalid_chat_plan), &stream_parser) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stream_parser == nullptr);
+  assert(llama_dart_chat_stream_parser_create(nullptr, 0, nullptr) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  llama_dart_buffer stream_parts{
+      reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1)), 123};
+  assert(llama_dart_chat_stream_parser_parse(nullptr, nullptr, 0, 1,
+                                             &stream_parts) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stream_parts.data == nullptr);
+  assert(stream_parts.size == 0);
   llama_dart_buffer_free(chat_plan.data);
 
   const char gemma4_thinking_start[] = "<|channel>thought";
@@ -1393,6 +1441,28 @@ int main() {
   assert(valid_gemma4_message.find("{\\\"query\\\":\\\"alpha\\\"}") !=
          std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
+
+  // A tool call that is still being written is reported by size, not as
+  // response text.
+  llama_dart_chat_stream_parser *tool_stream_parser = nullptr;
+  assert(llama_dart_chat_stream_parser_create(
+             chat_plan.data, chat_plan.size, &tool_stream_parser) ==
+         LLAMA_DART_SUCCESS);
+  const char partial_gemma4_call[] = R"(<|tool_call>call:lookup{query: <|"|>al)";
+  llama_dart_buffer tool_stream_parts{};
+  assert(llama_dart_chat_stream_parser_parse(
+             tool_stream_parser,
+             reinterpret_cast<const uint8_t *>(partial_gemma4_call),
+             std::strlen(partial_gemma4_call), 1, &tool_stream_parts) ==
+         LLAMA_DART_SUCCESS);
+  const std::string tool_stream_json(
+      reinterpret_cast<const char *>(tool_stream_parts.data),
+      tool_stream_parts.size);
+  assert(tool_stream_json.find(R"("content":"")") != std::string::npos);
+  assert(tool_stream_json.find(R"("tool_call_bytes":0)") ==
+         std::string::npos);
+  llama_dart_buffer_free(tool_stream_parts.data);
+  llama_dart_chat_stream_parser_free(tool_stream_parser);
 
   // The pristine upstream Gemma 4 grammar accepts generic dictionary members.
   // The checked Dart wrapper validates this parsed call against the matching

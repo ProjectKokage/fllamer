@@ -103,7 +103,7 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge (current ABI 42): version, capabilities, backend
+- Native ABI smoke bridge (current ABI 43): version, capabilities, backend
   init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.
@@ -140,9 +140,17 @@ void main() async {
   Thinking chat cannot be combined with an app-supplied raw
   grammar, JSON mode, or JSON schema because that constraint would also apply
   to reasoning. Planner-owned tool grammar remains supported. Typed terminal
-  parsing keeps reasoning separate from the normalized assistant value, but
-  streamed `GenerationChunk.text` is raw model output and can contain reasoning;
-  apps must filter it before display, history, or speech. Raw `complete()` and
+  parsing keeps reasoning separate from the normalized assistant value. A
+  chat that asks its template for tools, a thinking mode or a reasoning budget
+  is also read by the pinned upstream chat parser while it streams:
+  `GenerationChunk.text` carries the response text alone,
+  `GenerationChunk.reasoningText` carries the reasoning, and
+  `GenerationChunk.writesToolCall` marks a chunk that added to a tool call.
+  No reasoning marker or tool-call markup reaches `text`, whatever markers the
+  template uses, including a block that the generation prompt opened or that
+  sampling closed. A chat that asks none of these, and raw completion, stream
+  the output as generated; it can then contain reasoning, and apps must filter
+  it before display, history, or speech. Raw `complete()` and
   `continueCompletion()` calls reject thinking controls.
   Chat may also set `reasoningBudgetTokens` to cap each reasoning block
   independently of the total `maxTokens`. A budget leaves

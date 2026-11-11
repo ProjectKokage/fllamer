@@ -83,11 +83,22 @@ void engineWorkerMain(EngineWorkerStart start) {
               true,
               chunk.telemetry,
               chunk.assistantMessage,
+              reasoningText: chunk.reasoningText,
+              writesToolCall: chunk.writesToolCall,
             ),
           );
         }
       } else {
-        reply.send(EngineWorkerStreamChunk(chunk.text, false, null, null));
+        reply.send(
+          EngineWorkerStreamChunk(
+            chunk.text,
+            false,
+            null,
+            null,
+            reasoningText: chunk.reasoningText,
+            writesToolCall: chunk.writesToolCall,
+          ),
+        );
       }
     } catch (error) {
       final closeError = closeStreamingGeneration(resetContext: true);

@@ -1,5 +1,22 @@
 ## Unreleased
 
+- Chat streams are parsed while they are generated. A chat that asks its
+  template for tools, a thinking mode (`enableThinking` true or false) or a
+  reasoning budget now streams the response text alone in
+  `GenerationChunk.text`, the reasoning in the new
+  `GenerationChunk.reasoningText`, and marks a chunk that added to a tool
+  call with the new `GenerationChunk.writesToolCall`. The pinned upstream
+  chat parser does the separation, so it follows whatever markers the
+  template uses. Before, `text` was the raw output for every chat: a
+  template whose generation prompt always opens its reasoning block made
+  every thinking-off response begin with a bare end marker such as
+  `</think>`, and thinking-on responses carried the whole block.
+  **Behavior change:** an application that removed reasoning or tool-call
+  markup from `text` itself no longer receives it there. A chat that asks
+  none of the three, and raw completion, still stream the output as
+  generated. The terminal `assistantMessage` is unchanged. ABI 43 adds
+  `llama_dart_chat_stream_parser_create`, `_parse` and `_free`.
+
 - Fixed a crash on the second on-device model load in one process after a
   first load whose Vulkan device creation threw. The pinned
   `ggml_vk_get_device` registered the device before building it, so when

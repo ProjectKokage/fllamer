@@ -242,6 +242,41 @@ external int llama_dart_chat_parse_output(
   ffi.UnsignedInt Function(
     ffi.Pointer<ffi.Uint8>,
     ffi.Size,
+    ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
+  )
+>()
+external int llama_dart_chat_stream_parser_create(
+  ffi.Pointer<ffi.Uint8> plan_data,
+  int plan_size,
+  ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>> out_parser,
+);
+
+@ffi.Native<
+  ffi.UnsignedInt Function(
+    ffi.Pointer<llama_dart_chat_stream_parser>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint8,
+    ffi.Pointer<llama_dart_buffer>,
+  )
+>()
+external int llama_dart_chat_stream_parser_parse(
+  ffi.Pointer<llama_dart_chat_stream_parser> parser,
+  ffi.Pointer<ffi.Uint8> output_data,
+  int output_size,
+  int is_partial,
+  ffi.Pointer<llama_dart_buffer> out_parts_json,
+);
+
+@ffi.Native<ffi.Void Function(ffi.Pointer<llama_dart_chat_stream_parser>)>()
+external void llama_dart_chat_stream_parser_free(
+  ffi.Pointer<llama_dart_chat_stream_parser> parser,
+);
+
+@ffi.Native<
+  ffi.UnsignedInt Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
     ffi.Pointer<llama_dart_buffer>,
   )
 >()
@@ -648,6 +683,37 @@ class _SymbolAddresses {
       ffi.UnsignedInt Function(
         ffi.Pointer<ffi.Uint8>,
         ffi.Size,
+        ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
+      )
+    >
+  >
+  get llama_dart_chat_stream_parser_create =>
+      ffi.Native.addressOf(self.llama_dart_chat_stream_parser_create);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.UnsignedInt Function(
+        ffi.Pointer<llama_dart_chat_stream_parser>,
+        ffi.Pointer<ffi.Uint8>,
+        ffi.Size,
+        ffi.Uint8,
+        ffi.Pointer<llama_dart_buffer>,
+      )
+    >
+  >
+  get llama_dart_chat_stream_parser_parse =>
+      ffi.Native.addressOf(self.llama_dart_chat_stream_parser_parse);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.Void Function(ffi.Pointer<llama_dart_chat_stream_parser>)
+    >
+  >
+  get llama_dart_chat_stream_parser_free =>
+      ffi.Native.addressOf(self.llama_dart_chat_stream_parser_free);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.UnsignedInt Function(
+        ffi.Pointer<ffi.Uint8>,
+        ffi.Size,
         ffi.Pointer<llama_dart_buffer>,
       )
     >
@@ -887,6 +953,8 @@ final class llama_dart_context extends ffi.Opaque {}
 final class llama_dart_generation extends ffi.Opaque {}
 
 final class llama_dart_lora_adapter extends ffi.Opaque {}
+
+final class llama_dart_chat_stream_parser extends ffi.Opaque {}
 
 sealed class llama_dart_gpu_backend {
   static const LLAMA_DART_GPU_BACKEND_AUTO = 0;
@@ -1459,4 +1527,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 42;
+const int LLAMA_DART_ABI_VERSION = 43;

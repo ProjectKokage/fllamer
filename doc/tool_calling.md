@@ -81,8 +81,11 @@ constraint. Named tool choice is implemented by exposing only the selected
 tool to the upstream template and requiring a call. Raw completion has no chat
 template and therefore rejects tool configuration.
 
-`GenerationChunk.text` remains the raw streamed model output. Use the terminal
-chunk's `assistantMessage` for normalized content and typed `toolCalls`.
+A tool-aware chat is read by the pinned upstream parser while it streams:
+`GenerationChunk.text` carries the response text without tool-call markup or
+reasoning, and `GenerationChunk.writesToolCall` is true on a chunk that added
+to a call. Use the terminal chunk's `assistantMessage` for normalized content
+and typed `toolCalls`; it is parsed from the complete raw output.
 `GenerationChunk.stopReason` is non-null on terminal chunks. If `maxTokens` is
 reached before strict chat parsing can finish, the stream fails with an
 explicit maximum-token `GenerationException` rather than a generic parser

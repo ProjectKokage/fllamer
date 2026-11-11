@@ -391,10 +391,14 @@ final class EngineWorkerStreamChunk {
     this.text,
     this.isDone,
     this.telemetry,
-    this.assistantMessage,
-  );
+    this.assistantMessage, {
+    this.reasoningText = '',
+    this.writesToolCall = false,
+  });
 
   final String text;
+  final String reasoningText;
+  final bool writesToolCall;
   final bool isDone;
   final GenerationTelemetry? telemetry;
   final ChatMessage? assistantMessage;

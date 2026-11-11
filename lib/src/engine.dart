@@ -641,6 +641,8 @@ final class LlamaReranker implements Reranker {
 final class GenerationChunk {
   const GenerationChunk({
     required this.text,
+    this.reasoningText = '',
+    this.writesToolCall = false,
     this.isDone = false,
     this.telemetry,
     this.assistantMessage,
@@ -648,7 +650,22 @@ final class GenerationChunk {
     this.generatedTokens,
   });
 
+  /// Text this chunk adds to the response.
+  ///
+  /// A chat that asked its template for tools, a thinking mode or a reasoning
+  /// budget is read by the pinned upstream chat parser as it streams: this is
+  /// the response text alone, and reasoning arrives in [reasoningText]. Any
+  /// other chat, and raw completion, stream the output as generated.
   final String text;
+
+  /// Reasoning this chunk adds, for a chat whose stream is parsed; otherwise
+  /// empty. It is never part of [text].
+  final String reasoningText;
+
+  /// Whether this chunk added to a tool call the response is writing, for a
+  /// chat whose stream is parsed. The typed calls arrive in the terminal
+  /// [assistantMessage]; their text is never part of [text].
+  final bool writesToolCall;
   final bool isDone;
   final GenerationTelemetry? telemetry;
   final ChatMessage? assistantMessage;
@@ -714,6 +731,8 @@ final class LlamaEngine {
         .map(
           (chunk) => GenerationChunk(
             text: chunk.text,
+            reasoningText: chunk.reasoningText,
+            writesToolCall: chunk.writesToolCall,
             isDone: chunk.isDone,
             generatedTokens: chunk.generatedTokens,
             telemetry: chunk.telemetry,

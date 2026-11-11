@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 42u
+#define LLAMA_DART_ABI_VERSION 43u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -59,6 +59,7 @@ typedef struct llama_dart_model llama_dart_model;
 typedef struct llama_dart_context llama_dart_context;
 typedef struct llama_dart_generation llama_dart_generation;
 typedef struct llama_dart_lora_adapter llama_dart_lora_adapter;
+typedef struct llama_dart_chat_stream_parser llama_dart_chat_stream_parser;
 
 typedef enum llama_dart_gpu_backend {
   LLAMA_DART_GPU_BACKEND_AUTO = 0,
@@ -428,6 +429,31 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
 LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_parse_output(
     const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
     size_t output_size, llama_dart_buffer *out_message_json);
+
+/*
+ * Creates a parser that separates the response text of a chat plan from its
+ * reasoning while the response is still being generated. The caller owns it
+ * until llama_dart_chat_stream_parser_free.
+ */
+LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_create(
+    const uint8_t *plan_data, size_t plan_size,
+    llama_dart_chat_stream_parser **out_parser);
+
+/*
+ * Parses all output generated so far with the pinned upstream chat parser.
+ * A nonzero is_partial accepts output that stops anywhere, and may withhold a
+ * trailing piece that could still become template markup. The result is the
+ * JSON object {"content": string, "reasoning_content": string,
+ * "tool_call_bytes": integer}. The strings hold the whole text parsed so far,
+ * not a delta; the integer is the size of the names and arguments of the
+ * tool calls parsed so far.
+ */
+LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_parse(
+    const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
+    size_t output_size, uint8_t is_partial, llama_dart_buffer *out_parts_json);
+
+LLAMA_DART_EXPORT void llama_dart_chat_stream_parser_free(
+    llama_dart_chat_stream_parser *parser);
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_json_schema_to_grammar(
     const uint8_t *schema_data, size_t schema_size,
