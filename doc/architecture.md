@@ -151,6 +151,8 @@ zero-token sampling limit. Its default tokenization mode adds model special
 tokens only at position zero, allowing later calls to append reusable prefixes
 without duplicating BOS. Chat-template prompts enable parsing for trusted model
 control tokens; raw application text keeps that parsing disabled by default.
+In a planned chat that parsing covers the template's own text only (see
+[message text in a chat prompt](#message-text-in-a-chat-prompt)).
 `continueCompletion()` starts the same cancellable generation stream with no
 new prompt and requires non-empty context state. Newly created unconstrained
 sampler chains first accept the bridge's committed token history, preserving
@@ -272,12 +274,85 @@ multiplication before allocation and distinguish this decoded output bound
 from arbitrary input text, JSON serialization, and re-encoded replacement
 characters. This metadata adds no text-length or reply-token cap of its own.
 
+## Message text in a chat prompt
+
+A chat's messages come from outside the application: a user types them, a
+character card is imported, a tool returns them. A model's control tokens,
+such as `<|im_end|>` and `<|im_start|>` for ChatML templates, are written in
+the prompt as text, and the tokenizer turns that text into the tokens when it
+parses special tokens. A message that contains `<|im_end|>` followed by
+`<|im_start|>system` would then end its own turn and open a system turn.
+
+A chat plan therefore records where the request's text is in its prompt. The
+pinned Jinja engine marks every string of the request (message content, tool
+calls, tool results and tool definitions) and carries the mark through the
+template, so the rendered prompt is a list of parts that are either template
+text or request text. The plan (version 3) keeps the joined `prompt` and adds
+`message_text_spans`, the byte ranges of the request's parts. A message's
+role is marked too. A part that is exactly `system`, `user`, `assistant` or
+`tool` is left out of the ranges: the caller chooses a role from those four
+names, and some templates build their role marker from it
+(`'<|' + message['role'] + '|>'`), which must stay one token.
+
+The bridge tokenizes a plan's prompt in one function, for generation, for
+exact prefix reuse and for `llama_dart_model_tokenize_chat_plan`, which
+`countChatTokens` calls:
+
+- When the model loads, the bridge collects the texts of the vocabulary's
+  control and unknown tokens. These are the tokens `llama_tokenize` produces
+  from text only when it parses special tokens. User-defined tokens are not
+  among them: `llama_tokenize` reads those from any text, with or without
+  parsing, and that is unchanged.
+- A recorded range spells a control token when the prompt holds one of those
+  texts at a place that shares at least one byte with the range. That
+  includes a text the message completes together with the template text
+  next to it.
+- A range that spells one is tokenized on its own with special-token parsing
+  off. Everything else, the template's text and the request text that spells
+  none, is tokenized with parsing on, each stretch between two such ranges in
+  one call.
+
+So message text never becomes a control token, and the markers the template
+writes still do. A prompt whose messages spell no control token is one call
+over the joined prompt, with the tokens it had before the plan recorded
+anything. When ranges are set apart, tokens cannot merge across their two
+ends, a tokenizer that prefixes a space or `▁` to the start of its input
+does so at the start of each piece, and the model's BOS and EOS go around all
+pieces the way pinned `mtmd` puts them around its text chunks. This only
+changes what a model sees for a chat with such a message, and it changes it
+on every turn while that message is in the history.
+
+With media, pinned `mtmd_tokenize` takes one parsing flag for the whole
+text. A multimodal prompt with ranges to set apart is cut at its media
+markers by the bridge, as `mtmd_tokenize` cuts it, and handed to
+`mtmd_tokenize_from_parts` piece by piece; any other multimodal prompt goes
+through `mtmd_tokenize` as before. A media marker typed into a message is
+still a media marker, as before.
+
+Three paths do not have this separation:
+
+- The legacy formatter, `llama_chat_apply_template`, returns one string and
+  no parts. A chat it renders, which is a chat that sets no tools, thinking
+  mode, reasoning budget or `separateReasoning` on a template the formatter
+  knows, is tokenized whole with special-token parsing on, so message text
+  that spells a control token becomes that token. An application with
+  untrusted messages sets one of those options to get a plan;
+  `separateReasoning` alone keeps the template's default thinking mode.
+- `formatChat` returns the prompt as a string. Passing that string to
+  `tokenize`, `countTokens`, `prefill` or `complete` with `parseSpecial` on
+  parses special tokens in all of it.
+- A template that builds a control token out of request text other than a
+  role name, for example a tool name between two marker halves, gets that
+  text as text.
+
 Chat formatting and token counting accept the same nullable `enableThinking`
 mode as generation. An explicit value selects the native chat-plan renderer;
 null preserves the original template-default path. Static helpers load a
 vocabulary-only model in their worker, while `LlamaEngine` sends the mode to
 its existing model worker. The count includes the rendered reasoning prefix,
-using the exact native tokenizer with special tokens. A reasoning sampler
+using the exact native tokenizer with special tokens. A planned chat is
+counted by tokenizing its plan, so the count is the number of prompt tokens
+generation evaluates. A reasoning sampler
 budget changes generation policy, not prompt text. Callers cache counts by
 both messages and thinking mode and count the resolved mode again when an
 automatic router makes its decision.

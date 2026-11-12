@@ -225,6 +225,27 @@ external int llama_dart_model_create_chat_plan(
 
 @ffi.Native<
   ffi.UnsignedInt Function(
+    ffi.Pointer<llama_dart_model>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Int32>,
+    ffi.Size,
+    ffi.Pointer<ffi.Size>,
+    ffi.Uint8,
+  )
+>()
+external int llama_dart_model_tokenize_chat_plan(
+  ffi.Pointer<llama_dart_model> model,
+  ffi.Pointer<ffi.Uint8> plan_data,
+  int plan_size,
+  ffi.Pointer<ffi.Int32> tokens,
+  int tokens_capacity,
+  ffi.Pointer<ffi.Size> out_token_count,
+  int add_special,
+);
+
+@ffi.Native<
+  ffi.UnsignedInt Function(
     ffi.Pointer<llama_dart_chat_stream_parser>,
     ffi.Pointer<ffi.Uint8>,
     ffi.Size,
@@ -653,6 +674,21 @@ class _SymbolAddresses {
   >
   get llama_dart_model_create_chat_plan =>
       ffi.Native.addressOf(self.llama_dart_model_create_chat_plan);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.UnsignedInt Function(
+        ffi.Pointer<llama_dart_model>,
+        ffi.Pointer<ffi.Uint8>,
+        ffi.Size,
+        ffi.Pointer<ffi.Int32>,
+        ffi.Size,
+        ffi.Pointer<ffi.Size>,
+        ffi.Uint8,
+      )
+    >
+  >
+  get llama_dart_model_tokenize_chat_plan =>
+      ffi.Native.addressOf(self.llama_dart_model_tokenize_chat_plan);
   ffi.Pointer<
     ffi.NativeFunction<
       ffi.UnsignedInt Function(
@@ -1506,4 +1542,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 44;
+const int LLAMA_DART_ABI_VERSION = 45;

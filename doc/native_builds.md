@@ -312,6 +312,16 @@ Current verification:
   apart, and the terminal message carried the parsed call. The
   fixture-pinned tool, multimodal, audio, embedding, reranker, LoRA, MTP and
   speculative tests were not run.
+- On 2026-11-12, ABI 45 (message text of a planned chat is not parsed for
+  control tokens) passed on the same macOS arm64 host: `ctest` (3/3),
+  `dart test` (222 tests, 14 optional-fixture skips), and the three
+  `LLAMA_DART_TEST_MODEL` tests with a Qwen3.5 4B GGUF. With
+  that model the evaluated token history of a chat whose message spells the
+  template's `<|im_start|>` held the message as text, `countChatTokens`
+  matched the prompt token telemetry, and exact prefix reuse evaluated only
+  the suffix. The model-agnostic multimodal test above passed with a Qwen3.5
+  4B vision model, its projector and a generated 96x96 PNG. It was not run
+  with the pinned TinyGemma3 fixture, and no test covers audio input.
 - Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
   Android's explicit opt-in, bundled Vulkan-Hpp pin, selected-NDK `glslc`,
   CPU-only overrides, target-specific header-root propagation, desktop
@@ -627,7 +637,11 @@ Current verification:
   The test validates all three files before loading and verifies capability
   reporting, deterministic file/byte image preprocessing, streamed generation,
   prompt telemetry, and cleanup. The default suite never downloads or packages
-  these files.
+  these files. The same variables run `real multimodal fixture evaluates
+  message text that spells a control token as text around an image`. That
+  test pins no checksums: it accepts any image-capable model, projector and
+  PNG, and skips when the planner cannot render the model's template or the
+  template writes no control token.
 - Set `LLAMA_DART_TEST_GEMMA4_MODEL`,
   `LLAMA_DART_TEST_GEMMA4_MMPROJ`, and `LLAMA_DART_TEST_GEMMA4_IMAGE` to the
   Apache-2.0 Gemma 4 mobile fixture to verify that an undersized non-causal

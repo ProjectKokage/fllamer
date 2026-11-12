@@ -59,6 +59,10 @@ request without adding storage or internet permissions.
 - Paths, MIME types, and media kinds are validated before native processing.
 - Prompt markers come from the pinned `mtmd` runtime and are inserted in
   content-part order before the model chat template is applied.
+- In a planned chat, message text around the media that spells a control
+  token of the model is evaluated as text, as in a text-only chat
+  ([architecture](architecture.md#message-text-in-a-chat-prompt)). The marker
+  text itself, typed into a message, is still read as a media marker.
 - Media chunks that require non-causal attention are checked before decode. If
   their physical decode batch is larger than the configured `ubatchSize`, the
   request returns `GenerationException`; raise `ubatchSize` (normally to

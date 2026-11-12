@@ -5,6 +5,7 @@
 #include "llama.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
+#include "chat_prompt_runs.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "kv_cache_policy.h"
@@ -74,6 +75,7 @@ struct llama_dart_model {
   bool check_tensors = true;
   bool vocab_only = false;
   uint32_t maximum_token_piece_bytes = 0;
+  llama_dart_bridge_internal::control_token_texts control_tokens;
 };
 
 struct llama_dart_context {
@@ -134,15 +136,19 @@ struct llama_dart_lora_adapter {
 };
 
 namespace {
+using llama_dart_bridge_internal::byte_span;
+using llama_dart_bridge_internal::chat_prompt_runs;
 using llama_dart_bridge_internal::decode_state_snapshot;
 using llama_dart_bridge_internal::finalize_state_snapshot;
 using llama_dart_bridge_internal::kStateSnapshotHeaderSize;
+using llama_dart_bridge_internal::prompt_run;
 using llama_dart_bridge_internal::read_u32_le;
 using llama_dart_bridge_internal::resolve_prompt_prefix_reuse;
 using llama_dart_bridge_internal::state_snapshot_decode_result;
 using llama_dart_bridge_internal::state_snapshot_layout;
 using llama_dart_bridge_internal::state_snapshot_size;
 using llama_dart_bridge_internal::state_snapshot_view;
+using llama_dart_bridge_internal::valid_message_text_spans;
 using llama_dart_bridge_internal::write_state_snapshot_header;
 using llama_dart_bridge_internal::write_u32_le;
 using steady_clock = std::chrono::steady_clock;
@@ -217,10 +223,12 @@ constexpr size_t kMaxChatTemplateBytes = 16u * 1024u * 1024u;
 constexpr size_t kMaxCapturedLogBytes = 1024u * 1024u;
 constexpr size_t kMaxCapturedLogRecords = 4096u;
 constexpr int32_t kMaxModelMetadataScalarSize = 4096;
-constexpr uint32_t kChatPlanVersion = 2u;
+constexpr uint32_t kChatPlanVersion = 3u;
 
 struct parsed_chat_plan {
   std::string prompt;
+  // The ranges of `prompt` that came from the request's messages and tools.
+  std::vector<byte_span> message_text_spans;
   std::string grammar;
   bool grammar_lazy = false;
   std::string generation_prompt;
@@ -633,6 +641,34 @@ llama_dart_result parse_json_object(const uint8_t *data, size_t size,
   }
 }
 
+// The ranges of the joined prompt that the template took from the request:
+// the text of its messages, tool calls, tool results and tool definitions.
+// Pinned upstream marks every string of the request this way, a message's
+// role included. A role is one of four names the caller chooses from, not
+// text a user writes, and some templates build their role markers from it
+// ('<|' + role + '|>'), so a part that is exactly one of those names counts
+// as template text.
+nlohmann::ordered_json message_text_spans(const common_chat_prompt &prompt) {
+  static constexpr std::array<std::string_view, 4> role_names = {
+      "system", "user", "assistant", "tool"};
+  nlohmann::ordered_json spans = nlohmann::ordered_json::array();
+  size_t offset = 0;
+  for (const common_chat_prompt_part &part : prompt.parts) {
+    const size_t end = offset + part.text.size();
+    if (part.is_input && !part.text.empty() &&
+        std::find(role_names.begin(), role_names.end(), part.text) ==
+            role_names.end()) {
+      if (!spans.empty() && spans.back().at(1).get<size_t>() == offset) {
+        spans.back().at(1) = end;
+      } else {
+        spans.push_back({offset, end});
+      }
+    }
+    offset = end;
+  }
+  return spans;
+}
+
 nlohmann::ordered_json serialize_chat_plan(
     const common_chat_params &params, int32_t reasoning_budget_tokens = -1) {
   nlohmann::ordered_json triggers = nlohmann::ordered_json::array();
@@ -646,6 +682,7 @@ nlohmann::ordered_json serialize_chat_plan(
   return {
       {"version", kChatPlanVersion},
       {"prompt", params.prompt.str()},
+      {"message_text_spans", message_text_spans(params.prompt)},
       {"grammar", params.grammar},
       {"grammar_lazy", params.grammar_lazy},
       {"generation_prompt", params.generation_prompt},
@@ -672,6 +709,23 @@ llama_dart_result parse_chat_plan(const uint8_t *data, size_t size,
     }
     parsed_chat_plan value;
     value.prompt = plan.at("prompt").get<std::string>();
+    const nlohmann::ordered_json &spans = plan.at("message_text_spans");
+    bool valid_spans = spans.is_array();
+    for (size_t i = 0; valid_spans && i < spans.size(); ++i) {
+      const nlohmann::ordered_json &span = spans.at(i);
+      valid_spans = span.is_array() && span.size() == 2 &&
+                    span.at(0).is_number_unsigned() &&
+                    span.at(1).is_number_unsigned();
+      if (valid_spans) {
+        value.message_text_spans.push_back(
+            {span.at(0).get<size_t>(), span.at(1).get<size_t>()});
+      }
+    }
+    if (!valid_spans || !valid_message_text_spans(value.message_text_spans,
+                                                  value.prompt.size())) {
+      return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                  "chat plan message text spans are invalid");
+    }
     value.grammar = plan.at("grammar").get<std::string>();
     value.grammar_lazy = plan.at("grammar_lazy").get<bool>();
     value.generation_prompt =
@@ -1274,34 +1328,101 @@ struct prepared_completion_prompt {
   size_t suffix_start = 0;
 };
 
-llama_dart_result tokenize_text_completion_prompt(
-    const llama_dart_context *context, const llama_vocab *vocab,
-    const llama_dart_completion_config *config,
-    std::vector<llama_token> *tokens) {
-  int32_t required = llama_tokenize(
-      vocab, reinterpret_cast<const char *>(config->prompt_data),
-      static_cast<int32_t>(config->prompt_size), nullptr, 0,
-      completion_adds_special(context, config), config->parse_special != 0);
+// How a completion's prompt is tokenized. The prompt of a chat plan is split
+// where its messages spell a control token; any other prompt is one run that
+// follows the request's parse_special.
+std::vector<prompt_run> completion_prompt_runs(
+    const llama_dart_model *model, std::string_view prompt,
+    bool parse_special, const parsed_chat_plan *chat_plan) {
+  if (chat_plan == nullptr || !parse_special) {
+    return {{0, prompt.size(), parse_special}};
+  }
+  return chat_prompt_runs(model->control_tokens, prompt,
+                          chat_plan->message_text_spans);
+}
+
+enum class tokenize_status { ok, overflowed, failed };
+
+tokenize_status append_tokens(const llama_vocab *vocab, std::string_view text,
+                              bool add_special, bool parse_special,
+                              std::vector<llama_token> *tokens) {
+  int32_t required =
+      llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()),
+                     nullptr, 0, add_special, parse_special);
   if (required == std::numeric_limits<int32_t>::min()) {
-    return fail(LLAMA_DART_ERROR_INTERNAL, "tokenization overflowed");
+    return tokenize_status::overflowed;
   }
   if (required < 0) {
     required = -required;
   }
-  tokens->resize(static_cast<size_t>(required));
-  const int32_t actual = llama_tokenize(
-      vocab, reinterpret_cast<const char *>(config->prompt_data),
-      static_cast<int32_t>(config->prompt_size), tokens->data(), required,
-      completion_adds_special(context, config), config->parse_special != 0);
+  const size_t before = tokens->size();
+  tokens->resize(before + static_cast<size_t>(required));
+  const int32_t actual =
+      llama_tokenize(vocab, text.data(), static_cast<int32_t>(text.size()),
+                     tokens->data() + before, required, add_special,
+                     parse_special);
   if (actual < 0) {
+    tokens->resize(before);
+    return tokenize_status::failed;
+  }
+  tokens->resize(before + static_cast<size_t>(actual));
+  return tokenize_status::ok;
+}
+
+// Tokenizes `prompt` run by run. One run is one llama_tokenize call over the
+// whole prompt. Several runs are tokenized apart without special tokens of
+// their own, and the model's BOS and EOS go around all of them as pinned mtmd
+// puts them around its text chunks.
+tokenize_status tokenize_prompt_runs(const llama_vocab *vocab,
+                                     std::string_view prompt,
+                                     const std::vector<prompt_run> &runs,
+                                     bool add_special,
+                                     std::vector<llama_token> *tokens) {
+  tokens->clear();
+  if (runs.size() == 1) {
+    return append_tokens(vocab, prompt, add_special, runs.front().parse_special,
+                         tokens);
+  }
+  if (add_special && llama_vocab_get_add_bos(vocab)) {
+    tokens->push_back(llama_vocab_bos(vocab));
+  }
+  for (const prompt_run &run : runs) {
+    const tokenize_status status = append_tokens(
+        vocab, prompt.substr(run.begin, run.end - run.begin), false,
+        run.parse_special, tokens);
+    if (status != tokenize_status::ok) {
+      return status;
+    }
+  }
+  if (add_special && llama_vocab_get_add_eos(vocab)) {
+    tokens->push_back(llama_vocab_eos(vocab));
+  }
+  return tokenize_status::ok;
+}
+
+llama_dart_result tokenize_text_completion_prompt(
+    const llama_dart_context *context, const llama_vocab *vocab,
+    const llama_dart_completion_config *config,
+    const parsed_chat_plan *chat_plan, std::vector<llama_token> *tokens) {
+  const std::string_view prompt(
+      reinterpret_cast<const char *>(config->prompt_data),
+      config->prompt_size);
+  const tokenize_status status = tokenize_prompt_runs(
+      vocab, prompt,
+      completion_prompt_runs(context->model, prompt,
+                             config->parse_special != 0, chat_plan),
+      completion_adds_special(context, config), tokens);
+  if (status == tokenize_status::overflowed) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "tokenization overflowed");
+  }
+  if (status == tokenize_status::failed) {
     return fail(LLAMA_DART_ERROR_GENERATION,
                 "failed to tokenize completion prompt");
   }
-  if (actual == 0) {
+  if (tokens->empty()) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "completion prompt produced no tokens");
   }
-  tokens->resize(static_cast<size_t>(actual));
   last_error.clear();
   return LLAMA_DART_SUCCESS;
 }
@@ -1309,12 +1430,12 @@ llama_dart_result tokenize_text_completion_prompt(
 llama_dart_result prepare_completion_prompt_reuse(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config,
-    prepared_completion_prompt *prepared) {
+    const parsed_chat_plan *chat_plan, prepared_completion_prompt *prepared) {
   if (config->reuse_prompt_prefix == 0) {
     return LLAMA_DART_SUCCESS;
   }
   const llama_dart_result tokenized = tokenize_text_completion_prompt(
-      context, vocab, config, &prepared->tokens);
+      context, vocab, config, chat_plan, &prepared->tokens);
   if (tokenized != LLAMA_DART_SUCCESS) {
     return tokenized;
   }
@@ -1339,8 +1460,66 @@ llama_dart_result prepare_completion_prompt_reuse(
   return LLAMA_DART_SUCCESS;
 }
 
+// Tokenizes a multimodal prompt whose runs differ in special-token parsing.
+// Pinned mtmd_tokenize takes one parse_special for the whole text, so the
+// prompt is cut at its media markers here, as mtmd_tokenize cuts it, and the
+// text between them is handed over run by run.
+int32_t tokenize_multimodal_runs(const mtmd_context *multimodal,
+                                 std::string_view prompt,
+                                 const std::vector<prompt_run> &runs,
+                                 const std::vector<const mtmd_bitmap *> &bitmaps,
+                                 bool add_special, mtmd_input_chunks *chunks) {
+  const std::string_view marker(mtmd_get_marker(multimodal));
+  // Reserved up front: the parts point into these.
+  std::vector<mtmd_input_text> texts;
+  std::vector<mtmd_input_part> parts;
+  size_t marker_count = 0;
+  for (size_t at = prompt.find(marker); at != std::string_view::npos;
+       at = prompt.find(marker, at + marker.size())) {
+    marker_count += 1;
+  }
+  if (marker_count != bitmaps.size()) {
+    return 1;
+  }
+  texts.reserve(runs.size() + marker_count);
+  parts.reserve(runs.size() + 2 * marker_count);
+  const auto add_text = [&](size_t begin, size_t end) {
+    for (const prompt_run &run : runs) {
+      const size_t from = std::max(begin, run.begin);
+      const size_t to = std::min(end, run.end);
+      if (from >= to) {
+        continue;
+      }
+      mtmd_input_text text{};
+      text.text = prompt.data() + from;
+      text.text_len = to - from;
+      text.add_special = false;
+      text.parse_special = run.parse_special;
+      texts.push_back(text);
+      parts.push_back({&texts.back(), nullptr});
+    }
+  };
+  size_t start = 0;
+  size_t bitmap = 0;
+  for (size_t at = prompt.find(marker); at != std::string_view::npos;
+       at = prompt.find(marker, start)) {
+    add_text(start, at);
+    parts.push_back({nullptr, bitmaps[bitmap++]});
+    start = at + marker.size();
+  }
+  add_text(start, prompt.size());
+  std::vector<const mtmd_input_part *> part_pointers;
+  part_pointers.reserve(parts.size());
+  for (const mtmd_input_part &part : parts) {
+    part_pointers.push_back(&part);
+  }
+  return mtmd_tokenize_from_parts(multimodal, chunks, part_pointers.data(),
+                                  part_pointers.size(), add_special);
+}
+
 llama_dart_result decode_multimodal_prompt(
     llama_dart_context *context, const llama_dart_completion_config *config,
+    const parsed_chat_plan *chat_plan,
     std::vector<llama_token> *sampler_tokens, uint32_t *prompt_token_count) {
   using bitmap_ptr =
       std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)>;
@@ -1396,14 +1575,19 @@ llama_dart_result decode_multimodal_prompt(
   const std::string prompt(
       reinterpret_cast<const char *>(config->prompt_data),
       config->prompt_size);
+  const std::vector<prompt_run> runs = completion_prompt_runs(
+      context->model, prompt, config->parse_special != 0, chat_plan);
   mtmd_input_text text{};
   text.text = prompt.data();
   text.text_len = prompt.size();
   text.add_special = completion_adds_special(context, config);
-  text.parse_special = config->parse_special != 0;
+  text.parse_special = runs.front().parse_special;
   const int32_t tokenized =
-      mtmd_tokenize(context->multimodal, chunks.get(), &text, bitmaps.data(),
-                    bitmaps.size());
+      runs.size() == 1
+          ? mtmd_tokenize(context->multimodal, chunks.get(), &text,
+                          bitmaps.data(), bitmaps.size())
+          : tokenize_multimodal_runs(context->multimodal, prompt, runs,
+                                     bitmaps, text.add_special, chunks.get());
   if (tokenized == 1) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                 "prompt media markers do not match media inputs");
@@ -1492,6 +1676,7 @@ llama_dart_result decode_multimodal_prompt(
 llama_dart_result decode_completion_prompt(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config,
+    const parsed_chat_plan *chat_plan,
     std::vector<llama_token> *sampler_tokens, uint32_t *prompt_token_count,
     const prepared_completion_prompt *prepared = nullptr) {
   sampler_tokens->clear();
@@ -1501,7 +1686,7 @@ llama_dart_result decode_completion_prompt(
     return LLAMA_DART_SUCCESS;
   }
   if (config->media_input_count > 0) {
-    return decode_multimodal_prompt(context, config, sampler_tokens,
+    return decode_multimodal_prompt(context, config, chat_plan, sampler_tokens,
                                     prompt_token_count);
   }
 
@@ -1512,7 +1697,7 @@ llama_dart_result decode_completion_prompt(
         prepared->tokens.end());
   } else {
     const llama_dart_result tokenized = tokenize_text_completion_prompt(
-        context, vocab, config, sampler_tokens);
+        context, vocab, config, chat_plan, sampler_tokens);
     if (tokenized != LLAMA_DART_SUCCESS) {
       return tokenized;
     }
@@ -3208,6 +3393,15 @@ llama_dart_result llama_dart_model_load(
             result < 0 ? -static_cast<int64_t>(result) : result);
         handle->maximum_token_piece_bytes =
             std::max(handle->maximum_token_piece_bytes, size);
+        // The tokens pinned llama_tokenize leaves as text unless it parses
+        // special tokens. Chat prompts keep message text from spelling them.
+        if ((llama_vocab_get_attr(vocab, token) &
+             (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_UNKNOWN)) != 0) {
+          const char *text = llama_vocab_get_text(vocab, token);
+          if (text != nullptr) {
+            handle->control_tokens.add(text);
+          }
+        }
       }
     }
     handle->model = owned_model.release();
@@ -4352,6 +4546,74 @@ llama_dart_result llama_dart_model_create_chat_plan(
   } catch (...) {
     return fail(LLAMA_DART_ERROR_INTERNAL,
                 "unknown chat plan creation failure");
+  }
+}
+
+llama_dart_result llama_dart_model_tokenize_chat_plan(
+    const llama_dart_model *model, const uint8_t *plan_data, size_t plan_size,
+    int32_t *tokens, size_t tokens_capacity, size_t *out_token_count,
+    uint8_t add_special) {
+  clear_token_buffer(tokens, tokens_capacity);
+  if (out_token_count == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_token_count must not be null");
+  }
+  *out_token_count = 0;
+  if (model == nullptr || model->model == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "model must not be null");
+  }
+  if (tokens == nullptr && tokens_capacity > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "tokens must not be null when tokens_capacity is positive");
+  }
+  if (!valid_bool(add_special)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "tokenization boolean flags must be 0 or 1");
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(model->model);
+  if (vocab == nullptr) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED, "model has no vocabulary");
+  }
+
+  try {
+    parsed_chat_plan plan;
+    const llama_dart_result parsed =
+        parse_chat_plan(plan_data, plan_size, &plan);
+    if (parsed != LLAMA_DART_SUCCESS) {
+      return parsed;
+    }
+    if (!fits_int32(plan.prompt.size())) {
+      return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                  "tokenization input is too large");
+    }
+    std::vector<llama_token> plan_tokens;
+    const tokenize_status status = tokenize_prompt_runs(
+        vocab, plan.prompt,
+        completion_prompt_runs(model, plan.prompt, true, &plan),
+        add_special != 0, &plan_tokens);
+    if (status == tokenize_status::overflowed) {
+      return fail(LLAMA_DART_ERROR_INTERNAL, "tokenization overflowed");
+    }
+    if (status == tokenize_status::failed) {
+      return fail(LLAMA_DART_ERROR_INTERNAL,
+                  "failed to tokenize chat plan prompt");
+    }
+    *out_token_count = plan_tokens.size();
+    if (plan_tokens.size() > tokens_capacity) {
+      return fail(LLAMA_DART_ERROR_BUFFER_TOO_SMALL,
+                  "token buffer is too small");
+    }
+    std::copy(plan_tokens.begin(), plan_tokens.end(), tokens);
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail_parts(LLAMA_DART_ERROR_INTERNAL,
+                      "failed to tokenize chat plan: ", error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat plan tokenization failure");
   }
 }
 
@@ -5755,7 +6017,8 @@ llama_dart_result llama_dart_context_complete(
     if (config->reuse_prompt_prefix != 0) {
       const steady_clock::time_point prepare_start = steady_clock::now();
       const llama_dart_result prepared = prepare_completion_prompt_reuse(
-          context, vocab, config, &prepared_prompt);
+          context, vocab, config, has_chat_plan ? &chat_plan : nullptr,
+          &prepared_prompt);
       prompt_eval_ms += elapsed_ms(prepare_start, steady_clock::now());
       if (prepared != LLAMA_DART_SUCCESS) {
         return prepared;
@@ -5774,8 +6037,8 @@ llama_dart_result llama_dart_context_complete(
     if (config->prompt_size > 0) {
       const steady_clock::time_point prompt_start = steady_clock::now();
       const llama_dart_result decoded = decode_completion_prompt(
-          context, vocab, config, &prompt_tokens, &prompt_token_count,
-          prepared_prompt_pointer);
+          context, vocab, config, has_chat_plan ? &chat_plan : nullptr,
+          &prompt_tokens, &prompt_token_count, prepared_prompt_pointer);
       const steady_clock::time_point prompt_end = steady_clock::now();
       prompt_eval_ms += elapsed_ms(prompt_start, prompt_end);
       if (decoded != LLAMA_DART_SUCCESS) {
@@ -5936,7 +6199,8 @@ llama_dart_result llama_dart_generation_start(
     if (config->reuse_prompt_prefix != 0) {
       const steady_clock::time_point prepare_start = steady_clock::now();
       const llama_dart_result prepared = prepare_completion_prompt_reuse(
-          context, vocab, config, &prepared_prompt);
+          context, vocab, config, has_chat_plan ? &chat_plan : nullptr,
+          &prepared_prompt);
       prompt_prepare_ms = elapsed_ms(prepare_start, steady_clock::now());
       if (prepared != LLAMA_DART_SUCCESS) {
         return prepared;
@@ -5955,8 +6219,8 @@ llama_dart_result llama_dart_generation_start(
     if (config->prompt_size > 0) {
       const steady_clock::time_point prompt_start = steady_clock::now();
       const llama_dart_result decoded = decode_completion_prompt(
-          context, vocab, config, &prompt_tokens, &prompt_token_count,
-          prepared_prompt_pointer);
+          context, vocab, config, has_chat_plan ? &chat_plan : nullptr,
+          &prompt_tokens, &prompt_token_count, prepared_prompt_pointer);
       const steady_clock::time_point prompt_end = steady_clock::now();
       generation->prompt_eval_ms =
           prompt_prepare_ms + elapsed_ms(prompt_start, prompt_end);

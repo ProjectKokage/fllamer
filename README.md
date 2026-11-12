@@ -103,7 +103,7 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge (current ABI 44): version, capabilities, backend
+- Native ABI smoke bridge (current ABI 45): version, capabilities, backend
   init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.
@@ -219,7 +219,10 @@ void main() async {
   rates, speculative draft/accepted token counts, and draft/verification
   timings. Prompt evaluation adds model special
   tokens only when the context is empty; chat-template text parses trusted
-  model control tokens. `continueCompletion()` samples directly from a
+  model control tokens. A chat rendered by the template planner (tools, a
+  thinking mode, a reasoning budget or `separateReasoning`) never evaluates
+  message text as a control token; a chat rendered by the built-in formatter
+  still does. `continueCompletion()` samples directly from a
   prefetched or restored non-empty context, with prior-session sampler penalty
   history preserved across successful requests. Streaming uses a worker
   start/step/dispose protocol: `streamChunkTokens` coalesces up to four tokens by

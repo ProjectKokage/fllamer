@@ -200,9 +200,14 @@ extension NativeChatOps on NativeLlamaBridge {
     bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
-    final prompt = formatChatWithModel(
-      model,
+    final prepared = prepareMultimodalChat(
       messages,
+      multimodalMarker,
+      maximumPromptBytes: maximumPromptBytes,
+    );
+    final rendered = renderPreparedChat(
+      model,
+      prepared.messages,
       addAssistantPrompt: addAssistantPrompt,
       toolCalling: toolCalling,
       enableThinking: enableThinking,
@@ -210,6 +215,13 @@ extension NativeChatOps on NativeLlamaBridge {
       separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
+    final plan = rendered.plan;
+    if (plan != null) {
+      return _countChatPlanTokens(model, plan);
+    }
+    // The legacy formatter returns one string with no record of where its
+    // messages are, and generation parses special tokens over all of it.
+    final prompt = rendered.prompt;
     if (maximumPromptBytes == null) {
       return tokenizeWithModel(
         model,
@@ -244,6 +256,42 @@ extension NativeChatOps on NativeLlamaBridge {
     } finally {
       calloc.free(count);
       calloc.free(pointer);
+    }
+  }
+
+  /// The number of tokens a completion of [plan] evaluates as its prompt.
+  ///
+  /// The bridge tokenizes the plan's prompt as generation does: the
+  /// template's text with special-token parsing, and message text that spells
+  /// a control token as text. The size query returns the exact count, so no
+  /// token array is allocated.
+  int _countChatPlanTokens(
+    ffi.Pointer<llama_dart_model> model,
+    NativeChatPlan plan,
+  ) {
+    final planBytes = utf8.encode(plan.json);
+    final planPointer = calloc<ffi.Uint8>(planBytes.length);
+    final count = calloc<ffi.Size>();
+    try {
+      planPointer.asTypedList(planBytes.length).setAll(0, planBytes);
+      final result = bindings.llama_dart_model_tokenize_chat_plan(
+        model,
+        planPointer,
+        planBytes.length,
+        ffi.nullptr,
+        0,
+        count,
+        1,
+      );
+      if (result == llama_dart_result.LLAMA_DART_ERROR_BUFFER_TOO_SMALL) {
+        bindings.llama_dart_clear_last_error();
+      } else {
+        check(result);
+      }
+      return count.value;
+    } finally {
+      calloc.free(count);
+      calloc.free(planPointer);
     }
   }
 

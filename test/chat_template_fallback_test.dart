@@ -212,6 +212,53 @@ void main() {
       }
     });
 
+    test('a planned chat is counted from its plan and a legacy chat from its '
+        'prompt', () async {
+      final active = fixture;
+      final activeCounters = counters;
+      if (active == null || activeCounters == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'thinking.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      try {
+        final messages = <ChatMessage>[ChatMessage.user('hello')];
+        for (final maximumPromptBytes in <int?>[null, 4096]) {
+          activeCounters.reset();
+          expect(
+            await engine.countChatTokens(
+              messages,
+              enableThinking: false,
+              maximumPromptBytes: maximumPromptBytes,
+            ),
+            1,
+          );
+          expect(activeCounters.planCalls(), 1);
+          expect(activeCounters.planTokenizeCalls(), 1);
+          expect(activeCounters.textTokenizeCalls(), 0);
+
+          activeCounters.reset();
+          expect(
+            await engine.countChatTokens(
+              messages,
+              maximumPromptBytes: maximumPromptBytes,
+            ),
+            1,
+          );
+          expect(activeCounters.applyCalls(), 1);
+          expect(activeCounters.planTokenizeCalls(), 0);
+          expect(activeCounters.textTokenizeCalls(), 1);
+        }
+      } finally {
+        await engine.close();
+      }
+    });
+
     test('a chat that sets a thinking mode streams its response text and its '
         'reasoning apart', () async {
       final active = fixture;
@@ -913,6 +960,14 @@ final class _FakeBridgeCounters {
       planCalls = library.lookupFunction<ffi.Uint32 Function(), int Function()>(
         'fake_plan_calls',
       ),
+      planTokenizeCalls = library
+          .lookupFunction<ffi.Uint32 Function(), int Function()>(
+            'fake_plan_tokenize_calls',
+          ),
+      textTokenizeCalls = library
+          .lookupFunction<ffi.Uint32 Function(), int Function()>(
+            'fake_text_tokenize_calls',
+          ),
       parseCalls = library
           .lookupFunction<ffi.Uint32 Function(), int Function()>(
             'fake_parse_calls',
@@ -937,6 +992,8 @@ final class _FakeBridgeCounters {
   final void Function() reset;
   final int Function() applyCalls;
   final int Function() planCalls;
+  final int Function() planTokenizeCalls;
+  final int Function() textTokenizeCalls;
   final int Function() parseCalls;
   final int Function() streamParserCreations;
   final int Function() streamParserFrees;
@@ -1040,6 +1097,8 @@ static int streams_reasoning(void) {
 
 static uint32_t apply_calls;
 static uint32_t plan_calls;
+static uint32_t plan_tokenize_calls;
+static uint32_t text_tokenize_calls;
 static uint32_t separation_requests;
 static uint32_t parse_calls;
 static uint32_t context_resets;
@@ -1088,10 +1147,18 @@ LLAMA_DART_EXPORT void fake_reset_counters(void) {
   apply_calls = 0;
   plan_calls = 0;
   parse_calls = 0;
+  plan_tokenize_calls = 0;
+  text_tokenize_calls = 0;
 }
 
 LLAMA_DART_EXPORT uint32_t fake_apply_calls(void) { return apply_calls; }
 LLAMA_DART_EXPORT uint32_t fake_plan_calls(void) { return plan_calls; }
+LLAMA_DART_EXPORT uint32_t fake_plan_tokenize_calls(void) {
+  return plan_tokenize_calls;
+}
+LLAMA_DART_EXPORT uint32_t fake_text_tokenize_calls(void) {
+  return text_tokenize_calls;
+}
 
 LLAMA_DART_EXPORT uint32_t fake_separation_requests(void) {
   return separation_requests;
@@ -1272,7 +1339,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
   char plan[1024];
   const int size = snprintf(
       plan, sizeof(plan),
-      "{\"version\":2,\"prompt\":\"%s\",\"grammar\":\"\","
+      "{\"version\":3,\"prompt\":\"%s\",\"grammar\":\"\","
       "\"grammar_lazy\":false,\"grammar_triggers\":[],"
       "\"preserved_tokens\":[],\"additional_stops\":[],"
       "%s%s\"generation_prompt\":\"\"}",
@@ -1484,6 +1551,27 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_tokenize(
   if (text_data == NULL || text_size == 0 || out_token_count == NULL) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid tokenizer input");
   }
+  *out_token_count = 1;
+  if (tokens == NULL || tokens_capacity == 0) {
+    ++text_tokenize_calls;
+    return fail(LLAMA_DART_ERROR_BUFFER_TOO_SMALL, "token buffer too small");
+  }
+  tokens[0] = 1;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
+}
+
+// A planned chat is counted from the plan it would be generated from.
+LLAMA_DART_EXPORT llama_dart_result llama_dart_model_tokenize_chat_plan(
+    const llama_dart_model *model, const uint8_t *plan_data, size_t plan_size,
+    int32_t *tokens, size_t tokens_capacity, size_t *out_token_count,
+    uint8_t add_special) {
+  (void)model;
+  if (out_token_count == NULL || add_special != 1 ||
+      !bytes_contain(plan_data, plan_size, "{\"version\":3,\"prompt\":")) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid plan tokenizer input");
+  }
+  ++plan_tokenize_calls;
   *out_token_count = 1;
   if (tokens == NULL || tokens_capacity == 0) {
     return fail(LLAMA_DART_ERROR_BUFFER_TOO_SMALL, "token buffer too small");

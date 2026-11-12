@@ -184,8 +184,9 @@ The `v0.9.0` sync adapted the bridge to upstream's reworked chat API
   instead, from the call that makes the plan. The plan (version 2) no longer
   has `parser` or `format`.
 - `common_chat_params::prompt` is a list of parts that marks user input. The
-  bridge joins the parts into one string, so the whole prompt is still
-  tokenized with special-token parsing, as before.
+  sync joined the parts into one string, so the whole prompt was still
+  tokenized with special-token parsing, as before. ABI 45 uses the marks
+  (below).
 - `common_chat_parse` takes `common_chat_input`, text with the token each
   piece came from. The bridge passes text without tokens; the pinned parser
   carries the tokens and does not read them.
@@ -237,7 +238,8 @@ ABI 34 defines a zero generated-token limit as prompt-only prefill and adds a
 tokenization mode that inserts model special tokens only when the context is
 empty. Both prefill and ordinary completion continue to use pinned
 `llama_tokenize` and `llama_decode`; chat-template prompts enable trusted
-special-token parsing.
+special-token parsing, which ABI 45 limits to the template's own text in a
+planned chat.
 
 ABI 35 maps typed Dart KV-cache controls to pinned `llama_context_params`:
 `type_k`, `type_v`, `offload_kqv`, `flash_attn_type`, `swa_full`, and
@@ -348,6 +350,43 @@ parsed before the mismatch. The Dart stream keeps what it delivered, delivers
 nothing that is taken back, and fails with "The chat parser changed output
 that was already streamed" when a later parse reads different text in its
 place.
+
+ABI 45 keeps message text from becoming control tokens in a planned chat.
+The plan (version 3) adds `message_text_spans`: the byte ranges of its joined
+prompt that pinned `common_chat_prompt` marks `is_input`, without the parts
+that are exactly one of the four role names.
+`llama_dart_model_tokenize_chat_plan` tokenizes a plan's prompt as a
+completion of the plan evaluates it; Dart counts a planned chat with it.
+[Architecture](architecture.md#message-text-in-a-chat-prompt) describes the
+rule. It rests on upstream details that a sync must recheck:
+
+- Upstream has no consumer of `is_input` to follow. At `v0.9.0`, and on its
+  default branch on 2026-11-12, `tools/server` joins the parts
+  (`out_session.prompt().str()` in `server-common.cpp`) and parses special
+  tokens over the whole prompt. When upstream tokenizes the parts itself,
+  compare its rule with this one. `common/jinja/README.md` names per-part
+  tokenization as the intent and lists its costs: a space the template adds
+  before message text becomes a token of its own, and a token built from
+  request text stops working. The bridge avoids the first for prompts whose
+  messages spell no control token, by leaving those prompts joined, and the
+  second for role names.
+- `global_from_json(ctx, inp, inputs.mark_input)` in `common/chat.cpp` marks
+  every string of the request; `mark_input` defaults to true in
+  `autoparser::generation_params` and the bridge cannot set it per field.
+  A filter keeps the mark only where upstream's rule for it says so (a result
+  made of several strings is marked when all of them are). Text a template
+  derives from a message in a way that drops the mark is template text to
+  the bridge.
+- The control tokens are those `tokenizer_st_partition` in
+  `src/llama-vocab.cpp` skips when `parse_special` is false:
+  `LLAMA_TOKEN_ATTR_CONTROL` and `LLAMA_TOKEN_ATTR_UNKNOWN`. It matches a
+  token's vocabulary text exactly, which is what the bridge searches for.
+- Runs that are tokenized apart get BOS and EOS as `mtmd_tokenizer::tokenize`
+  adds them: by `llama_vocab_get_add_bos` and `llama_vocab_get_add_eos`.
+- `mtmd_tokenize_from_parts` reads `parse_special` per text part and ignores
+  per-part `add_special`. The bridge cuts the prompt at `mtmd_get_marker`
+  the way `mtmd_tokenizer::split_text` does.
+- The legacy `llama_chat_apply_template` path has no parts at all.
 
 ABI 42 appends `maximum_token_piece_bytes` to `llama_dart_model_info`.
 Model loading scans each vocabulary ID once with pinned
