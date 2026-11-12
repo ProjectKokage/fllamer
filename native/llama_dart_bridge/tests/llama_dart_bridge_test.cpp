@@ -1706,9 +1706,11 @@ int main() {
              .find(R"("content":"Hello")") != std::string::npos);
   assert(read_stream(gemma4_tools_plan, "Hello<|tool_call>call:unknown{", 0) ==
          parts("Hello", "", 0));
-  // Nor is the end of a reasoning block that never closed.
-  assert(read_stream(gemma4_off_plan, "<|channel>thought\nweigh<chan", 0) ==
+  // The end of a reasoning block that never closed is reasoning.
+  assert(read_stream(gemma4_off_plan, "<|channel>thought\nweigh<chan", 1) ==
          parts("", "weigh", 0));
+  assert(read_stream(gemma4_off_plan, "<|channel>thought\nweigh<chan", 0) ==
+         parts("", "weigh<chan", 0));
 
   const auto load_with_template = [&](const char *vocab_path,
                                       const char *template_name) {
@@ -1793,6 +1795,102 @@ int main() {
       LLAMA_DART_TEST_QWEN_VOCAB_MODEL, "LFM2.5-8B-A1B.jinja");
   assert(marks_reasoning(lfm2_reasoning_model));
   llama_dart_model_free(lfm2_reasoning_model);
+
+  const auto has = [](const std::string &json, const char *piece) {
+    return json.find(piece) != std::string::npos;
+  };
+  const auto template_model = [&](const char *template_name) {
+    return load_with_template(LLAMA_DART_TEST_QWEN_VOCAB_MODEL, template_name);
+  };
+  const char off_with_tools[] = R"(,"enable_thinking":false)";
+  const char separated[] = R"(,"separate_reasoning":true)";
+
+  // A response that is only a piece withheld as a possible marker.
+  assert(read_stream(gemma4_off_plan, "<", 1) == parts("", "", 0));
+  assert(read_stream(gemma4_off_plan, "<", 0) == parts("<", "", 0));
+  assert(read_stream(gemma4_tools_plan, "<", 0) == parts("<", "", 0));
+  assert(has(read_message(gemma4_tools_plan, "<"), R"("content":"<")"));
+
+  // Templates whose tool call begins with the marker that ends the response
+  // text: the withheld piece is response text, a call being written is not.
+  for (const char *template_name :
+       {"openbmb-MiniCPM5-1B.jinja", "inclusionai-ling-3.0-flash.jinja"}) {
+    llama_dart_model *tagged_model = template_model(template_name);
+    const std::string tagged_plan =
+        plan_of(tagged_model, chat_request(true, off_with_tools));
+    assert(has(read_stream(tagged_plan, "I'm fine >_<", 1),
+               R"("content":"I'm fine >_")"));
+    assert(has(read_stream(tagged_plan, "I'm fine >_<", 0),
+               R"("content":"I'm fine >_<")"));
+    assert(has(read_message(tagged_plan, "I'm fine >_<"),
+               R"("content":"I'm fine >_<")"));
+    llama_dart_model_free(tagged_model);
+  }
+  llama_dart_model *qwen3_coder_model = template_model("Qwen3-Coder.jinja");
+  const std::string qwen3_coder_plan =
+      plan_of(qwen3_coder_model, chat_request(true, separated));
+  assert(has(read_stream(qwen3_coder_plan, "#include <func", 1),
+             R"("content":"#include ")"));
+  assert(has(read_stream(qwen3_coder_plan, "#include <func", 0),
+             R"("content":"#include <func")"));
+  assert(has(read_message(qwen3_coder_plan, "#include <func"),
+             R"("content":"#include <func")"));
+  const char unfinished_call[] =
+      "Sure <tool_call>\n<function=lookup>\n<parameter=query>\nal";
+  const std::string unfinished_call_parts =
+      read_stream(qwen3_coder_plan, unfinished_call, 0);
+  assert(has(unfinished_call_parts, R"("content":"Sure ")"));
+  assert(!has(unfinished_call_parts, R"("tool_call_bytes":0)"));
+  assert(has(read_stream(qwen3_coder_plan, "Sure <tool_call>\n<function=look",
+                         0),
+             R"("content":"Sure ")"));
+  llama_dart_model_free(qwen3_coder_model);
+
+  llama_dart_model *deepseek_model =
+      template_model("deepseek-ai-DeepSeek-V3.2.jinja");
+  // Whitespace the parser skipped is not text it withheld.
+  const std::string deepseek_schema_plan = plan_of(
+      deepseek_model,
+      chat_request(
+          false,
+          R"(,"separate_reasoning":true,"json_schema":{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]})"));
+  assert(has(read_stream(deepseek_schema_plan,
+                         "weigh</think>```json\n{\"a\":1}\n", 0),
+             R"("content":"{\"a\":1}","reasoning_content")"));
+  // Output that ends inside a character still reads as valid text.
+  const std::string deepseek_tools_plan =
+      plan_of(deepseek_model, chat_request(true, separated));
+  assert(read_stream(deepseek_tools_plan, "weigh</think>Hello\n\n<\xEF", 0) ==
+         parts(R"(Hello\n\n<)", "weigh", 0));
+  assert(has(read_message(deepseek_tools_plan, "weigh</think>Hello\n\n<\xEF"),
+             R"("content":"Hello\n\n<")"));
+  // A piece that could still close the reasoning block is never read as
+  // response text, and is reasoning once the output has ended.
+  const std::string deepseek_plan =
+      plan_of(deepseek_model, chat_request(false, separated));
+  assert(read_stream(deepseek_plan, "weigh", 1) == parts("", "weigh", 0));
+  assert(read_stream(deepseek_plan, "weigh<", 1) == parts("", "weigh", 0));
+  assert(read_stream(deepseek_plan, "weigh<", 0) == parts("", "weigh<", 0));
+  llama_dart_model_free(deepseek_model);
+
+  llama_dart_model *ling3_model =
+      template_model("inclusionai-ling-3.0-flash.jinja");
+  const std::string ling3_plan =
+      plan_of(ling3_model, chat_request(false, R"(,"enable_thinking":true)"));
+  assert(read_stream(ling3_plan, "weigh <t", 1) == parts("", "weigh ", 0));
+  assert(read_stream(ling3_plan, "weigh <table> more</think>Hi", 1) ==
+         parts("Hi", "weigh <table> more", 0));
+  assert(read_stream(ling3_plan, "weigh <t", 0) == parts("", "weigh <t", 0));
+  llama_dart_model_free(ling3_model);
+
+  // Ended output is not rejected for its last piece: the piece is text.
+  llama_dart_model *kimi_k3_model = template_model("Kimi-K3.jinja");
+  const std::string kimi_k3_plan =
+      plan_of(kimi_k3_model, chat_request(false, separated));
+  assert(has(read_stream(kimi_k3_plan,
+                         "weigh<|close|>think<|sep|>\n\nHello <|o", 0),
+             R"(Hello <|o","reasoning_content":"weigh")"));
+  llama_dart_model_free(kimi_k3_model);
 
   llama_dart_model_free(tool_model);
 

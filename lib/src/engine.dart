@@ -655,10 +655,11 @@ final class GenerationChunk {
   /// A chat that asked its template for tools, a thinking mode or a reasoning
   /// budget, or that set `GenerationConfig.separateReasoning`, is read by the
   /// pinned upstream chat parser as it streams: this is the response text
-  /// alone, and reasoning arrives in [reasoningText]. A trailing piece that
-  /// could still become a marker is held back until the next chunk, or until
-  /// the response ends. Any other chat, and raw completion, stream the output
-  /// as generated.
+  /// alone, and reasoning arrives in [reasoningText]. An end of the output
+  /// that could still become one of the template's markers, such as a lone
+  /// `<`, is held back until the next chunk decides it, or until the response
+  /// ends. Any other chat, and raw completion, stream the output as
+  /// generated.
   ///
   /// The parsers of most templates expect one reasoning block. A model that
   /// goes on reasoning after a reasoning budget closed its block, or that

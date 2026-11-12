@@ -4128,8 +4128,12 @@ struct chat_output_reader {
   // its generation prompt already holds a closed reasoning block. Otherwise
   // empty.
   std::string prefilled_reasoning_start;
-  // The markers at which the parser stops reading a run of text.
-  std::vector<std::string> text_end_markers;
+  // The markers the end of unfinished output may be the beginning of: those
+  // at which the parser stops reading a run of text, and the template's
+  // reasoning start marker.
+  std::vector<std::string> markers;
+  // A character that occurs in none of them, or NUL when there is none.
+  char plain_character = '\0';
 };
 
 void load_chat_output_reader(const parsed_chat_plan &plan,
@@ -4144,10 +4148,30 @@ void load_chat_output_reader(const parsed_chat_plan &plan,
   const common_peg_arena &parser = reader->params.parser;
   for (common_peg_parser_id id = 0; id < parser.size(); ++id) {
     const auto *text = std::get_if<common_peg_until_parser>(&parser.get(id));
-    if (text != nullptr) {
-      reader->text_end_markers.insert(reader->text_end_markers.end(),
-                                      text->delimiters.begin(),
-                                      text->delimiters.end());
+    if (text == nullptr) {
+      continue;
+    }
+    for (const std::string &marker : text->delimiters) {
+      if (!marker.empty()) {
+        reader->markers.push_back(marker);
+      }
+    }
+  }
+  // A parser that begins with an optional reasoning block waits for the rest
+  // of a start marker in the same way.
+  const std::string start_marker = string_strip(plan.thinking_start_tag);
+  if (!start_marker.empty()) {
+    reader->markers.push_back(start_marker);
+  }
+  for (const char candidate : std::string_view(
+           "~^#%&*+=?@$!;:,.0123456789abcdefghijklmnopqrstuvwxyz")) {
+    if (std::none_of(reader->markers.begin(),
+                     reader->markers.end(),
+                     [candidate](const std::string &marker) {
+                       return marker.find(candidate) != std::string::npos;
+                     })) {
+      reader->plain_character = candidate;
+      break;
     }
   }
   // A zero reasoning budget is how a plan records that thinking is off for a
@@ -4172,48 +4196,42 @@ bool starts_with(std::string_view text, std::string_view prefix) {
          text.compare(0, prefix.size(), prefix) == 0;
 }
 
-// The end of `input` that the parser kept out of the response text because
-// it could still have become a marker: text that follows the last piece of
-// response text, begins one of the markers that end text, and completes
-// none. `input` is the generation prompt followed by output that has ended.
-// The pinned parser withholds such a piece however it is called, so nothing
-// else would deliver it. Empty when the parse ended in reasoning or in a
-// tool call.
-std::string_view withheld_response_text(const chat_output_reader &reader,
-                                        const std::string &input) {
-  if (reader.text_end_markers.empty()) {
-    return {};
-  }
-  common_peg_parse_context context(input, COMMON_PEG_PARSE_FLAG_LENIENT);
-  const common_peg_parse_result result = reader.params.parser.parse(context);
-  if (result.fail()) {
-    return {};
-  }
-  const common_peg_ast_node *last = nullptr;
-  context.ast.visit(result, [&](const common_peg_ast_node &node) {
-    if (!node.tag.empty() && (last == nullptr || node.end >= last->end)) {
-      last = &node;
+// The size of the longest end of `text` that begins one of the reader's
+// markers without completing it. More output could turn that piece into the
+// marker, so until then it is neither text nor markup.
+size_t undecided_end_size(const chat_output_reader &reader,
+                          std::string_view text) {
+  size_t longest = 0;
+  for (const std::string &marker : reader.markers) {
+    for (size_t size = std::min(marker.size() - 1, text.size());
+         size > longest; --size) {
+      if (text.compare(text.size() - size, size, marker, 0, size) == 0) {
+        longest = size;
+        break;
+      }
     }
-  });
-  if (last == nullptr || last->tag != common_chat_peg_builder::CONTENT ||
-      last->end >= input.size()) {
-    return {};
   }
-  const std::string_view tail = std::string_view(input).substr(last->end);
-  bool begins_marker = false;
-  for (const std::string &marker : reader.text_end_markers) {
-    if (starts_with(tail, marker)) {
-      return {};
-    }
-    begins_marker = begins_marker || starts_with(marker, tail);
-  }
-  return begins_marker ? tail : std::string_view();
+  return longest;
 }
 
-// Parses `output`, all of a chat's generated output so far. A partial read
-// accepts output that stops anywhere and may withhold a trailing piece that
-// could still become template markup. A read of output that has ended
-// delivers such a piece as response text.
+// Parses `output`, all of a chat's generated output so far. Output that has
+// ended must be a message the parser accepts; output that still streams may
+// stop anywhere.
+//
+// While output streams, an end that could still become a marker is left
+// unread. The pinned parser withholds such a piece only from the run of text
+// it is reading, and what follows in its grammar may then read the piece as
+// something else, for example a possible end of reasoning as response text,
+// which later output takes back. Without the piece no reading is taken back.
+//
+// Once the output has ended, that piece can no longer become a marker: it is
+// text, in the response or in the reasoning, wherever the parser was reading.
+// The parser has no way to be told so, and withholds the piece however it is
+// called. It is therefore given the output followed by one character that
+// occurs in no marker. When that adds the piece, or the end of it, and the
+// character to the response text or to the reasoning, the piece is text
+// there, and the character is taken off again. Otherwise the output ends in
+// a tool call or in markup, and is read as it stands.
 //
 // With thinking off, a template may end its generation prompt with an empty
 // reasoning block, which is the one block its parser expects. A model that
@@ -4221,24 +4239,73 @@ std::string_view withheld_response_text(const chat_output_reader &reader,
 // budget. That block is read in place of the prompt's, so it is reasoning and
 // not response text.
 common_chat_msg read_chat_output(const chat_output_reader &reader,
-                                 const std::string &output, bool is_partial) {
+                                 std::string output, bool has_ended) {
+  // Bytes of a character that has not arrived whole belong to later output.
+  drop_incomplete_utf8_tail(&output);
   const std::string &reasoning_start = reader.prefilled_reasoning_start;
   std::string_view prompt = reader.generation_prompt;
   if (!reasoning_start.empty() && starts_with(output, reasoning_start)) {
     prompt = prompt.substr(0, prompt.find(reasoning_start));
-  } else if (is_partial && !output.empty() &&
+  } else if (!has_ended && !output.empty() &&
              starts_with(reasoning_start, output)) {
     // The output so far could still become the start marker.
     common_chat_msg nothing;
     nothing.role = "assistant";
     return nothing;
   }
-  const std::string input = std::string(prompt) + output;
-  common_chat_msg message = common_chat_parse(input, is_partial, reader.params);
-  if (!is_partial) {
-    message.content += withheld_response_text(reader, input);
+  std::string_view decided = output;
+  for (size_t undecided = undecided_end_size(reader, decided); undecided > 0;
+       undecided = undecided_end_size(reader, decided)) {
+    decided.remove_suffix(undecided);
   }
-  return message;
+  const std::string_view undecided =
+      std::string_view(output).substr(decided.size());
+  std::string input(prompt);
+  input += decided;
+  if (!has_ended || undecided.empty()) {
+    return common_chat_parse(input, !has_ended, reader.params);
+  }
+  const std::string before = input;
+  input += undecided;
+  if (reader.plain_character != '\0') {
+    try {
+      const common_chat_msg read =
+          common_chat_parse(before, true, reader.params);
+      common_chat_msg followed = common_chat_parse(
+          input + reader.plain_character, false, reader.params);
+      // Whether `text` is `was`, then an end of the undecided piece, then
+      // the plain character. The parser may skip the beginning of the piece,
+      // for example as whitespace between a reasoning block and the response.
+      const auto adds_undecided_end = [&](const std::string &text,
+                                          const std::string &was) {
+        if (text.size() <= was.size() || !starts_with(text, was) ||
+            text.back() != reader.plain_character) {
+          return false;
+        }
+        const std::string_view added =
+            std::string_view(text).substr(was.size(),
+                                          text.size() - was.size() - 1);
+        return added.size() <= undecided.size() &&
+               undecided.substr(undecided.size() - added.size()) == added;
+      };
+      if (followed.reasoning_content == read.reasoning_content &&
+          adds_undecided_end(followed.content, read.content)) {
+        followed.content.pop_back();
+        return followed;
+      }
+      if (followed.content == read.content &&
+          adds_undecided_end(followed.reasoning_content,
+                             read.reasoning_content)) {
+        followed.reasoning_content.pop_back();
+        return followed;
+      }
+    } catch (const std::bad_alloc &) {
+      throw;
+    } catch (const std::exception &) {
+      // The output does not end in text.
+    }
+  }
+  return common_chat_parse(input, false, reader.params);
 }
 } // namespace
 
@@ -4276,7 +4343,7 @@ llama_dart_result llama_dart_chat_parse_output(
     load_chat_output_reader(plan, &reader);
     const std::string output(
         reinterpret_cast<const char *>(output_data), output_size);
-    const common_chat_msg message = read_chat_output(reader, output, false);
+    const common_chat_msg message = read_chat_output(reader, output, true);
     const std::string message_json =
         message.to_json_oaicompat().dump();
     const llama_dart_result copied =
@@ -4353,14 +4420,8 @@ llama_dart_result llama_dart_chat_stream_parser_parse(
   try {
     const std::string output(
         reinterpret_cast<const char *>(output_data), output_size);
-    common_chat_msg message =
-        read_chat_output(parser->reader, output, is_partial != 0);
-    if (is_partial != 0) {
-      // The parser may stop inside a character whose last bytes have not
-      // been generated. They belong to the next call.
-      drop_incomplete_utf8_tail(&message.content);
-      drop_incomplete_utf8_tail(&message.reasoning_content);
-    }
+    const common_chat_msg message =
+        read_chat_output(parser->reader, output, is_partial == 0);
     size_t tool_call_bytes = 0;
     for (const common_chat_tool_call &call : message.tool_calls) {
       tool_call_bytes += call.name.size() + call.arguments.size();

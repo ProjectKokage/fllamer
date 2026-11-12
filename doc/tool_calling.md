@@ -92,9 +92,11 @@ text equals the streamed `text` and holds no reasoning. A model that reasons
 again after its reasoning block has closed is the exception: the parsers of
 most templates expect one block, and the later text arrives as response text.
 `GenerationChunk.stopReason` is non-null on terminal chunks. If `maxTokens` is
-reached before strict chat parsing can finish, the stream fails with an
+reached and the pinned parser rejects the output, the stream fails with an
 explicit maximum-token `GenerationException` rather than a generic parser
-message.
+message. The parser does not reject a tool call that the output merely stops
+inside: the call arrives with the arguments written so far, and the stream
+fails with a `GenerationException` when those are not complete JSON.
 
 An opt-in checksum-pinned official Apache-2.0 Qwen2.5 0.5B fixture verifies
 weighted generation through the full path: live template capability detection,

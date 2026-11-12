@@ -154,9 +154,16 @@ void main() async {
   covered: the parsers of most templates expect one reasoning block, so a
   model that goes on reasoning after a reasoning budget closed its block, or
   that opens a second block later in its output, has that text and its
-  markers delivered in `text`. A trailing piece that could still become a
-  marker, such as a lone `<`, is held back while the response streams and
-  delivered as response text when the response ends. The terminal
+  markers delivered in `text`. An end of the output that could still become
+  one of the template's markers, such as a lone `<`, is held back from
+  `text` and `reasoningText` while the response streams, until the next
+  chunk decides it. When the response ends it is delivered: as response text
+  or as reasoning, whichever the model was writing. Two cases do not deliver
+  it: a response that ends inside a tool call, where the piece belongs to
+  the unfinished call, and output that the template's parser rejects, such
+  as text that does not follow the template's format or a malformed tool
+  call. Rejected output ends as it was read while it streamed, and a tool
+  chat fails with a `GenerationException`. The terminal
   `assistantMessage` of a tool chat is read the same way, so its text is the
   streamed `text` and holds no reasoning. `separateReasoning` asks for this
   without choosing a thinking mode; when the planner cannot render the

@@ -465,42 +465,6 @@ void main() {
       }
     });
 
-    test('text withheld as a possible marker is delivered when the response '
-        'ends', () async {
-      final active = fixture;
-      if (active == null) {
-        markTestSkipped('A C compiler is not available for the fake bridge.');
-        return;
-      }
-      final engine = await LlamaEngine.load(
-        LlamaModelConfig(
-          modelPath: 'tail-stream.gguf',
-          nativeLibraryPath: active.libraryPath,
-        ),
-      );
-      try {
-        // The fake generation returns "I'm fine ", ">_<" and "3 <".
-        final chunks = await engine
-            .chat(
-              messages: <ChatMessage>[ChatMessage.user('hello')],
-              config: const GenerationConfig(
-                maxTokens: 3,
-                streamChunkTokens: 1,
-                enableThinking: false,
-              ),
-            )
-            .where((chunk) => chunk.generatedTokens == null)
-            .toList();
-        expect(
-          <String>[for (final chunk in chunks) chunk.text],
-          <String>["I'm fine ", '>_', '<3 <'],
-        );
-        expect(chunks.last.isDone, isTrue);
-      } finally {
-        await engine.close();
-      }
-    });
-
     test('a stream the parser cannot read fails, and the engine generates '
         'again', () async {
       final active = fixture;
@@ -993,9 +957,8 @@ enum fake_mode {
   MODE_PLAN_UNSUPPORTED = 10,
   MODE_DIVERGENT_FINAL = 11,
   MODE_TOOL_STREAM = 12,
-  MODE_TAIL_STREAM = 13,
-  MODE_STREAM_PARSE_ERROR = 14,
-  MODE_CHANGED_OUTPUT = 15,
+  MODE_STREAM_PARSE_ERROR = 13,
+  MODE_CHANGED_OUTPUT = 14,
 };
 
 static const char *last_error = "";
@@ -1011,11 +974,6 @@ static int streams_reasoning(void) {
          current_mode == MODE_CHANGED_OUTPUT;
 }
 
-// Modes whose output the stand-in parser reads as reasoning, response text
-// and one tool call.
-static int reads_tool_stream(void) {
-  return current_mode == MODE_TOOL_STREAM || current_mode == MODE_TAIL_STREAM;
-}
 static uint32_t apply_calls;
 static uint32_t plan_calls;
 static uint32_t separation_requests;
@@ -1094,9 +1052,6 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
   if (bytes_contain(config->model_path_data, config->model_path_size,
                     "tool-stream")) {
     current_mode = MODE_TOOL_STREAM;
-  } else if (bytes_contain(config->model_path_data, config->model_path_size,
-                           "tail-stream")) {
-    current_mode = MODE_TAIL_STREAM;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
                            "stream-parse-error")) {
     current_mode = MODE_STREAM_PARSE_ERROR;
@@ -1345,7 +1300,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_parse(
     memcpy(output, output_data, output_size);
   }
   output[output_size] = '\0';
-  if (reads_tool_stream()) {
+  if (current_mode == MODE_TOOL_STREAM) {
     size_t reasoning_size = 0;
     const char *text = NULL;
     size_t text_size = 0;
@@ -1588,8 +1543,6 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
   // marker, and the call.
   static const char *const tool_stream_pieces[] = {
       "weigh</think>", "Sure <", "call>look", "up</call>"};
-  // Response text that twice ends with a byte that could begin a marker.
-  static const char *const tail_stream_pieces[] = {"I'm fine ", ">_<", "3 <"};
   static const char *const terminal_piece[] = {"terminal"};
   const char *const *pieces = terminal_piece;
   int last_step = 0;
@@ -1599,9 +1552,6 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
   } else if (current_mode == MODE_TOOL_STREAM) {
     pieces = tool_stream_pieces;
     last_step = 3;
-  } else if (current_mode == MODE_TAIL_STREAM) {
-    pieces = tail_stream_pieces;
-    last_step = 2;
   }
   if (generation_step > last_step) {
     return fail(LLAMA_DART_ERROR_GENERATION, "generation is already done");

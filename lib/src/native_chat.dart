@@ -801,10 +801,10 @@ final class NativeChatStreamParser {
   /// to the response text and to the reasoning since the previous call, and
   /// whether a tool call grew.
   ///
-  /// Before [isDone] the parser may withhold a trailing piece that could still
-  /// become template markup. The last call delivers such a piece as response
-  /// text when the response text is what it was withheld from; a piece
-  /// withheld inside reasoning or a tool call is not delivered.
+  /// Before [isDone] an end of [output] that could still become one of the
+  /// template's markers is left unread. The last call delivers it as response
+  /// text or as reasoning, whichever the model was writing, unless the output
+  /// ends inside a tool call or the parser rejects the output.
   ({String text, String reasoningText, bool writesToolCall}) advance(
     String output, {
     required bool isDone,
@@ -830,14 +830,15 @@ final class NativeChatStreamParser {
     );
   }
 
-  /// Reads the finished response as a complete message when that reading
-  /// continues what was streamed.
+  /// Reads the finished response as ended output when the parser accepts it
+  /// and that reading continues what was streamed.
   ///
-  /// A response cut short, for example by the token limit, need not be a
-  /// complete message, and a complete reading may divide the output
-  /// differently from the readings made while it streamed. The response is
-  /// then read the way it was read while it streamed, so the last step never
-  /// contradicts text that was already delivered.
+  /// The parser rejects output that does not follow the template's format,
+  /// and a reading of ended output may divide the output differently from the
+  /// readings made while it streamed. The response is then read the way it
+  /// was read while it streamed, so the last step never contradicts text
+  /// that was already delivered. An end of the output that could still have
+  /// become a marker is not delivered in that case.
   ({String text, String reasoningText, int toolCallBytes}) _parseComplete(
     String output,
   ) {
@@ -853,7 +854,7 @@ final class NativeChatStreamParser {
         return complete;
       }
     } on GenerationException {
-      // Not a complete message.
+      // The parser rejects the output.
     }
     return _bridge._parseChatStream(_parser, output, partial: true);
   }
