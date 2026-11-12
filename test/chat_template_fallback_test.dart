@@ -636,6 +636,69 @@ void main() {
       }
     });
 
+    test(
+      'a chat that does not start frees the parser its plan was given',
+      () async {
+        final active = fixture;
+        final activeCounters = counters;
+        if (active == null || activeCounters == null) {
+          markTestSkipped('A C compiler is not available for the fake bridge.');
+          return;
+        }
+        // The plan is rejected after the bridge made it, or the generation
+        // fails to start: either way no generation takes the plan over.
+        for (final (modelPath, config, error)
+            in <(String, GenerationConfig, Matcher)>[
+              (
+                'thinking-old.gguf',
+                const GenerationConfig(
+                  maxTokens: 16,
+                  enableThinking: true,
+                  reasoningBudgetTokens: 8,
+                ),
+                isA<UnsupportedFeatureException>(),
+              ),
+              (
+                'start-fails.gguf',
+                const GenerationConfig(maxTokens: 16, enableThinking: true),
+                isA<GenerationException>(),
+              ),
+            ]) {
+          final engine = await LlamaEngine.load(
+            LlamaModelConfig(
+              modelPath: modelPath,
+              nativeLibraryPath: active.libraryPath,
+            ),
+          );
+          try {
+            final createdBefore = activeCounters.streamParserCreations();
+            await expectLater(
+              engine
+                  .chat(
+                    messages: <ChatMessage>[ChatMessage.user('hello')],
+                    config: config,
+                  )
+                  .toList(),
+              throwsA(error),
+              reason: modelPath,
+            );
+            expect(
+              activeCounters.streamParserCreations(),
+              createdBefore + 1,
+              reason: modelPath,
+            );
+            expect(
+              activeCounters.streamParserFrees(),
+              activeCounters.streamParserCreations(),
+              reason: modelPath,
+            );
+          } finally {
+            await engine.close();
+          }
+        }
+      },
+    );
+
     test('uses the Jinja plan after unsupported legacy formatting', () async {
       final active = fixture;
       final activeCounters = counters;
@@ -959,6 +1022,7 @@ enum fake_mode {
   MODE_TOOL_STREAM = 12,
   MODE_STREAM_PARSE_ERROR = 13,
   MODE_CHANGED_OUTPUT = 14,
+  MODE_START_FAILS = 15,
 };
 
 static const char *last_error = "";
@@ -1050,7 +1114,10 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
     return fail(LLAMA_DART_ERROR_MODEL_LOAD, "invalid model config");
   }
   if (bytes_contain(config->model_path_data, config->model_path_size,
-                    "tool-stream")) {
+                    "start-fails")) {
+    current_mode = MODE_START_FAILS;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "tool-stream")) {
     current_mode = MODE_TOOL_STREAM;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
                            "stream-parse-error")) {
@@ -1127,10 +1194,19 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_apply_chat_template(
               "legacy formatter cannot render Jinja");
 }
 
+static uintptr_t fake_stream_parser_storage;
+static int stream_parser_separates;
+static uint32_t stream_parser_creations;
+static uint32_t stream_parser_frees;
+
 LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
     const llama_dart_model *model, const uint8_t *request_data,
-    size_t request_size, llama_dart_buffer *out_plan) {
+    size_t request_size, llama_dart_buffer *out_plan,
+    llama_dart_chat_stream_parser **out_parser) {
   (void)model;
+  if (out_parser != NULL) {
+    *out_parser = NULL;
+  }
   ++plan_calls;
   if (current_mode == MODE_LEGACY || current_mode == MODE_ERROR) {
     return fail(LLAMA_DART_ERROR_INTERNAL,
@@ -1196,7 +1272,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
   char plan[1024];
   const int size = snprintf(
       plan, sizeof(plan),
-      "{\"version\":1,\"prompt\":\"%s\",\"grammar\":\"\","
+      "{\"version\":2,\"prompt\":\"%s\",\"grammar\":\"\","
       "\"grammar_lazy\":false,\"grammar_triggers\":[],"
       "\"preserved_tokens\":[],\"additional_stops\":[],"
       "%s%s\"generation_prompt\":\"\"}",
@@ -1208,13 +1284,15 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
   if (size <= 0 || (size_t)size >= sizeof(plan)) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "chat plan buffer overflow");
   }
-  return copy_buffer(plan, out_plan);
+  const llama_dart_result copied = copy_buffer(plan, out_plan);
+  if (copied == LLAMA_DART_SUCCESS && out_parser != NULL) {
+    ++stream_parser_creations;
+    stream_parser_separates =
+        current_mode == MODE_TOOL_STREAM && separation_requested;
+    *out_parser = (llama_dart_chat_stream_parser *)&fake_stream_parser_storage;
+  }
+  return copied;
 }
-
-static uintptr_t fake_stream_parser_storage;
-static int stream_parser_separates;
-static uint32_t stream_parser_creations;
-static uint32_t stream_parser_frees;
 
 LLAMA_DART_EXPORT uint32_t fake_stream_parser_creations(void) {
   return stream_parser_creations;
@@ -1222,20 +1300,6 @@ LLAMA_DART_EXPORT uint32_t fake_stream_parser_creations(void) {
 
 LLAMA_DART_EXPORT uint32_t fake_stream_parser_frees(void) {
   return stream_parser_frees;
-}
-
-LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_create(
-    const uint8_t *plan_data, size_t plan_size,
-    llama_dart_chat_stream_parser **out_parser) {
-  if (plan_data == NULL || plan_size == 0 || out_parser == NULL) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid stream parser");
-  }
-  ++stream_parser_creations;
-  stream_parser_separates =
-      bytes_contain(plan_data, plan_size, "\"separates_reasoning\":1");
-  *out_parser = (llama_dart_chat_stream_parser *)&fake_stream_parser_storage;
-  last_error = "";
-  return LLAMA_DART_SUCCESS;
 }
 
 /*
@@ -1374,12 +1438,12 @@ LLAMA_DART_EXPORT void llama_dart_chat_stream_parser_free(
   last_error = "";
 }
 
-LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_parse_output(
-    const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
+LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_parse_message(
+    const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
     size_t output_size, llama_dart_buffer *out_message_json) {
   ++parse_calls;
-  if (current_mode != MODE_TOOL_STREAM || out_message_json == NULL ||
-      output_size > 256) {
+  if (current_mode != MODE_TOOL_STREAM || parser == NULL ||
+      out_message_json == NULL || output_size > 256) {
     return fail(LLAMA_DART_ERROR_INTERNAL,
                 "plain fallback output must not be parsed");
   }
@@ -1392,10 +1456,8 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_parse_output(
   const char *text = NULL;
   size_t text_size = 0;
   size_t tool_call_bytes = 0;
-  read_tool_stream(
-      output,
-      bytes_contain(plan_data, plan_size, "\"separates_reasoning\":1"), 0,
-      &reasoning_size, &text, &text_size, &tool_call_bytes);
+  read_tool_stream(output, stream_parser_separates, 0, &reasoning_size, &text,
+                   &text_size, &tool_call_bytes);
   char message[640];
   const int size = snprintf(
       message, sizeof(message),
@@ -1477,6 +1539,9 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_start(
       config->add_special != LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY) {
     return fail(LLAMA_DART_ERROR_GENERATION,
                 "fallback generation did not receive its chat plan");
+  }
+  if (current_mode == MODE_START_FAILS) {
+    return fail(LLAMA_DART_ERROR_GENERATION, "generation could not start");
   }
   if (current_mode == MODE_GRAMMAR) {
     if (!bytes_equal(config->prompt_data, config->prompt_size,

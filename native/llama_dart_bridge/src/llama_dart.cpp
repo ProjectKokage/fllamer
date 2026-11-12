@@ -217,7 +217,7 @@ constexpr size_t kMaxChatTemplateBytes = 16u * 1024u * 1024u;
 constexpr size_t kMaxCapturedLogBytes = 1024u * 1024u;
 constexpr size_t kMaxCapturedLogRecords = 4096u;
 constexpr int32_t kMaxModelMetadataScalarSize = 4096;
-constexpr uint32_t kChatPlanVersion = 1u;
+constexpr uint32_t kChatPlanVersion = 2u;
 
 struct parsed_chat_plan {
   std::string prompt;
@@ -229,8 +229,6 @@ struct parsed_chat_plan {
   int32_t reasoning_budget_tokens = -1;
   std::vector<common_grammar_trigger> grammar_triggers;
   std::vector<std::string> additional_stops;
-  std::string parser;
-  common_chat_format format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
 };
 
 void capture_log_callback(ggml_log_level level, const char *text, void *) {
@@ -647,7 +645,7 @@ nlohmann::ordered_json serialize_chat_plan(
   }
   return {
       {"version", kChatPlanVersion},
-      {"prompt", params.prompt},
+      {"prompt", params.prompt.str()},
       {"grammar", params.grammar},
       {"grammar_lazy", params.grammar_lazy},
       {"generation_prompt", params.generation_prompt},
@@ -656,8 +654,6 @@ nlohmann::ordered_json serialize_chat_plan(
       {"reasoning_budget_tokens", reasoning_budget_tokens},
       {"grammar_triggers", std::move(triggers)},
       {"additional_stops", params.additional_stops},
-      {"parser", params.parser},
-      {"format", static_cast<int>(params.format)},
   };
 }
 
@@ -687,13 +683,6 @@ llama_dart_result parse_chat_plan(const uint8_t *data, size_t size,
         plan.value("reasoning_budget_tokens", -1);
     value.additional_stops =
         plan.at("additional_stops").get<std::vector<std::string>>();
-    value.parser = plan.at("parser").get<std::string>();
-    const int format = plan.at("format").get<int>();
-    if (format < 0 || format >= COMMON_CHAT_FORMAT_COUNT) {
-      return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                  "chat plan format is invalid");
-    }
-    value.format = static_cast<common_chat_format>(format);
 
     const nlohmann::ordered_json &triggers = plan.at("grammar_triggers");
     if (!triggers.is_array()) {
@@ -727,8 +716,7 @@ llama_dart_result parse_chat_plan(const uint8_t *data, size_t size,
     if (value.prompt.empty() || string_contains_nul(value.prompt) ||
         string_contains_nul(value.grammar) ||
         string_contains_nul(value.generation_prompt) ||
-        string_contains_nul(value.thinking_start_tag) ||
-        string_contains_nul(value.parser)) {
+        string_contains_nul(value.thinking_start_tag)) {
       return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
                   "chat plan contains invalid text");
     }
@@ -3902,13 +3890,13 @@ llama_dart_result llama_dart_model_get_chat_template_capabilities(
     if (initialized != LLAMA_DART_SUCCESS) {
       return initialized;
     }
-    const std::map<std::string, bool> caps =
-        common_chat_templates_get_caps(templates.get());
-    out_capabilities->supports_tools = caps.at("supports_tools") ? 1 : 0;
+    const common_json caps = common_chat_templates_get_caps(templates.get());
+    out_capabilities->supports_tools =
+        caps.at("supports_tools").get<bool>() ? 1 : 0;
     out_capabilities->supports_tool_calls =
-        caps.at("supports_tool_calls") ? 1 : 0;
+        caps.at("supports_tool_calls").get<bool>() ? 1 : 0;
     out_capabilities->supports_parallel_tool_calls =
-        caps.at("supports_parallel_tool_calls") ? 1 : 0;
+        caps.at("supports_parallel_tool_calls").get<bool>() ? 1 : 0;
     out_capabilities->marks_reasoning =
         template_marks_reasoning(templates.get()) ? 1 : 0;
     last_error.clear();
@@ -3923,15 +3911,16 @@ llama_dart_result llama_dart_model_get_chat_template_capabilities(
   }
 }
 
-llama_dart_result llama_dart_model_create_chat_plan(
-    const llama_dart_model *model, const uint8_t *request_data,
-    size_t request_size, llama_dart_buffer *out_plan) {
-  if (out_plan == nullptr) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "out_plan must not be null");
-  }
-  out_plan->data = nullptr;
-  out_plan->size = 0;
+namespace {
+// Applies the model's chat template to an OpenAI-shaped chat request. On
+// success `out_params` holds what the template produced, its output parser
+// included, and `out_reasoning_budget_tokens` the reasoning budget a
+// completion of the request enforces.
+llama_dart_result apply_chat_request(const llama_dart_model *model,
+                                     const uint8_t *request_data,
+                                     size_t request_size,
+                                     common_chat_params *out_params,
+                                     int32_t *out_reasoning_budget_tokens) {
   if (model == nullptr || model->model == nullptr) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "model must not be null");
   }
@@ -4053,13 +4042,15 @@ llama_dart_result llama_dart_model_create_chat_plan(
     if (initialized != LLAMA_DART_SUCCESS) {
       return initialized;
     }
-    const std::map<std::string, bool> caps =
-        common_chat_templates_get_caps(templates.get());
+    const common_json caps = common_chat_templates_get_caps(templates.get());
+    const auto supports = [&caps](const char *capability) {
+      return caps.at(capability).get<bool>();
+    };
     const bool active_tools =
         !inputs.tools.empty() &&
         inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     if (active_tools &&
-        (!caps.at("supports_tools") || !caps.at("supports_tool_calls"))) {
+        (!supports("supports_tools") || !supports("supports_tool_calls"))) {
       return fail(LLAMA_DART_ERROR_UNSUPPORTED,
                   "model chat template does not support tools");
     }
@@ -4069,15 +4060,15 @@ llama_dart_result llama_dart_model_create_chat_plan(
           return !message.tool_calls.empty() || message.role == "tool" ||
                  !message.tool_call_id.empty();
         });
-    if (has_tool_history && !caps.at("supports_tool_calls")) {
+    if (has_tool_history && !supports("supports_tool_calls")) {
       return fail(LLAMA_DART_ERROR_UNSUPPORTED,
                   "model chat template does not support tool-call history");
     }
     if (inputs.parallel_tool_calls &&
-        !caps.at("supports_parallel_tool_calls")) {
+        !supports("supports_parallel_tool_calls")) {
       inputs.parallel_tool_calls = false;
     }
-    const common_chat_params params =
+    common_chat_params params =
         common_chat_templates_apply(templates.get(), inputs);
     const bool has_thinking_start = !params.thinking_start_tag.empty();
     const bool has_thinking_end = !params.thinking_end_tags.empty();
@@ -4095,17 +4086,11 @@ llama_dart_result llama_dart_model_create_chat_plan(
     // a zero budget so any such block is closed immediately and generation
     // can continue with the public suffix. Markerless templates retain their
     // existing template-only behavior.
-    const int32_t effective_reasoning_budget_tokens =
+    *out_reasoning_budget_tokens =
         hard_disable_thinking && has_thinking_start && has_thinking_end
             ? 0
             : reasoning_budget_tokens;
-    const std::string plan =
-        serialize_chat_plan(params, effective_reasoning_budget_tokens).dump();
-    const llama_dart_result copied = copy_to_buffer(plan, out_plan);
-    if (copied != LLAMA_DART_SUCCESS) {
-      return copied;
-    }
-    last_error.clear();
+    *out_params = std::move(params);
     return LLAMA_DART_SUCCESS;
   } catch (const std::bad_alloc &) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
@@ -4117,9 +4102,10 @@ llama_dart_result llama_dart_model_create_chat_plan(
                 "unknown chat plan creation failure");
   }
 }
+} // namespace
 
 namespace {
-// Reads the output of a planned chat with the plan's own parser.
+// Reads the output of a chat request with the parser its template produced.
 struct chat_output_reader {
   // The parser is given the generation prompt with each read, not here.
   common_chat_parser_params params;
@@ -4136,15 +4122,18 @@ struct chat_output_reader {
   char plain_character = '\0';
 };
 
-void load_chat_output_reader(const parsed_chat_plan &plan,
+// `reasoning_budget_tokens` is the budget apply_chat_request reported with
+// `plan`. The pinned parser cannot be serialized, so it is moved out of
+// `plan` and lives in the reader.
+void load_chat_output_reader(common_chat_params plan,
+                             int32_t reasoning_budget_tokens,
                              chat_output_reader *reader) {
   reader->params.format = plan.format;
-  reader->params.parse_tool_calls = true;
   reader->generation_prompt = plan.generation_prompt;
   if (plan.parser.empty()) {
     return;
   }
-  reader->params.parser.load(plan.parser);
+  reader->params.parser = std::move(plan.parser);
   const common_peg_arena &parser = reader->params.parser;
   for (common_peg_parser_id id = 0; id < parser.size(); ++id) {
     const auto *text = std::get_if<common_peg_until_parser>(&parser.get(id));
@@ -4177,7 +4166,7 @@ void load_chat_output_reader(const parsed_chat_plan &plan,
   // A zero reasoning budget is how a plan records that thinking is off for a
   // template with reasoning markers.
   const std::string &start_tag = plan.thinking_start_tag;
-  const size_t prefilled = plan.reasoning_budget_tokens == 0
+  const size_t prefilled = reasoning_budget_tokens == 0
                                ? plan.generation_prompt.find(start_tag)
                                : std::string::npos;
   if (prefilled != std::string::npos &&
@@ -4263,16 +4252,18 @@ common_chat_msg read_chat_output(const chat_output_reader &reader,
   std::string input(prompt);
   input += decided;
   if (!has_ended || undecided.empty()) {
-    return common_chat_parse(input, !has_ended, reader.params);
+    return common_chat_parse(common_chat_input(std::move(input)), !has_ended,
+                             reader.params);
   }
   const std::string before = input;
   input += undecided;
   if (reader.plain_character != '\0') {
     try {
       const common_chat_msg read =
-          common_chat_parse(before, true, reader.params);
+          common_chat_parse(common_chat_input(before), true, reader.params);
       common_chat_msg followed = common_chat_parse(
-          input + reader.plain_character, false, reader.params);
+          common_chat_input(input + reader.plain_character), false,
+          reader.params);
       // Whether `text` is `was`, then an end of the undecided piece, then
       // the plain character. The parser may skip the beginning of the piece,
       // for example as whitespace between a reasoning block and the response.
@@ -4305,7 +4296,8 @@ common_chat_msg read_chat_output(const chat_output_reader &reader,
       // The output does not end in text.
     }
   }
-  return common_chat_parse(input, false, reader.params);
+  return common_chat_parse(common_chat_input(std::move(input)), false,
+                           reader.params);
 }
 } // namespace
 
@@ -4313,87 +4305,53 @@ struct llama_dart_chat_stream_parser {
   chat_output_reader reader;
 };
 
-llama_dart_result llama_dart_chat_parse_output(
-    const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
-    size_t output_size, llama_dart_buffer *out_message_json) {
-  if (out_message_json == nullptr) {
+llama_dart_result llama_dart_model_create_chat_plan(
+    const llama_dart_model *model, const uint8_t *request_data,
+    size_t request_size, llama_dart_buffer *out_plan,
+    llama_dart_chat_stream_parser **out_parser) {
+  if (out_parser != nullptr) {
+    *out_parser = nullptr;
+  }
+  if (out_plan == nullptr) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "out_message_json must not be null");
+                "out_plan must not be null");
   }
-  out_message_json->data = nullptr;
-  out_message_json->size = 0;
-  if (output_data == nullptr && output_size > 0) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "output_data must not be null when output_size is positive");
-  }
-  if (!fits_int32(output_size) || contains_nul(output_data, output_size)) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "chat output is too large or contains NUL");
-  }
-
-  parsed_chat_plan plan;
-  const llama_dart_result parsed =
-      parse_chat_plan(plan_data, plan_size, &plan);
-  if (parsed != LLAMA_DART_SUCCESS) {
-    return parsed;
-  }
+  out_plan->data = nullptr;
+  out_plan->size = 0;
 
   try {
-    chat_output_reader reader;
-    load_chat_output_reader(plan, &reader);
-    const std::string output(
-        reinterpret_cast<const char *>(output_data), output_size);
-    const common_chat_msg message = read_chat_output(reader, output, true);
-    const std::string message_json =
-        message.to_json_oaicompat().dump();
-    const llama_dart_result copied =
-        copy_to_buffer(message_json, out_message_json);
+    common_chat_params params;
+    int32_t reasoning_budget_tokens = -1;
+    const llama_dart_result applied = apply_chat_request(
+        model, request_data, request_size, &params, &reasoning_budget_tokens);
+    if (applied != LLAMA_DART_SUCCESS) {
+      return applied;
+    }
+    const std::string plan =
+        serialize_chat_plan(params, reasoning_budget_tokens).dump();
+    std::unique_ptr<llama_dart_chat_stream_parser> parser;
+    if (out_parser != nullptr) {
+      parser = std::make_unique<llama_dart_chat_stream_parser>();
+      load_chat_output_reader(std::move(params), reasoning_budget_tokens,
+                              &parser->reader);
+    }
+    const llama_dart_result copied = copy_to_buffer(plan, out_plan);
     if (copied != LLAMA_DART_SUCCESS) {
       return copied;
+    }
+    if (out_parser != nullptr) {
+      *out_parser = parser.release();
     }
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   } catch (const std::bad_alloc &) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
   } catch (const std::exception &error) {
-    return fail_parts(LLAMA_DART_ERROR_GENERATION,
-                      "failed to parse chat output: ", error.what());
+    return fail_parts(LLAMA_DART_ERROR_UNSUPPORTED,
+                      "chat template could not create a plan: ", error.what());
   } catch (...) {
     return fail(LLAMA_DART_ERROR_INTERNAL,
-                "unknown chat output parsing failure");
-  }
-}
-
-llama_dart_result llama_dart_chat_stream_parser_create(
-    const uint8_t *plan_data, size_t plan_size,
-    llama_dart_chat_stream_parser **out_parser) {
-  if (out_parser == nullptr) {
-    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "out_parser must not be null");
-  }
-  *out_parser = nullptr;
-
-  parsed_chat_plan plan;
-  const llama_dart_result parsed =
-      parse_chat_plan(plan_data, plan_size, &plan);
-  if (parsed != LLAMA_DART_SUCCESS) {
-    return parsed;
-  }
-
-  try {
-    auto parser = std::make_unique<llama_dart_chat_stream_parser>();
-    load_chat_output_reader(plan, &parser->reader);
-    *out_parser = parser.release();
-    last_error.clear();
-    return LLAMA_DART_SUCCESS;
-  } catch (const std::bad_alloc &) {
-    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
-  } catch (const std::exception &error) {
-    return fail_parts(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                      "chat plan parser is invalid: ", error.what());
-  } catch (...) {
-    return fail(LLAMA_DART_ERROR_INTERNAL,
-                "unknown chat stream parser creation failure");
+                "unknown chat plan creation failure");
   }
 }
 
@@ -4435,6 +4393,52 @@ llama_dart_result llama_dart_chat_stream_parser_parse(
             .dump(-1, ' ', false,
                   nlohmann::ordered_json::error_handler_t::replace);
     const llama_dart_result copied = copy_to_buffer(parts_json, out_parts_json);
+    if (copied != LLAMA_DART_SUCCESS) {
+      return copied;
+    }
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail_parts(LLAMA_DART_ERROR_GENERATION,
+                      "failed to parse chat output: ", error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat output parsing failure");
+  }
+}
+
+llama_dart_result llama_dart_chat_stream_parser_parse_message(
+    const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
+    size_t output_size, llama_dart_buffer *out_message_json) {
+  if (out_message_json == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_message_json must not be null");
+  }
+  out_message_json->data = nullptr;
+  out_message_json->size = 0;
+  if (parser == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "parser must not be null");
+  }
+  if (output_data == nullptr && output_size > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "output_data must not be null when output_size is positive");
+  }
+  if (!fits_int32(output_size) || contains_nul(output_data, output_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "chat output is too large or contains NUL");
+  }
+
+  try {
+    const std::string output(
+        reinterpret_cast<const char *>(output_data), output_size);
+    const common_chat_msg message =
+        read_chat_output(parser->reader, output, true);
+    const std::string message_json =
+        message.to_json_oaicompat().dump();
+    const llama_dart_result copied =
+        copy_to_buffer(message_json, out_message_json);
     if (copied != LLAMA_DART_SUCCESS) {
       return copied;
     }

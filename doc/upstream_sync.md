@@ -2,9 +2,9 @@
 
 - Upstream: `https://github.com/ggml-org/llama.cpp`
 - Submodule: `third_party/llama.cpp`
-- Commit: `99b95488cac0f00ce3f05af113a8c1e287753f87`
-- Upstream build tag: `b11371`
-- Sync date: 2026-10-03
+- Commit: `cd959bae99ff4bed22bef2604f45241c09bbb8c8`
+- Upstream release tag: `v0.9.0` (build number 12110)
+- Sync date: 2026-11-12
 - Notices: keep `third_party/llama.cpp/LICENSE`,
   `third_party/llama.cpp/AUTHORS`, and files under
   `third_party/llama.cpp/licenses/`, the vendored notices under
@@ -35,7 +35,7 @@ access. The publish checkout must initialize the submodule before running
 `dart pub publish`.
 
 No package-local changes are carried inside `third_party/llama.cpp`. Opt-in
-Android Vulkan builds instead create a temporary version-5 build-output overlay.
+Android Vulkan builds instead create a temporary version-6 build-output overlay.
 Its pure transform normalizes CRLF to LF, accepts only recorded full-file hashes
 from this exact pin, and applies five q-payload-only shader replacements while
 preserving Q4_0/Q4_1 scale and min fields. The matrix shader `mul_mm.comp`
@@ -43,21 +43,11 @@ gains byte views of the Q4_0, Q4_1 and Q8_0 blocks for those replacements,
 because the pinned shader declares only packed views. It also transforms exactly one
 `ggml-vulkan.cpp` source to install a Qualcomm-vendor plus
 Qualcomm-proprietary-driver K-quant correctness policy: restricted Q4_K routing
-and CPU scheduling fallback for Q5_K/Q6_K matrix operations. The same
-`ggml-vulkan.cpp` transform ports upstream commit
-`47f5a64ae12833b9092c6c47b54aa9f310c4f6f1` (#29766, 2026-10-15):
-`ggml_vk_get_device` serializes first creation with a mutex and publishes the
-device into `vk_instance.devices` only after it is fully built, the fence is
-created before the buffer type retains the device, and the device destructor
-returns early for a device that was never created. The pinned source publishes
-the device first, so a creation that throws leaves a device with a zeroed
-buffer type registered; the next model load in the same process then calls
-through its null function pointers and the process ends with SIGSEGV in
-`llama_model_loader::create_tensor`. The Android emulator shows this: its
-Vulkan device fails `createDevice` with `ErrorExtensionNotPresent`, llama.cpp
-reports the load as failed, the application retries on CPU, and the second
-load crashed. A sync that reaches that commit drops this part of the
-transform. An upstream sync
+and CPU scheduling fallback for Q5_K/Q6_K matrix operations. The pin
+includes upstream commit `47f5a64ae12833b9092c6c47b54aa9f310c4f6f1` (#29766,
+2026-10-15), which publishes a Vulkan device into `vk_instance.devices` only
+after it is fully built; overlay version 5 carried a port of it for the
+previous pin, and a test now asserts it on the pinned source. An upstream sync
 must revalidate, update, or remove every external transform and its expected
 output hashes, then bump the hook's build-output overlay version; never apply it
 inside the submodule. Metal capability reporting and Gemma 4 generation grammar
@@ -69,12 +59,23 @@ without changing its intent. The ported overlay cross-compiles for Android, but
 it has not run on a device: the device results in
 [native builds](native_builds.md) were measured on `b10217`. Until an affected
 Qualcomm device repeats the CPU-oracle check, Android Vulkan correctness on
-this pin is unverified in both directions: the patches may no longer be
+that pin was unverified in both directions: the patches may no longer be
 needed, or may no longer be enough. Overlay version 5 ran on the arm64
 Android 15 emulator through Kokage's native test harness on 2026-11-09: the
 first model load fails on Vulkan and recovers on CPU, and a second load in
 the same process completes and generates. That run exercises the device
 creation path only; the emulator has no Vulkan device that ggml accepts.
+
+The `v0.9.0` sync made the overlay version 6. `dequant_funcs.glsl` and
+`mul_mm_funcs.glsl` are unchanged upstream, and the `mul_mm.comp` byte views
+apply to its new text. Upstream rewrote how `ggml_vk_mul_mat_q_f16` chooses
+the kernel of the second operand (`ggml_vk_mul_mat_b_type`), so the Q4_K
+replacement there is new: for Q4_K weights on the Qualcomm proprietary driver
+no Q4_K matrix kernel is looked up, the second operand is not quantized, and
+its kernel type is chosen among the f16 kernels the dequantized weights use.
+The other Qualcomm K-quant replacements apply unchanged. Version 6 has the
+same standing as the port before it: it cross-compiles for Android and has
+not run on a device ([native builds](native_builds.md)).
 
 To sync upstream, fetch and inspect an explicit commit, check it out detached
 inside the submodule, and stage the updated gitlink:
@@ -175,8 +176,27 @@ ABI change:
   the target with `llama_decode` and hands llama-common a mirror of the decoded
   entries, built only when a speculator exists.
 
-Upstream's session format is version 10 on this pin, so
-`llama_state_set_data` rejects state saved by an earlier pin.
+The `v0.9.0` sync adapted the bridge to upstream's reworked chat API
+(#30210, #30389, #29876):
+
+- `common_peg_arena` can no longer be saved or loaded, so a chat plan cannot
+  carry its output parser as text. ABI 44 hands the parser out as a handle
+  instead, from the call that makes the plan. The plan (version 2) no longer
+  has `parser` or `format`.
+- `common_chat_params::prompt` is a list of parts that marks user input. The
+  bridge joins the parts into one string, so the whole prompt is still
+  tokenized with special-token parsing, as before.
+- `common_chat_parse` takes `common_chat_input`, text with the token each
+  piece came from. The bridge passes text without tokens; the pinned parser
+  carries the tokens and does not read them.
+- `common_chat_parser_params` lost `parse_tool_calls` (tool calls are always
+  parsed), and `common_chat_templates_get_caps` returns `common_json`.
+
+Two behaviors changed with the pin. The pinned parser leaves out whitespace
+between a reasoning block's text and its end marker, which it kept before
+(Qwen 3.5: `weigh\n</think>` is the reasoning `weigh`). Upstream's session
+format is version 11, so `llama_state_set_data` rejects state saved by an
+earlier pin; the `b11371` pin had version 10.
 
 `LlamaEngine.warmUp()` follows pinned `common_init_from_params` semantics: it
 uses BOS/EOS tokens with token zero as a fallback, runs encoder and decoder
@@ -205,8 +225,9 @@ smoke coverage.
 Tool-aware chat uses pinned `common_chat_templates_init`,
 `common_chat_templates_get_caps`, `common_chat_templates_apply`, and
 `common_chat_parse`. The bridge serializes the resulting prompt, lazy grammar
-triggers, generation prefix, parser, and additional stops through ABI 29; these
-upstream C++ types remain private implementation details.
+triggers, generation prefix, and additional stops through ABI 29; these
+upstream C++ types remain private implementation details. Until ABI 44 the
+plan also carried the parser.
 
 ABI 30 adds request-owned stop token IDs. The bridge validates each ID against
 the loaded upstream vocabulary and terminates before converting or decoding the
@@ -273,20 +294,36 @@ and end marker, and uses the start marker in its source or in the generation
 prompt it renders. Upstream's LFM2, Kimi K2 and Ministral parsers name markers
 for templates that have none.
 
+ABI 44 takes the output parser out of the plan, because the pinned parser
+cannot be serialized. `llama_dart_model_create_chat_plan` gains
+`out_parser`: when it is not null the call also returns the chat stream
+parser of the plan's output, built from the same template application, so
+the template is applied once per chat as before. The parser keeps nothing of
+the model. `llama_dart_chat_stream_parser_parse_message` reads ended output
+into the terminal assistant message with that parser; it replaces
+`llama_dart_chat_parse_output`, and `llama_dart_chat_stream_parser_create`
+is gone. In Dart the plan of a chat that is generated owns the parser and
+the streaming generation closes it; plans made only to format a prompt or
+count tokens ask for none.
+
 The bridge reads chat output through one function for the stream and for the
 terminal message. Three of its steps depend on upstream details that a sync
 must recheck:
 
 - Upstream's `until` parser cuts text before a piece that could begin one of
-  its delimiters, also when the output has ended (`common/peg-parser.cpp`;
-  `common_chat_peg_parse` always parses leniently). What follows in a
+  its delimiters while output streams (`common/peg-parser.cpp`). Since
+  `v0.9.0` it keeps the piece as text when the output has ended
+  (`COMMON_PEG_PARSE_FLAG_COMPLETE`), but a literal parser still waits for
+  the rest of its marker then, because `common_chat_peg_parse` always parses
+  leniently: without the next step the native test for Gemma 4 with tools
+  fails on an ended `<`, which must be response text. What follows in a
   template's grammar may then read that piece as something else. Ling 3 and
   Kimi K3 read a possible end of reasoning as response text, and DeepSeek
   V3.2 and V4 read a reasoning block that ends in such a piece as response
   text, which a later parse takes back. The bridge therefore removes such an
   end from the output before a partial parse. It collects the markers from
-  `common_peg_until_parser::delimiters` of every parser in the plan's arena,
-  and adds the plan's reasoning start marker, because a parser that begins
+  `common_peg_until_parser::delimiters` of every parser in the request's
+  arena, and adds the template's reasoning start marker, because a parser that begins
   with an optional reasoning block waits for the rest of that literal in the
   same way.
 - For output that has ended, the bridge parses the output followed by one

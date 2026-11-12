@@ -13,13 +13,13 @@ const pinnedMulMmFuncsSha256 =
 const patchedMulMmFuncsSha256 =
     '64ae33bf3fa95dfbed3fc17e2ed1e2e5405d3db193ad8a604b0e84f5536d665c';
 const pinnedMulMmCompSha256 =
-    'abed36cd38b5edc3f0f365fbc71a672576e7cd8a703131e297b416f23c3b1221';
+    '81db472d38b89c8555e3ee6facfec2d1140ab422472b8f8c34cdd56fd248ef9b';
 const patchedMulMmCompSha256 =
-    '0a96c140a076875c6dc0e3fd0f29e5caceba7df8219da2b2067eb2cc1162af15';
+    '0cb7c1357320807f5c2570a8e4c1819774bce29a4771100cffed6d14b6601bc3';
 const pinnedGgmlVulkanSha256 =
-    'e43a39ce1e9443f7c1c00e7bb9f13d56ab5a01e2355973ee740d4324e0e0698b';
+    'ab0ad31fea14e43f3e7762601f2164ee57629191a082ef86f5ac0e95430fc47d';
 const patchedGgmlVulkanSha256 =
-    '1b0d7dbae0ab0c644bcd4ac06ddc345954216c381d50cc99ed007add66f4be00';
+    '4502ba0d68252e4d43ab8675adf0964a960fb4f8e9c7c0f3b6c276ad554bf383';
 
 const _pinnedQ4_1Dequantize4 =
     '''vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
@@ -140,55 +140,31 @@ const _patchedQ4KMatVecF16Registration =
             }''';
 
 const _pinnedQ4KForcedDequant =
-    '''    const std::vector<vk_matmul_pipeline_pair>* mmp_map = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
-    if (mmp_map == nullptr) {
-        quantize_y = false;
-    }
+    '''    const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, src0->type, src1, f16_type,
+                                        ggml_prec_get_acc(dst), false, can_quantize_y, prefer_f16_b);
 
-    const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
-                              // coopmat1: force f32->f16 conversion so the f16 B-type quant pipeline is
-                              // used, but only when the int8 MMQ path above is not taken.
-                              (ctx->device->coopmat_support && !ctx->device->coopmat2 && !quantize_y &&
-                               ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32) ||
-                              (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
-                              !ggml_vk_dim01_contiguous(src1);
+    const bool quantize_y       = y_kernel_type == GGML_TYPE_Q8_1;
+    const bool y_f32_kernel     = y_kernel_type == GGML_TYPE_F32;
+    const bool y_needs_reformat = !quantize_y && (!ggml_vk_dim01_contiguous(src1) || y_kernel_type != src1->type);
 
-    const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
-
-    if (mmp_map == nullptr) {
-        // Fall back to f16 dequant mul mat
-        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
-    }
+    const std::vector<vk_matmul_pipeline_pair>* mmp_map =
+        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_kernel_type, ggml_prec_get_acc(dst));
 
     const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;''';
 
+// The weights are dequantized to f16, so the second operand's kernel type is
+// chosen among the f16 kernels and is never the quantized one.
 const _patchedQ4KForcedDequant =
-    '''    const std::vector<vk_matmul_pipeline_pair>* mmp_map = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
-    if (ggml_vk_is_qualcomm_proprietary(ctx->device) && src0->type == GGML_TYPE_Q4_K) {
-        mmp_map = nullptr;
-    }
-    if (mmp_map == nullptr) {
-        quantize_y = false;
-    }
+    '''    const bool qualcomm_q4_k = ggml_vk_is_qualcomm_proprietary(ctx->device) && src0->type == GGML_TYPE_Q4_K;
+    const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, qualcomm_q4_k ? f16_type : src0->type, src1, f16_type,
+                                        ggml_prec_get_acc(dst), false, can_quantize_y && !qualcomm_q4_k, prefer_f16_b);
 
-    const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
-                              // coopmat1: force f32->f16 conversion so the f16 B-type quant pipeline is
-                              // used, but only when the int8 MMQ path above is not taken.
-                              (ctx->device->coopmat_support && !ctx->device->coopmat2 && !quantize_y &&
-                               ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32) ||
-                              (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
-                              !ggml_vk_dim01_contiguous(src1);
+    const bool quantize_y       = y_kernel_type == GGML_TYPE_Q8_1;
+    const bool y_f32_kernel     = y_kernel_type == GGML_TYPE_F32;
+    const bool y_needs_reformat = !quantize_y && (!ggml_vk_dim01_contiguous(src1) || y_kernel_type != src1->type);
 
-    const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
-
-    if (mmp_map == nullptr) {
-        // Fall back to f16 dequant mul mat
-        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
-    }
-
-    if (ggml_vk_is_qualcomm_proprietary(ctx->device) && src0->type == GGML_TYPE_Q4_K) {
-        mmp_map = nullptr;
-    }
+    const std::vector<vk_matmul_pipeline_pair>* mmp_map = qualcomm_q4_k ? nullptr :
+        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_kernel_type, ggml_prec_get_acc(dst));
 
     const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;''';
 
@@ -227,84 +203,6 @@ const _patchedQ5KQ6KSupportsOp =
                     return false;
                 }
                 if (op->op == GGML_OP_MUL_MAT_ID) {''';
-
-// Upstream 47f5a64ae1 (#29766) publishes a Vulkan device only after it is
-// fully built and serializes first creation. The pinned source stores the
-// device before building it, so creation that throws leaves a device with a
-// zeroed buffer type published; the next model load then calls through its
-// null function pointers. The next sync that reaches that commit drops this.
-const _pinnedDeviceInitEntry = '''vk_device ggml_vk_get_device(size_t idx) {
-    VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
-
-    if (vk_instance.devices[idx] == nullptr) {
-        VK_LOG_DEBUG("Initializing new vk_device");
-        vk_device device = std::make_shared<vk_device_struct>();
-        vk_instance.devices[idx] = device;
-''';
-
-const _patchedDeviceInitEntry = '''vk_device ggml_vk_get_device(size_t idx) {
-    VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
-
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
-
-    if (vk_instance.devices[idx] == nullptr) {
-        VK_LOG_DEBUG("Initializing new vk_device");
-        vk_device device = std::make_shared<vk_device_struct>();
-''';
-
-const _pinnedDeviceInitFence = '''        device->buffer_type = {
-            /* .iface    = */ ggml_backend_vk_buffer_type_interface,
-            /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), idx),
-            /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name, device },
-        };
-
-        device->fence = device->device.createFence({});
-''';
-
-const _patchedDeviceInitFence =
-    '''        device->fence = device->device.createFence({});
-
-        device->buffer_type = {
-            /* .iface    = */ ggml_backend_vk_buffer_type_interface,
-            /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), idx),
-            /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name, device },
-        };
-''';
-
-const _pinnedDeviceInitPublish =
-    '''        } else if (getenv("GGML_VK_FORCE_MMVQ")) {
-            device->mmvq_mode = 1;
-        }
-
-        return device;
-    }
-''';
-
-const _patchedDeviceInitPublish =
-    '''        } else if (getenv("GGML_VK_FORCE_MMVQ")) {
-            device->mmvq_mode = 1;
-        }
-
-        // publish the device only when it is fully built
-        vk_instance.devices[idx] = device;
-
-        return device;
-    }
-''';
-
-const _pinnedDeviceDestructor = '''vk_device_struct::~vk_device_struct() {
-    VK_LOG_DEBUG("destroy device " << name);
-''';
-
-const _patchedDeviceDestructor = '''vk_device_struct::~vk_device_struct() {
-    // the build failed before the device was created, nothing to destroy
-    if (device == VK_NULL_HANDLE) {
-        return;
-    }
-
-    VK_LOG_DEBUG("destroy device " << name);
-''';
 
 final class AndroidVulkanShaderOverlayException implements Exception {
   const AndroidVulkanShaderOverlayException(this.message);
@@ -386,10 +284,6 @@ String patchPinnedAndroidGgmlVulkan(String source) => _patchPinnedShader(
     _ShaderReplacement(_pinnedQ4KMatVecDispatch, _patchedQ4KMatVecDispatch),
     _ShaderReplacement(_pinnedQ4KMulMatAddFusion, _patchedQ4KMulMatAddFusion),
     _ShaderReplacement(_pinnedQ5KQ6KSupportsOp, _patchedQ5KQ6KSupportsOp),
-    _ShaderReplacement(_pinnedDeviceInitEntry, _patchedDeviceInitEntry),
-    _ShaderReplacement(_pinnedDeviceInitFence, _patchedDeviceInitFence),
-    _ShaderReplacement(_pinnedDeviceInitPublish, _patchedDeviceInitPublish),
-    _ShaderReplacement(_pinnedDeviceDestructor, _patchedDeviceDestructor),
   ],
 );
 

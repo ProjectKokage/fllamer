@@ -721,15 +721,22 @@ final class NativeEngineHandles {
       reasoningBudgetTokens: config.reasoningBudgetTokens,
       separateReasoning: config.separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
+      withOutputParser: true,
     );
-    return startCompletionStream(
-      rendered.prompt,
-      config,
-      media: prepared.media,
-      chatPlan: rendered.plan,
-      parseSpecial: true,
-      reusePromptPrefix: reusePromptPrefix,
-    );
+    try {
+      return startCompletionStream(
+        rendered.prompt,
+        config,
+        media: prepared.media,
+        chatPlan: rendered.plan,
+        parseSpecial: true,
+        reusePromptPrefix: reusePromptPrefix,
+      );
+    } catch (_) {
+      // No generation took the plan over.
+      rendered.plan?.close();
+      rethrow;
+    }
   }
 
   Float32List embedText(String text, EmbeddingConfig config) {
@@ -955,8 +962,9 @@ final class NativeStreamingGeneration {
 
   final NativeLlamaBridge bridge;
   final int chunkTokens;
+
+  /// The plan of a chat. This generation owns it and closes it.
   final NativeChatPlan? chatPlan;
-  NativeChatStreamParser? _streamParser;
   final LlamaToolCallingConfig toolCalling;
   final void Function()? _onClose;
   final ffi.Pointer<llama_dart_buffer> _out = calloc<llama_dart_buffer>();
@@ -1077,7 +1085,10 @@ final class NativeStreamingGeneration {
     if (generated.isEmpty && !isDone) {
       return (text: '', reasoningText: '', writesToolCall: false);
     }
-    final parser = _streamParser ??= NativeChatStreamParser(bridge, plan);
+    final parser = plan.outputParser;
+    if (parser == null) {
+      throw StateError('The chat plan was made without an output parser.');
+    }
     return parser.advance(_generated.toString(), isDone: isDone);
   }
 
@@ -1087,7 +1098,7 @@ final class NativeStreamingGeneration {
     }
     _closed = true;
     try {
-      _streamParser?.close();
+      chatPlan?.close();
       bridge.bindings.llama_dart_buffer_free(_out.ref.data);
       _out.ref.data = ffi.nullptr;
       _out.ref.size = 0;

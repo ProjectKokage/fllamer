@@ -133,15 +133,31 @@ void main() {
           '[GGML_TYPE_Q4_K][i]',
         ),
       );
+      // Q4_K weights are dequantized to f16: no Q4_K matrix kernel is
+      // looked up, and the second operand is neither quantized nor chosen
+      // among the Q4_K kernels.
       expect(
         patched,
         contains(
-          'if (ggml_vk_is_qualcomm_proprietary(ctx->device) && '
-          'src0->type == GGML_TYPE_Q4_K) {\n'
-          '        mmp_map = nullptr;\n'
-          '    }\n'
-          '    if (mmp_map == nullptr) {\n'
-          '        quantize_y = false;',
+          'const bool qualcomm_q4_k = '
+          'ggml_vk_is_qualcomm_proprietary(ctx->device) && '
+          'src0->type == GGML_TYPE_Q4_K;\n'
+          '    const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, '
+          'qualcomm_q4_k ? f16_type : src0->type, src1, f16_type,\n'
+          '                                        ggml_prec_get_acc(dst), '
+          'false, can_quantize_y && !qualcomm_q4_k, prefer_f16_b);',
+        ),
+      );
+      expect(
+        patched,
+        contains(
+          'const std::vector<vk_matmul_pipeline_pair>* mmp_map = '
+          'qualcomm_q4_k ? nullptr :\n'
+          '        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, '
+          'y_kernel_type, ggml_prec_get_acc(dst));\n'
+          '\n'
+          '    const bool qx_needs_dequant = mmp_map == nullptr || '
+          'x_non_contig;',
         ),
       );
       expect(
@@ -195,18 +211,16 @@ void main() {
       }
     });
 
-    test('publishes a Vulkan device only after it is fully built', () {
+    // The pin has upstream 47f5a64ae1 (#29766). Before it a device was
+    // published first, and a creation that threw left a device with a zeroed
+    // buffer type registered, which ended the next model load with SIGSEGV.
+    test('the pinned source publishes a Vulkan device only after it is fully '
+        'built, and the overlay keeps that', () {
       final source = vulkanFile.readAsStringSync();
       final patched = patchPinnedAndroidGgmlVulkan(source);
 
       const publish = 'vk_instance.devices[idx] = device;';
-      expect(
-        _occurrences(source, publish),
-        1,
-        reason:
-            'The pinned source publishes the device once; the overlay '
-            'only moves that statement.',
-      );
+      expect(_occurrences(source, publish), 1);
 
       final entry = patched.indexOf(
         'vk_device ggml_vk_get_device(size_t idx) {',

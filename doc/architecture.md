@@ -172,8 +172,11 @@ the text token history.
 
 Tool-aware chat requests are serialized to a narrow native chat-plan ABI. The
 bridge asks pinned `llama-common` to render the model's Jinja template and
-returns the prompt, grammar mode and triggers, generation prefix, parser,
-additional stops, and format metadata as an opaque plan. Completion validates
+returns the prompt, grammar mode and triggers, generation prefix, and
+additional stops as an opaque plan. The pinned output parser cannot be
+serialized, so for a chat that is generated the same call also returns the
+parser as a native handle, which the worker's plan owns and the streaming
+generation closes. Completion validates
 that the plan prompt matches the evaluated prompt, applies lazy grammar state,
 and merges template stops. The worker retains raw streamed text and invokes the
 pinned parser at completion, returning a normalized assistant message with

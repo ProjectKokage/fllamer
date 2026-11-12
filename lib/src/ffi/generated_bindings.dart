@@ -532,6 +532,7 @@ class LlamaDartBridgeBindings {
     ffi.Pointer<ffi.Uint8> request_data,
     int request_size,
     ffi.Pointer<llama_dart_buffer> out_plan,
+    ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>> out_parser,
   ) {
     return llama_dart_result.fromValue(
       _llama_dart_model_create_chat_plan(
@@ -539,6 +540,7 @@ class LlamaDartBridgeBindings {
         request_data,
         request_size,
         out_plan,
+        out_parser,
       ),
     );
   }
@@ -551,6 +553,7 @@ class LlamaDartBridgeBindings {
             ffi.Pointer<ffi.Uint8>,
             ffi.Size,
             ffi.Pointer<llama_dart_buffer>,
+            ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
           )
         >
       >('llama_dart_model_create_chat_plan');
@@ -562,76 +565,6 @@ class LlamaDartBridgeBindings {
               ffi.Pointer<ffi.Uint8>,
               int,
               ffi.Pointer<llama_dart_buffer>,
-            )
-          >();
-
-  llama_dart_result llama_dart_chat_parse_output(
-    ffi.Pointer<ffi.Uint8> plan_data,
-    int plan_size,
-    ffi.Pointer<ffi.Uint8> output_data,
-    int output_size,
-    ffi.Pointer<llama_dart_buffer> out_message_json,
-  ) {
-    return llama_dart_result.fromValue(
-      _llama_dart_chat_parse_output(
-        plan_data,
-        plan_size,
-        output_data,
-        output_size,
-        out_message_json,
-      ),
-    );
-  }
-
-  late final _llama_dart_chat_parse_outputPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.UnsignedInt Function(
-            ffi.Pointer<ffi.Uint8>,
-            ffi.Size,
-            ffi.Pointer<ffi.Uint8>,
-            ffi.Size,
-            ffi.Pointer<llama_dart_buffer>,
-          )
-        >
-      >('llama_dart_chat_parse_output');
-  late final _llama_dart_chat_parse_output = _llama_dart_chat_parse_outputPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<ffi.Uint8>,
-          int,
-          ffi.Pointer<ffi.Uint8>,
-          int,
-          ffi.Pointer<llama_dart_buffer>,
-        )
-      >();
-
-  llama_dart_result llama_dart_chat_stream_parser_create(
-    ffi.Pointer<ffi.Uint8> plan_data,
-    int plan_size,
-    ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>> out_parser,
-  ) {
-    return llama_dart_result.fromValue(
-      _llama_dart_chat_stream_parser_create(plan_data, plan_size, out_parser),
-    );
-  }
-
-  late final _llama_dart_chat_stream_parser_createPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.UnsignedInt Function(
-            ffi.Pointer<ffi.Uint8>,
-            ffi.Size,
-            ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
-          )
-        >
-      >('llama_dart_chat_stream_parser_create');
-  late final _llama_dart_chat_stream_parser_create =
-      _llama_dart_chat_stream_parser_createPtr
-          .asFunction<
-            int Function(
-              ffi.Pointer<ffi.Uint8>,
-              int,
               ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
             )
           >();
@@ -673,6 +606,44 @@ class LlamaDartBridgeBindings {
               ffi.Pointer<llama_dart_chat_stream_parser>,
               ffi.Pointer<ffi.Uint8>,
               int,
+              int,
+              ffi.Pointer<llama_dart_buffer>,
+            )
+          >();
+
+  llama_dart_result llama_dart_chat_stream_parser_parse_message(
+    ffi.Pointer<llama_dart_chat_stream_parser> parser,
+    ffi.Pointer<ffi.Uint8> output_data,
+    int output_size,
+    ffi.Pointer<llama_dart_buffer> out_message_json,
+  ) {
+    return llama_dart_result.fromValue(
+      _llama_dart_chat_stream_parser_parse_message(
+        parser,
+        output_data,
+        output_size,
+        out_message_json,
+      ),
+    );
+  }
+
+  late final _llama_dart_chat_stream_parser_parse_messagePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<llama_dart_chat_stream_parser>,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<llama_dart_buffer>,
+          )
+        >
+      >('llama_dart_chat_stream_parser_parse_message');
+  late final _llama_dart_chat_stream_parser_parse_message =
+      _llama_dart_chat_stream_parser_parse_messagePtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<llama_dart_chat_stream_parser>,
+              ffi.Pointer<ffi.Uint8>,
               int,
               ffi.Pointer<llama_dart_buffer>,
             )
@@ -2002,4 +1973,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 43;
+const int LLAMA_DART_ABI_VERSION = 44;

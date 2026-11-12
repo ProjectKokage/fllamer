@@ -53,14 +53,14 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
   file(SHA256 "${_overlay_mul_mm_comp}" _overlay_mul_mm_comp_sha256)
   if(
     NOT _overlay_mul_mm_comp_sha256 STREQUAL
-    "0a96c140a076875c6dc0e3fd0f29e5caceba7df8219da2b2067eb2cc1162af15"
+    "0cb7c1357320807f5c2570a8e4c1819774bce29a4771100cffed6d14b6601bc3"
   )
     message(FATAL_ERROR "Android Vulkan matrix shader views are not exact")
   endif()
   file(SHA256 "${_overlay_vulkan}" _overlay_vulkan_sha256)
   if(
     NOT _overlay_vulkan_sha256 STREQUAL
-    "1b0d7dbae0ab0c644bcd4ac06ddc345954216c381d50cc99ed007add66f4be00"
+    "4502ba0d68252e4d43ab8675adf0964a960fb4f8e9c7c0f3b6c276ad554bf383"
   )
     message(FATAL_ERROR "Android Vulkan native source overlay is not exact")
   endif()
@@ -158,21 +158,12 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
     [=[device->vendor_id == VK_VENDOR_ID_QUALCOMM &&]=]
     [=[device->driver_id == vk::DriverId::eQualcommProprietary;]=]
     [=[if (!ggml_vk_is_qualcomm_proprietary(device)) {]=]
-    [=[src0->type == GGML_TYPE_Q4_K) {
-        mmp_map = nullptr;
-    }
-    if (mmp_map == nullptr) {
-        quantize_y = false;]=]
+    [=[const bool qualcomm_q4_k = ggml_vk_is_qualcomm_proprietary(ctx->device) && src0->type == GGML_TYPE_Q4_K;]=]
+    [=[ggml_prec_get_acc(dst), false, can_quantize_y && !qualcomm_q4_k, prefer_f16_b);]=]
+    [=[const std::vector<vk_matmul_pipeline_pair>* mmp_map = qualcomm_q4_k ? nullptr :]=]
     [=[mul->src[0]->type == GGML_TYPE_Q4_K) {
             return false;]=]
     [=[src0_type == GGML_TYPE_Q5_K || src0_type == GGML_TYPE_Q6_K]=]
-    [=[static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);]=]
-    [=[// publish the device only when it is fully built
-        vk_instance.devices[idx] = device;]=]
-    [=[if (device == VK_NULL_HANDLE) {
-        return;
-    }]=]
   )
     string(
       FIND
