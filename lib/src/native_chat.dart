@@ -275,6 +275,14 @@ extension NativeChatOps on NativeLlamaBridge {
         );
         toolChoice = 'required';
     }
+    // The one rule for parsed streams: a plan whose stream is parsed is asked
+    // to separate reasoning, so its parser never reads reasoning as response
+    // text.
+    final parsesStream =
+        parseOutput ||
+        enableThinking != null ||
+        reasoningBudgetTokens != null ||
+        separateReasoning;
     final request = <String, Object?>{
       'messages': <Map<String, Object?>>[
         for (final message in messages) _chatMessageToOpenAiJson(message),
@@ -287,7 +295,7 @@ extension NativeChatOps on NativeLlamaBridge {
       'json_schema': ?jsonSchema,
       'enable_thinking': ?enableThinking,
       'reasoning_budget_tokens': ?reasoningBudgetTokens,
-      if (separateReasoning) 'separate_reasoning': true,
+      if (parsesStream) 'separate_reasoning': true,
     };
     final requestBytes = encodePromptJson(request, maximumPromptBytes);
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
@@ -338,11 +346,7 @@ extension NativeChatOps on NativeLlamaBridge {
         json: planJson,
         prompt: decoded['prompt'] as String,
         parseOutput: parseOutput,
-        parsesStream:
-            parseOutput ||
-            enableThinking != null ||
-            reasoningBudgetTokens != null ||
-            separateReasoning,
+        parsesStream: parsesStream,
         usedToolCallIds: <String>{
           for (final message in messages) ...<String>{
             for (final call in message.toolCalls)
@@ -774,9 +778,9 @@ final class NativeChatPlan {
   /// Whether streamed output is parsed into response text and reasoning.
   ///
   /// True for a plan that asked the template for tools, a thinking mode, a
-  /// reasoning budget or the separation itself. A plan made only because the
-  /// legacy formatter could not render the template streams its output as
-  /// generated.
+  /// reasoning budget or the separation itself. Such a plan was asked to
+  /// separate reasoning. A plan made only because the legacy formatter could
+  /// not render the template streams its output as generated.
   final bool parsesStream;
   final Set<String> usedToolCallIds;
 }
@@ -798,7 +802,9 @@ final class NativeChatStreamParser {
   /// whether a tool call grew.
   ///
   /// Before [isDone] the parser may withhold a trailing piece that could still
-  /// become template markup. The last call releases it.
+  /// become template markup. The last call delivers such a piece as response
+  /// text when the response text is what it was withheld from; a piece
+  /// withheld inside reasoning or a tool call is not delivered.
   ({String text, String reasoningText, bool writesToolCall}) advance(
     String output, {
     required bool isDone,

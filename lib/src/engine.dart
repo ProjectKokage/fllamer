@@ -653,13 +653,20 @@ final class GenerationChunk {
   /// Text this chunk adds to the response.
   ///
   /// A chat that asked its template for tools, a thinking mode or a reasoning
-  /// budget is read by the pinned upstream chat parser as it streams: this is
-  /// the response text alone, and reasoning arrives in [reasoningText]. Any
-  /// other chat, and raw completion, stream the output as generated.
+  /// budget, or that set `GenerationConfig.separateReasoning`, is read by the
+  /// pinned upstream chat parser as it streams: this is the response text
+  /// alone, and reasoning arrives in [reasoningText]. A trailing piece that
+  /// could still become a marker is held back until the next chunk, or until
+  /// the response ends. Any other chat, and raw completion, stream the output
+  /// as generated.
+  ///
+  /// The parsers of most templates expect one reasoning block. A model that
+  /// goes on reasoning after a reasoning budget closed its block, or that
+  /// opens another block later in its output, has that text delivered here.
   final String text;
 
   /// Reasoning this chunk adds, for a chat whose stream is parsed; otherwise
-  /// empty. It is never part of [text].
+  /// empty. The reasoning block the parser reads is never part of [text].
   final String reasoningText;
 
   /// Whether this chunk added to a tool call the response is writing, for a

@@ -334,6 +334,7 @@ if(BUILD_TESTING)
     LLAMA_DART_TEST_VOCAB_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/ggml-vocab-gpt-2.gguf"
     LLAMA_DART_TEST_QWEN_VOCAB_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/ggml-vocab-qwen35.gguf"
     LLAMA_DART_TEST_TOOL_VOCAB_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/ggml-vocab-gemma-4.gguf"
+    LLAMA_DART_TEST_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/models/templates"
   )
   add_test(NAME llama_dart_bridge_test COMMAND llama_dart_bridge_test)
   add_test(

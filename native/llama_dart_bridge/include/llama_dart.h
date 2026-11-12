@@ -241,8 +241,9 @@ typedef struct llama_dart_chat_template_capabilities {
   uint8_t supports_parallel_tool_calls;
   /*
    * Nonzero when the template, rendered with thinking on, marks its reasoning
-   * with a start marker and at least one end marker. Such a template accepts
-   * reasoning_budget_tokens in a chat request.
+   * with a start marker and at least one end marker, and the start marker
+   * occurs in the template's source or in the generation prompt it renders.
+   * Such a template accepts reasoning_budget_tokens in a chat request.
    */
   uint8_t marks_reasoning;
 } llama_dart_chat_template_capabilities;
@@ -429,12 +430,19 @@ llama_dart_model_get_chat_template_capabilities(
  * completion and llama_dart_chat_parse_output. A plan separates reasoning
  * from the response text when the request carries enable_thinking,
  * reasoning_budget_tokens, or "separate_reasoning": true, which asks for the
- * separation alone and leaves thinking at the upstream default.
+ * separation alone and leaves thinking at the upstream default. The parser
+ * of any other plan reads a reasoning block as response text, so a caller
+ * that parses a plan's output asks for the separation.
  */
 LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
     const llama_dart_model *model, const uint8_t *request_data,
     size_t request_size, llama_dart_buffer *out_plan);
 
+/*
+ * Parses output that has ended into an OpenAI-shaped assistant message. It
+ * reads the output as llama_dart_chat_stream_parser_parse does with a zero
+ * is_partial.
+ */
 LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_parse_output(
     const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
     size_t output_size, llama_dart_buffer *out_message_json);
@@ -451,13 +459,23 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_create(
 /*
  * Parses all output generated so far with the pinned upstream chat parser.
  * A nonzero is_partial accepts output that stops anywhere, and may withhold a
- * trailing piece that could still become template markup. The result is the
- * JSON object {"content": string, "reasoning_content": string,
- * "tool_call_bytes": integer}. The strings hold the whole text parsed so far,
- * not a delta; the integer is the size of the names and arguments of the
- * tool calls parsed so far. A partial result never ends inside a UTF-8
- * sequence: an incomplete trailing sequence is left for the next call.
- * Output may contain NUL bytes.
+ * trailing piece that could still become template markup. A zero is_partial
+ * states that the output has ended: output that is not a complete message
+ * fails, and a piece withheld from the end of the response text is part of
+ * the response text, because it can no longer become markup. A piece
+ * withheld inside a reasoning block or a tool call is not delivered.
+ *
+ * In a plan with thinking off whose generation prompt already holds an empty
+ * reasoning block, output that begins with the template's reasoning start
+ * marker opens a block of its own. That block is read as reasoning, not as
+ * response text.
+ *
+ * The result is the JSON object {"content": string,
+ * "reasoning_content": string, "tool_call_bytes": integer}. The strings hold
+ * the whole text parsed so far, not a delta; the integer is the size of the
+ * names and arguments of the tool calls parsed so far. A partial result never
+ * ends inside a UTF-8 sequence: an incomplete trailing sequence is left for
+ * the next call. Output may contain NUL bytes.
  */
 LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_parse(
     const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,

@@ -269,7 +269,29 @@ A chat request's `"separate_reasoning": true` selects reasoning-aware parsing
 without setting `enable_thinking`, which keeps upstream's default `true`.
 `llama_dart_chat_template_capabilities.marks_reasoning` reports whether the
 template, rendered with thinking on, exposes a usable reasoning start marker
-and end marker.
+and end marker, and uses the start marker in its source or in the generation
+prompt it renders. Upstream's LFM2, Kimi K2 and Ministral parsers name markers
+for templates that have none.
+
+The bridge reads chat output through one function for the stream and for the
+terminal message. Two of its steps depend on upstream details that a sync
+must recheck:
+
+- Upstream's `until` parser cuts text before a piece that could begin one of
+  its delimiters, also when the output has ended (`common/peg-parser.cpp`;
+  `common_chat_peg_parse` always parses leniently). For output that has
+  ended, the bridge parses once more with `common_peg_arena::parse`, finds
+  the last tagged AST node, and, when that node is response text and what
+  follows it begins an `until` delimiter and completes none, appends that
+  piece to the response text. This uses `common_peg_until_parser::delimiters`,
+  `common_peg_parse_context`, the AST node fields `tag` and `end`, and
+  `common_chat_peg_builder::CONTENT`.
+- Upstream prepends the plan's generation prompt to the output before
+  parsing. The bridge does that itself and leaves
+  `common_chat_parser_params::generation_prompt` empty, so that for a plan
+  with thinking off whose generation prompt holds a closed reasoning block,
+  output that begins with the template's start marker is parsed against the
+  generation prompt cut before that block.
 
 ABI 42 appends `maximum_token_piece_bytes` to `llama_dart_model_info`.
 Model loading scans each vocabulary ID once with pinned

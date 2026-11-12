@@ -15,7 +15,19 @@
   **Behavior change:** an application that removed reasoning or tool-call
   markup from `text` itself no longer receives it there. A chat that asks
   none of these, and raw completion, still stream the output as generated.
-  The terminal `assistantMessage` is unchanged.
+  The terminal `assistantMessage` of a tool chat is read the same way as its
+  stream, so for a tool chat that sets no thinking mode its text no longer
+  contains the reasoning block; before, the block and its markers were part
+  of that text. A trailing piece that could still become a marker, such as a
+  lone `<`, is held back while the response streams and delivered as
+  response text when the response ends, in the stream and in the terminal
+  message. With thinking off, a block that a model writes at the start of
+  its output although the generation prompt already holds an empty one is
+  read as reasoning. One case still reaches `text`: the parsers of most
+  templates expect one reasoning block, so a model that goes on reasoning
+  after a reasoning budget closed its block, or that opens another block
+  later in its output, has that text and its markers delivered as response
+  text.
   **Migration:** remove any filter that strips reasoning or tool-call markup
   from `GenerationChunk.text` on such chats; read reasoning from
   `reasoningText` if it is wanted. `LlamaChatTemplateCapabilities` has a new
@@ -26,8 +38,10 @@
   cannot render falls back to the legacy formatter with the output streamed
   as generated. `LlamaEngine.formatChat` and `countChatTokens` take the same
   flag. `LlamaChatTemplateCapabilities.marksReasoning` reports whether the
-  template marks its reasoning with a start and an end marker, which
-  `reasoningBudgetTokens` requires. ABI 43 adds
+  template itself marks its reasoning: upstream names a start and an end
+  marker for it, and the start marker occurs in the template's source or in
+  the generation prompt it renders. `reasoningBudgetTokens` works with such a
+  template. ABI 43 adds
   `llama_dart_chat_stream_parser_create`, `_parse` and `_free`, the chat
   request field `separate_reasoning`, and
   `llama_dart_chat_template_capabilities.marks_reasoning`.

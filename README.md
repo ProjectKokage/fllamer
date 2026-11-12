@@ -139,24 +139,36 @@ void main() async {
   generatable. Markerless templates retain template-only Off behavior.
   Thinking chat cannot be combined with an app-supplied raw
   grammar, JSON mode, or JSON schema because that constraint would also apply
-  to reasoning. Planner-owned tool grammar remains supported. Typed terminal
-  parsing keeps reasoning separate from the normalized assistant value. A
+  to reasoning. Planner-owned tool grammar remains supported. A
   chat that asks its template for tools, a thinking mode or a reasoning
-  budget, or that sets `GenerationConfig.separateReasoning`, is also read by
+  budget, or that sets `GenerationConfig.separateReasoning`, is read by
   the pinned upstream chat parser while it streams:
   `GenerationChunk.text` carries the response text alone,
   `GenerationChunk.reasoningText` carries the reasoning, and
   `GenerationChunk.writesToolCall` marks a chunk that added to a tool call.
-  No reasoning marker or tool-call markup reaches `text`, whatever markers the
-  template uses, including a block that the generation prompt opened or that
-  sampling closed. `separateReasoning` asks for this without choosing a
-  thinking mode; when the planner cannot render the model's template it uses
-  the legacy formatter and streams the output as generated.
+  The parser follows whatever markers the template uses. The reasoning block
+  and its markers stay out of `text` when the generation prompt opened the
+  block, when sampling closed it, and when a model writes a block at the
+  start of its output although thinking is off and the prompt already holds
+  an empty one. Tool-call markup stays out of `text` too. One case is not
+  covered: the parsers of most templates expect one reasoning block, so a
+  model that goes on reasoning after a reasoning budget closed its block, or
+  that opens a second block later in its output, has that text and its
+  markers delivered in `text`. A trailing piece that could still become a
+  marker, such as a lone `<`, is held back while the response streams and
+  delivered as response text when the response ends. The terminal
+  `assistantMessage` of a tool chat is read the same way, so its text is the
+  streamed `text` and holds no reasoning. `separateReasoning` asks for this
+  without choosing a thinking mode; when the planner cannot render the
+  model's template it uses the legacy formatter and streams the output as
+  generated.
   `LlamaChatTemplateCapabilities.marksReasoning` tells whether the template
-  marks its reasoning, which `reasoningBudgetTokens` needs. A chat that asks
-  none of these, and raw completion, stream the output as generated; it can
-  then contain reasoning, and apps must filter it before display, history, or
-  speech. Raw `complete()` and
+  itself marks its reasoning: upstream names a start and an end marker for
+  it, and the start marker occurs in the template's source or in the
+  generation prompt it renders. `reasoningBudgetTokens` works with such a
+  template. A chat that asks none of these, and raw completion, stream the
+  output as generated; it can then contain reasoning, and apps must filter it
+  before display, history, or speech. Raw `complete()` and
   `continueCompletion()` calls reject thinking controls.
   Chat may also set `reasoningBudgetTokens` to cap each reasoning block
   independently of the total `maxTokens`. A budget leaves

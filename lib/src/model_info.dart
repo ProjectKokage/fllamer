@@ -69,9 +69,10 @@ final class LlamaChatTemplateCapabilities {
   final bool supportsToolCalls;
   final bool supportsParallelToolCalls;
 
-  /// Whether the template, rendered with thinking on, marks its reasoning
-  /// with a start marker and an end marker. Such a template accepts
-  /// `GenerationConfig.reasoningBudgetTokens`.
+  /// Whether the template itself marks its reasoning: rendered with thinking
+  /// on it has a start marker and an end marker, and the start marker occurs
+  /// in the template's source or in the generation prompt it renders. Such a
+  /// template accepts `GenerationConfig.reasoningBudgetTokens`.
   final bool marksReasoning;
 }
 
