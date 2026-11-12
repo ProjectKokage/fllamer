@@ -1,5 +1,24 @@
 ## Unreleased
 
+- Synchronized `third_party/llama.cpp` to
+  `cd959bae99ff4bed22bef2604f45241c09bbb8c8` (upstream release `v0.9.0`, build
+  number 12110), 739 commits after `b11371`. No Dart API change. Upstream
+  reworked its chat API and removed the serialization of its output parser,
+  so a chat plan can no longer carry the parser. ABI 44:
+  `llama_dart_model_create_chat_plan` gains `out_parser` and returns the chat
+  stream parser of the plan's output from the same template application,
+  `llama_dart_chat_stream_parser_parse_message` reads the terminal assistant
+  message with it, and `llama_dart_chat_parse_output` and
+  `llama_dart_chat_stream_parser_create` are removed. Custom ABI 43 bridges
+  require a rebuild. **Behavior changes from upstream:** the reasoning of a
+  chat no longer ends with the whitespace that preceded its end marker, and
+  state saved by an earlier pin no longer restores, because upstream's
+  session format is now version 11. The Android Vulkan build-output overlay
+  is version 6: the Q4_K forced-dequantization replacement follows upstream's
+  rewritten kernel selection, and the port of upstream `47f5a64ae1` (#29766)
+  is dropped because the pin includes it. Version 6 cross-compiles for
+  arm64-v8a and x86_64 and has not run on a device.
+
 - Chat streams are parsed while they are generated. A chat that asks its
   template for tools, a thinking mode (`enableThinking` true or false) or a
   reasoning budget, or that sets the new `GenerationConfig.separateReasoning`,

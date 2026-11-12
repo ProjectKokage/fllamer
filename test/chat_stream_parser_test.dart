@@ -45,9 +45,10 @@ List<(String, String)>? _streamed(
             addAssistantPrompt: true,
             toolCalling: const LlamaToolCallingConfig(),
             enableThinking: enableThinking,
+            withOutputParser: true,
           )
           .plan!;
-      final parser = NativeChatStreamParser(bridge, plan);
+      final parser = plan.outputParser!;
       try {
         final output = StringBuffer();
         return <(String, String)>[
@@ -62,7 +63,7 @@ List<(String, String)>? _streamed(
             }(),
         ];
       } finally {
-        parser.close();
+        plan.close();
       }
     },
   );

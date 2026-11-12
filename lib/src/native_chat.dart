@@ -76,6 +76,7 @@ extension NativeChatOps on NativeLlamaBridge {
     int? maximumPromptBytes,
     int? reasoningBudgetTokens,
     bool separateReasoning = false,
+    bool withOutputParser = false,
   }) {
     final parseOutput = _requiresChatPlan(messages, toolCalling);
     final needsPlan =
@@ -94,6 +95,7 @@ extension NativeChatOps on NativeLlamaBridge {
           reasoningBudgetTokens: reasoningBudgetTokens,
           separateReasoning: separateReasoning,
           parseOutput: parseOutput,
+          withOutputParser: withOutputParser,
         );
         return NativeRenderedChat(prompt: plan.prompt, plan: plan);
       } on UnsupportedFeatureException {
@@ -131,6 +133,7 @@ extension NativeChatOps on NativeLlamaBridge {
         reasoningBudgetTokens: reasoningBudgetTokens,
         separateReasoning: separateReasoning,
         parseOutput: false,
+        withOutputParser: withOutputParser,
       );
       return NativeRenderedChat(prompt: plan.prompt, plan: plan);
     }
@@ -256,6 +259,7 @@ extension NativeChatOps on NativeLlamaBridge {
     int? reasoningBudgetTokens,
     bool separateReasoning = false,
     required bool parseOutput,
+    required bool withOutputParser,
   }) {
     var tools = toolCalling.toJson();
     final String toolChoice;
@@ -300,6 +304,13 @@ extension NativeChatOps on NativeLlamaBridge {
     final requestBytes = encodePromptJson(request, maximumPromptBytes);
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
     final out = calloc<llama_dart_buffer>();
+    // The pinned parser cannot be serialized, so a plan whose output will be
+    // parsed receives its parser from the call that makes the plan.
+    final parserOut = withOutputParser && parsesStream
+        ? calloc<ffi.Pointer<llama_dart_chat_stream_parser>>()
+        : ffi.nullptr;
+    NativeChatStreamParser? outputParser;
+    var planOwnsParser = false;
     try {
       requestPointer.asTypedList(requestBytes.length).setAll(0, requestBytes);
       check(
@@ -308,8 +319,17 @@ extension NativeChatOps on NativeLlamaBridge {
           requestPointer,
           requestBytes.length,
           out,
+          parserOut,
         ),
       );
+      if (parserOut != ffi.nullptr) {
+        if (parserOut.value == ffi.nullptr) {
+          throw const NativeBridgeException(
+            'Native bridge returned a null chat stream parser.',
+          );
+        }
+        outputParser = NativeChatStreamParser._(this, parserOut.value);
+      }
       final data = out.ref.data;
       final size = out.ref.size;
       if (data == ffi.nullptr || size == 0) {
@@ -342,11 +362,12 @@ extension NativeChatOps on NativeLlamaBridge {
           'The native bridge does not support bounded reasoning.',
         );
       }
-      return NativeChatPlan(
+      final plan = NativeChatPlan(
         json: planJson,
         prompt: decoded['prompt'] as String,
         parseOutput: parseOutput,
         parsesStream: parsesStream,
+        outputParser: outputParser,
         usedToolCallIds: <String>{
           for (final message in messages) ...<String>{
             for (final call in message.toolCalls)
@@ -355,43 +376,23 @@ extension NativeChatOps on NativeLlamaBridge {
           },
         },
       );
+      planOwnsParser = true;
+      return plan;
     } on FormatException catch (error) {
       throw NativeBridgeException(
         'Native bridge returned invalid chat plan JSON.',
         cause: error,
       );
     } finally {
+      if (!planOwnsParser) {
+        outputParser?.close();
+      }
       bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
-      calloc.free(requestPointer);
-    }
-  }
-
-  ffi.Pointer<llama_dart_chat_stream_parser> _createChatStreamParser(
-    NativeChatPlan plan,
-  ) {
-    final planBytes = utf8.encode(plan.json);
-    final planPointer = calloc<ffi.Uint8>(planBytes.length);
-    final out = calloc<ffi.Pointer<llama_dart_chat_stream_parser>>();
-    try {
-      planPointer.asTypedList(planBytes.length).setAll(0, planBytes);
-      check(
-        bindings.llama_dart_chat_stream_parser_create(
-          planPointer,
-          planBytes.length,
-          out,
-        ),
-      );
-      final parser = out.value;
-      if (parser == ffi.nullptr) {
-        throw const NativeBridgeException(
-          'Native bridge returned a null chat stream parser.',
-        );
+      if (parserOut != ffi.nullptr) {
+        calloc.free(parserOut);
       }
-      return parser;
-    } finally {
-      calloc.free(out);
-      calloc.free(planPointer);
+      calloc.free(requestPointer);
     }
   }
 
@@ -455,22 +456,22 @@ extension NativeChatOps on NativeLlamaBridge {
     String output,
     LlamaToolCallingConfig toolCalling,
   ) {
-    final planBytes = utf8.encode(plan.json);
+    final parser = plan.outputParser;
+    if (parser == null) {
+      throw StateError('The chat plan was made without an output parser.');
+    }
     final outputBytes = utf8.encode(output);
-    final planPointer = calloc<ffi.Uint8>(planBytes.length);
     final outputPointer = outputBytes.isEmpty
         ? ffi.nullptr
         : calloc<ffi.Uint8>(outputBytes.length);
     final out = calloc<llama_dart_buffer>();
     try {
-      planPointer.asTypedList(planBytes.length).setAll(0, planBytes);
       if (outputBytes.isNotEmpty) {
         outputPointer.asTypedList(outputBytes.length).setAll(0, outputBytes);
       }
       check(
-        bindings.llama_dart_chat_parse_output(
-          planPointer,
-          planBytes.length,
+        bindings.llama_dart_chat_stream_parser_parse_message(
+          parser._handle,
           outputPointer,
           outputBytes.length,
           out,
@@ -585,7 +586,6 @@ extension NativeChatOps on NativeLlamaBridge {
       if (outputPointer != ffi.nullptr) {
         calloc.free(outputPointer);
       }
-      calloc.free(planPointer);
     }
   }
 
@@ -768,9 +768,11 @@ final class NativeChatPlan {
     required this.prompt,
     required this.parseOutput,
     required this.parsesStream,
+    required this.outputParser,
     required Set<String> usedToolCallIds,
   }) : usedToolCallIds = Set<String>.unmodifiable(usedToolCallIds);
 
+  /// What a completion of the plan is given.
   final String json;
   final String prompt;
   final bool parseOutput;
@@ -782,17 +784,30 @@ final class NativeChatPlan {
   /// separate reasoning. A plan made only because the legacy formatter could
   /// not render the template streams its output as generated.
   final bool parsesStream;
+
+  /// The parser of this plan's output, for a plan that [parsesStream] and was
+  /// made to be generated from. The plan owns it until [close].
+  final NativeChatStreamParser? outputParser;
   final Set<String> usedToolCallIds;
+
+  void close() => outputParser?.close();
 }
 
 /// Separates a planned chat response's text from its reasoning while the
 /// response is generated, using the pinned upstream chat parser.
 final class NativeChatStreamParser {
-  NativeChatStreamParser(this._bridge, NativeChatPlan plan)
-    : _parser = _bridge._createChatStreamParser(plan);
+  NativeChatStreamParser._(this._bridge, this._parser);
 
   final NativeLlamaBridge _bridge;
   ffi.Pointer<llama_dart_chat_stream_parser> _parser;
+
+  ffi.Pointer<llama_dart_chat_stream_parser> get _handle {
+    if (_parser == ffi.nullptr) {
+      throw const ResourceDisposedException('Chat stream parser is closed.');
+    }
+    return _parser;
+  }
+
   String _text = '';
   String _reasoningText = '';
   int _toolCallBytes = 0;
@@ -809,12 +824,9 @@ final class NativeChatStreamParser {
     String output, {
     required bool isDone,
   }) {
-    if (_parser == ffi.nullptr) {
-      throw const ResourceDisposedException('Chat stream parser is closed.');
-    }
     final parsed = isDone
         ? _parseComplete(output)
-        : _bridge._parseChatStream(_parser, output, partial: true);
+        : _bridge._parseChatStream(_handle, output, partial: true);
     final text = _added(_text, parsed.text)!;
     final reasoningText = _added(_reasoningText, parsed.reasoningText)!;
     final writesToolCall = parsed.toolCallBytes > _toolCallBytes;
@@ -844,7 +856,7 @@ final class NativeChatStreamParser {
   ) {
     try {
       final complete = _bridge._parseChatStream(
-        _parser,
+        _handle,
         output,
         partial: false,
       );
@@ -856,7 +868,7 @@ final class NativeChatStreamParser {
     } on GenerationException {
       // The parser rejects the output.
     }
-    return _bridge._parseChatStream(_parser, output, partial: true);
+    return _bridge._parseChatStream(_handle, output, partial: true);
   }
 
   void close() {

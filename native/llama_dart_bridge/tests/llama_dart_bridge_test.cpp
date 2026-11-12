@@ -624,16 +624,30 @@ int main() {
   stale_buffer.data = reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1));
   stale_buffer.size = 123;
   assert(llama_dart_model_create_chat_plan(nullptr, nullptr, 0,
-                                           &stale_buffer) ==
+                                           &stale_buffer, nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(stale_buffer.data == nullptr);
   assert(stale_buffer.size == 0);
   stale_buffer.data = reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1));
   stale_buffer.size = 123;
-  const uint8_t invalid_chat_plan[] = {'{', '}'};
-  assert(llama_dart_chat_parse_output(
-             invalid_chat_plan, sizeof(invalid_chat_plan), nullptr, 0,
-             &stale_buffer) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  llama_dart_chat_stream_parser *stale_parser =
+      reinterpret_cast<llama_dart_chat_stream_parser *>(
+          static_cast<uintptr_t>(1));
+  assert(llama_dart_model_create_chat_plan(nullptr, nullptr, 0, &stale_buffer,
+                                           &stale_parser) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stale_parser == nullptr);
+  stale_parser = reinterpret_cast<llama_dart_chat_stream_parser *>(
+      static_cast<uintptr_t>(1));
+  assert(llama_dart_model_create_chat_plan(nullptr, nullptr, 0, nullptr,
+                                           &stale_parser) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stale_parser == nullptr);
+  stale_buffer.data = reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1));
+  stale_buffer.size = 123;
+  assert(llama_dart_chat_stream_parser_parse_message(
+             nullptr, nullptr, 0, &stale_buffer) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(stale_buffer.data == nullptr);
   assert(stale_buffer.size == 0);
   llama_dart_chat_template_capabilities stale_chat_capabilities{};
@@ -648,7 +662,8 @@ int main() {
   assert(stale_chat_capabilities.supports_tools == 0);
   assert(llama_dart_model_get_chat_template_capabilities(nullptr, nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
-  assert(llama_dart_chat_parse_output(nullptr, 0, nullptr, 0, nullptr) ==
+  assert(llama_dart_chat_stream_parser_parse_message(nullptr, nullptr, 0,
+                                                     nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   stale_buffer.data = reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1));
   stale_buffer.size = 123;
@@ -990,7 +1005,8 @@ int main() {
   assert(llama_dart_model_create_chat_plan(
              template_less_model,
              reinterpret_cast<const uint8_t *>(missing_template_request),
-             std::strlen(missing_template_request), &missing_template) ==
+             std::strlen(missing_template_request), &missing_template,
+             nullptr) ==
          LLAMA_DART_ERROR_UNSUPPORTED);
   assert(missing_template.data == nullptr);
   assert(missing_template.size == 0);
@@ -1168,23 +1184,42 @@ int main() {
   assert(chat_capabilities.supports_tool_calls == 0);
   assert(chat_capabilities.marks_reasoning == 0);
 
+  // The parser of a request's output, as plan creation hands it out.
+  const auto parser_of = [](const llama_dart_model *planned_model,
+                            const std::string &request) {
+    llama_dart_buffer plan{};
+    llama_dart_chat_stream_parser *parser = nullptr;
+    assert(llama_dart_model_create_chat_plan(
+               planned_model,
+               reinterpret_cast<const uint8_t *>(request.data()),
+               request.size(), &plan, &parser) == LLAMA_DART_SUCCESS);
+    assert(plan.data != nullptr);
+    assert(parser != nullptr);
+    llama_dart_buffer_free(plan.data);
+    return parser;
+  };
+
   const char simple_chat_request[] =
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true})";
   llama_dart_buffer chat_plan{};
   assert(llama_dart_model_create_chat_plan(
              model, reinterpret_cast<const uint8_t *>(simple_chat_request),
-             std::strlen(simple_chat_request), &chat_plan) ==
+             std::strlen(simple_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   assert(chat_plan.size > 0);
   const std::string chat_plan_text(
       reinterpret_cast<const char *>(chat_plan.data), chat_plan.size);
-  assert(chat_plan_text.find("\"version\":1") != std::string::npos);
+  assert(chat_plan_text.find("\"version\":2") != std::string::npos);
   assert(chat_plan_text.find("\"prompt\"") != std::string::npos);
+  // The pinned parser cannot be serialized, so it is no part of the plan.
+  assert(chat_plan_text.find("\"parser\"") == std::string::npos);
+  llama_dart_chat_stream_parser *simple_parser =
+      parser_of(model, simple_chat_request);
   const char assistant_output[] = "hello";
   llama_dart_buffer assistant_message{};
-  assert(llama_dart_chat_parse_output(
-             chat_plan.data, chat_plan.size,
+  assert(llama_dart_chat_stream_parser_parse_message(
+             simple_parser,
              reinterpret_cast<const uint8_t *>(assistant_output),
              std::strlen(assistant_output), &assistant_message) ==
          LLAMA_DART_SUCCESS);
@@ -1195,6 +1230,16 @@ int main() {
   assert(assistant_message_text.find("\"role\":\"assistant\"") !=
          std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
+  // A terminal message is text: NUL is rejected.
+  const uint8_t nul_output[] = {'a', 0, 'b'};
+  assistant_message = {reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1)),
+                       123};
+  assert(llama_dart_chat_stream_parser_parse_message(
+             simple_parser, nul_output, sizeof(nul_output),
+             &assistant_message) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(assistant_message.data == nullptr);
+  assert(assistant_message.size == 0);
+  llama_dart_chat_stream_parser_free(simple_parser);
   llama_dart_buffer_free(chat_plan.data);
 
   const char markerless_thinking_off_request[] =
@@ -1204,7 +1249,8 @@ int main() {
              model,
              reinterpret_cast<const uint8_t *>(
                  markerless_thinking_off_request),
-             std::strlen(markerless_thinking_off_request), &chat_plan) ==
+             std::strlen(markerless_thinking_off_request), &chat_plan,
+             nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   const std::string markerless_thinking_off_plan(
@@ -1220,7 +1266,8 @@ int main() {
              model,
              reinterpret_cast<const uint8_t *>(
                  reasoning_budget_without_thinking),
-             std::strlen(reasoning_budget_without_thinking), &chat_plan) ==
+             std::strlen(reasoning_budget_without_thinking), &chat_plan,
+             nullptr) ==
          LLAMA_DART_ERROR_UNSUPPORTED);
   assert(chat_plan.data == nullptr);
   assert(chat_plan.size == 0);
@@ -1230,7 +1277,7 @@ int main() {
   assert(llama_dart_model_create_chat_plan(
              model,
              reinterpret_cast<const uint8_t *>(non_integer_reasoning_budget),
-             std::strlen(non_integer_reasoning_budget), &chat_plan) ==
+             std::strlen(non_integer_reasoning_budget), &chat_plan, nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(chat_plan.data == nullptr);
   assert(chat_plan.size == 0);
@@ -1241,7 +1288,8 @@ int main() {
              model,
              reinterpret_cast<const uint8_t *>(
                  unsupported_reasoning_budget_template),
-             std::strlen(unsupported_reasoning_budget_template), &chat_plan) ==
+             std::strlen(unsupported_reasoning_budget_template), &chat_plan,
+             nullptr) ==
          LLAMA_DART_ERROR_UNSUPPORTED);
   assert(chat_plan.data == nullptr);
   assert(chat_plan.size == 0);
@@ -1250,7 +1298,7 @@ int main() {
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","description":"Look up local data","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}}],"tool_choice":"auto","parallel_tool_calls":true,"add_generation_prompt":true})";
   assert(llama_dart_model_create_chat_plan(
              model, reinterpret_cast<const uint8_t *>(tool_chat_request),
-             std::strlen(tool_chat_request), &chat_plan) ==
+             std::strlen(tool_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_ERROR_UNSUPPORTED);
   assert(chat_plan.data == nullptr);
   assert(chat_plan.size == 0);
@@ -1297,7 +1345,7 @@ int main() {
   assert(llama_dart_model_create_chat_plan(
              tool_model,
              reinterpret_cast<const uint8_t *>(simple_chat_request),
-             std::strlen(simple_chat_request), &chat_plan) ==
+             std::strlen(simple_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   assert(chat_plan.size > 0);
@@ -1313,7 +1361,8 @@ int main() {
              tool_model,
              reinterpret_cast<const uint8_t *>(
                  gemma4_reasoning_budget_request),
-             std::strlen(gemma4_reasoning_budget_request), &chat_plan) ==
+             std::strlen(gemma4_reasoning_budget_request), &chat_plan,
+             nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   const std::string gemma4_reasoning_chat_plan(
@@ -1334,7 +1383,7 @@ int main() {
   assert(llama_dart_model_create_chat_plan(
              tool_model,
              reinterpret_cast<const uint8_t *>(gemma4_thinking_off_request),
-             std::strlen(gemma4_thinking_off_request), &chat_plan) ==
+             std::strlen(gemma4_thinking_off_request), &chat_plan, nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   const std::string gemma4_thinking_off_plan(
@@ -1349,12 +1398,9 @@ int main() {
              R"("reasoning_budget_tokens":0)") != std::string::npos);
 
   // The stream parser separates reasoning from the response text for output
-  // that stops anywhere, using the plan's own parser.
-  llama_dart_chat_stream_parser *stream_parser = nullptr;
-  assert(llama_dart_chat_stream_parser_create(
-             chat_plan.data, chat_plan.size, &stream_parser) ==
-         LLAMA_DART_SUCCESS);
-  assert(stream_parser != nullptr);
+  // that stops anywhere, using the request's own parser.
+  llama_dart_chat_stream_parser *stream_parser =
+      parser_of(tool_model, gemma4_thinking_off_request);
   const auto parse_stream = [&](const char *output, uint8_t is_partial) {
     llama_dart_buffer parts{};
     assert(llama_dart_chat_stream_parser_parse(
@@ -1410,16 +1456,13 @@ int main() {
              reinterpret_cast<const uint8_t *>(
                  gemma4_separate_reasoning_request),
              std::strlen(gemma4_separate_reasoning_request),
-             &separated_plan) == LLAMA_DART_SUCCESS);
+             &separated_plan, nullptr) == LLAMA_DART_SUCCESS);
   const std::string separated_plan_json(
       reinterpret_cast<const char *>(separated_plan.data),
       separated_plan.size);
   assert(separated_plan_json.find(R"("reasoning_budget_tokens":-1)") !=
          std::string::npos);
-  stream_parser = nullptr;
-  assert(llama_dart_chat_stream_parser_create(
-             separated_plan.data, separated_plan.size, &stream_parser) ==
-         LLAMA_DART_SUCCESS);
+  stream_parser = parser_of(tool_model, gemma4_separate_reasoning_request);
   assert(parse_stream("<|channel>thought\nweigh<channel|>answer", 1) ==
          R"({"content":"answer","reasoning_content":"weigh","tool_call_bytes":0})");
   llama_dart_chat_stream_parser_free(stream_parser);
@@ -1432,16 +1475,21 @@ int main() {
              reinterpret_cast<const uint8_t *>(
                  invalid_separate_reasoning_request),
              std::strlen(invalid_separate_reasoning_request),
-             &separated_plan) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
+             &separated_plan, nullptr) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
   llama_dart_chat_stream_parser_free(nullptr);
+  // A request that fails to plan hands out no parser.
   stream_parser = reinterpret_cast<llama_dart_chat_stream_parser *>(
       static_cast<uintptr_t>(1));
-  assert(llama_dart_chat_stream_parser_create(
-             invalid_chat_plan, sizeof(invalid_chat_plan), &stream_parser) ==
+  separated_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 invalid_separate_reasoning_request),
+             std::strlen(invalid_separate_reasoning_request),
+             &separated_plan, &stream_parser) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(separated_plan.data == nullptr);
   assert(stream_parser == nullptr);
-  assert(llama_dart_chat_stream_parser_create(nullptr, 0, nullptr) ==
-         LLAMA_DART_ERROR_INVALID_ARGUMENT);
   llama_dart_buffer stream_parts{
       reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1)), 123};
   assert(llama_dart_chat_stream_parser_parse(nullptr, nullptr, 0, 1,
@@ -1477,7 +1525,7 @@ int main() {
   assert(llama_dart_model_create_chat_plan(
              tool_model,
              reinterpret_cast<const uint8_t *>(required_tool_chat_request),
-             std::strlen(required_tool_chat_request), &chat_plan) ==
+             std::strlen(required_tool_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   const std::string gemma4_tool_chat_plan(
@@ -1487,8 +1535,10 @@ int main() {
   const char valid_gemma4_call[] =
       R"(<|tool_call>call:lookup{query: <|"|>alpha<|"|>}<tool_call|>)";
   assistant_message = {};
-  assert(llama_dart_chat_parse_output(
-             chat_plan.data, chat_plan.size,
+  llama_dart_chat_stream_parser *tool_stream_parser =
+      parser_of(tool_model, required_tool_chat_request);
+  assert(llama_dart_chat_stream_parser_parse_message(
+             tool_stream_parser,
              reinterpret_cast<const uint8_t *>(valid_gemma4_call),
              std::strlen(valid_gemma4_call), &assistant_message) ==
          LLAMA_DART_SUCCESS);
@@ -1501,10 +1551,6 @@ int main() {
 
   // A tool call that is still being written is reported by size, not as
   // response text.
-  llama_dart_chat_stream_parser *tool_stream_parser = nullptr;
-  assert(llama_dart_chat_stream_parser_create(
-             chat_plan.data, chat_plan.size, &tool_stream_parser) ==
-         LLAMA_DART_SUCCESS);
   const char partial_gemma4_call[] = R"(<|tool_call>call:lookup{query: <|"|>al)";
   llama_dart_buffer tool_stream_parts{};
   assert(llama_dart_chat_stream_parser_parse(
@@ -1519,7 +1565,6 @@ int main() {
   assert(tool_stream_json.find(R"("tool_call_bytes":0)") ==
          std::string::npos);
   llama_dart_buffer_free(tool_stream_parts.data);
-  llama_dart_chat_stream_parser_free(tool_stream_parser);
 
   // The pristine upstream Gemma 4 grammar accepts generic dictionary members.
   // The checked Dart wrapper validates this parsed call against the matching
@@ -1527,8 +1572,8 @@ int main() {
   const char schema_invalid_gemma4_call[] =
       R"(<|tool_call>call:lookup{markdown: <|"|>alpha<|"|>}<tool_call|>)";
   assistant_message = {};
-  assert(llama_dart_chat_parse_output(
-             chat_plan.data, chat_plan.size,
+  assert(llama_dart_chat_stream_parser_parse_message(
+             tool_stream_parser,
              reinterpret_cast<const uint8_t *>(schema_invalid_gemma4_call),
              std::strlen(schema_invalid_gemma4_call), &assistant_message) ==
          LLAMA_DART_SUCCESS);
@@ -1537,6 +1582,7 @@ int main() {
       assistant_message.size);
   assert(schema_invalid_gemma4_message.find("markdown") != std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
+  llama_dart_chat_stream_parser_free(tool_stream_parser);
   llama_dart_buffer_free(chat_plan.data);
 
   const char marker_chat_request[] =
@@ -1545,7 +1591,7 @@ int main() {
   assert(llama_dart_model_create_chat_plan(
              tool_model,
              reinterpret_cast<const uint8_t *>(marker_chat_request),
-             std::strlen(marker_chat_request), &chat_plan) ==
+             std::strlen(marker_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   assert(chat_plan.size > 0);
@@ -1572,14 +1618,14 @@ int main() {
              reinterpret_cast<const uint8_t *>(
                  simple_chat_request_without_generation_prompt),
              std::strlen(simple_chat_request_without_generation_prompt),
-             &chat_plan) == LLAMA_DART_SUCCESS);
+             &chat_plan, nullptr) == LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   assert(chat_plan.size > 0);
   llama_dart_buffer_free(chat_plan.data);
 
   assert(llama_dart_model_create_chat_plan(
              tool_model, reinterpret_cast<const uint8_t *>(tool_chat_request),
-             std::strlen(tool_chat_request), &chat_plan) ==
+             std::strlen(tool_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_SUCCESS);
   assert(chat_plan.data != nullptr);
   assert(chat_plan.size > 0);
@@ -1589,8 +1635,9 @@ int main() {
   const char tool_output[] =
       R"(<|tool_call>call:lookup{query:<|"|>alpha<|"|>}<tool_call|>)";
   assistant_message = {};
-  assert(llama_dart_chat_parse_output(
-             chat_plan.data, chat_plan.size,
+  tool_stream_parser = parser_of(tool_model, tool_chat_request);
+  assert(llama_dart_chat_stream_parser_parse_message(
+             tool_stream_parser,
              reinterpret_cast<const uint8_t *>(tool_output),
              std::strlen(tool_output), &assistant_message) ==
          LLAMA_DART_SUCCESS);
@@ -1601,29 +1648,34 @@ int main() {
   assert(tool_message_text.find("lookup") != std::string::npos);
   assert(tool_message_text.find("alpha") != std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
+  llama_dart_chat_stream_parser_free(tool_stream_parser);
   llama_dart_buffer_free(chat_plan.data);
 
-  // What a plan's parser reads from generated output, while it streams
-  // (is_partial 1), when it has ended (is_partial 0), and as the terminal
-  // message.
+  // What the parser of a planned request reads from generated output, while
+  // it streams (is_partial 1), when it has ended (is_partial 0), and as the
+  // terminal message.
+  struct planned_chat {
+    const llama_dart_model *model;
+    std::string request;
+    // The plan a completion of the request is given.
+    std::string json;
+  };
   const auto plan_of = [](const llama_dart_model *planned_model,
                           const std::string &request) {
     llama_dart_buffer plan{};
     assert(llama_dart_model_create_chat_plan(
                planned_model,
                reinterpret_cast<const uint8_t *>(request.data()),
-               request.size(), &plan) == LLAMA_DART_SUCCESS);
+               request.size(), &plan, nullptr) == LLAMA_DART_SUCCESS);
     const std::string json(reinterpret_cast<const char *>(plan.data),
                            plan.size);
     llama_dart_buffer_free(plan.data);
-    return json;
+    return planned_chat{planned_model, request, json};
   };
-  const auto read_stream = [](const std::string &plan,
-                              const std::string &output, uint8_t is_partial) {
-    llama_dart_chat_stream_parser *parser = nullptr;
-    assert(llama_dart_chat_stream_parser_create(
-               reinterpret_cast<const uint8_t *>(plan.data()), plan.size(),
-               &parser) == LLAMA_DART_SUCCESS);
+  const auto read_stream = [&](const planned_chat &plan,
+                               const std::string &output, uint8_t is_partial) {
+    llama_dart_chat_stream_parser *parser =
+        parser_of(plan.model, plan.request);
     llama_dart_buffer parts{};
     assert(llama_dart_chat_stream_parser_parse(
                parser, reinterpret_cast<const uint8_t *>(output.data()),
@@ -1634,16 +1686,18 @@ int main() {
     llama_dart_chat_stream_parser_free(parser);
     return json;
   };
-  const auto read_message = [](const std::string &plan,
-                               const std::string &output) {
+  const auto read_message = [&](const planned_chat &plan,
+                                const std::string &output) {
+    llama_dart_chat_stream_parser *parser =
+        parser_of(plan.model, plan.request);
     llama_dart_buffer message{};
-    assert(llama_dart_chat_parse_output(
-               reinterpret_cast<const uint8_t *>(plan.data()), plan.size(),
-               reinterpret_cast<const uint8_t *>(output.data()),
+    assert(llama_dart_chat_stream_parser_parse_message(
+               parser, reinterpret_cast<const uint8_t *>(output.data()),
                output.size(), &message) == LLAMA_DART_SUCCESS);
     const std::string json(reinterpret_cast<const char *>(message.data),
                            message.size);
     llama_dart_buffer_free(message.data);
+    llama_dart_chat_stream_parser_free(parser);
     return json;
   };
   const auto parts = [](const char *content, const char *reasoning,
@@ -1664,7 +1718,7 @@ int main() {
 
   // A tool chat that asks for the separation gets its reasoning apart from
   // the response text and from the call, in the stream and in the message.
-  const std::string gemma4_tools_plan =
+  const planned_chat gemma4_tools_plan =
       plan_of(tool_model, chat_request(true, R"(,"separate_reasoning":true)"));
   const char gemma4_reasoned_call[] =
       "<|channel>thought\nweigh<channel|>"
@@ -1684,7 +1738,7 @@ int main() {
 
   // While output streams, a trailing piece that could still become a marker
   // is withheld. Once the output has ended it cannot, so it is response text.
-  const std::string gemma4_off_plan =
+  const planned_chat gemma4_off_plan =
       plan_of(tool_model, chat_request(false, R"(,"enable_thinking":false)"));
   assert(read_stream(gemma4_off_plan, "I'm fine >_<", 1) ==
          parts("I'm fine >_", "", 0));
@@ -1745,26 +1799,32 @@ int main() {
   llama_dart_model *qwen35_model =
       load_with_template(LLAMA_DART_TEST_QWEN_VOCAB_MODEL, "Qwen3.5-4B.jinja");
   assert(marks_reasoning(qwen35_model));
-  const std::string qwen35_tools_plan = plan_of(
+  const planned_chat qwen35_tools_plan = plan_of(
       qwen35_model, chat_request(true, R"(,"separate_reasoning":true)"));
-  assert(qwen35_tools_plan.find(R"(<think>\n","thinking_start_tag")") !=
+  assert(qwen35_tools_plan.json.find(R"(<think>\n","thinking_start_tag")") !=
          std::string::npos);
-  // The response text holds nothing of the block the prompt opened.
+  // The response text holds nothing of the block the prompt opened. The
+  // pinned parser leaves out the whitespace before the end marker.
   assert(read_stream(qwen35_tools_plan, "weigh\n</think>\n\nHi <", 1) ==
-         parts("Hi ", R"(weigh\n)", 0));
+         parts("Hi ", "weigh", 0));
   assert(read_stream(qwen35_tools_plan, "weigh\n</think>\n\nHi <", 0) ==
-         parts("Hi <", R"(weigh\n)", 0));
+         parts("Hi <", "weigh", 0));
+  // While the block is open that whitespace may still be followed by text.
+  assert(read_stream(qwen35_tools_plan, "weigh\n", 1) ==
+         parts("", "weigh", 0));
+  assert(read_stream(qwen35_tools_plan, "weigh\nmore", 1) ==
+         parts("", R"(weigh\nmore)", 0));
   assert(read_message(qwen35_tools_plan, "weigh\n</think>\n\nHi <")
              .find(R"("content":"Hi <")") != std::string::npos);
 
   // With thinking off the prompt's empty block is the one block the parser
   // expects. A model that opens a block of its own has it closed at once by
   // the zero reasoning budget; that block is reasoning too, not response text.
-  const std::string qwen35_off_plan = plan_of(
+  const planned_chat qwen35_off_plan = plan_of(
       qwen35_model, chat_request(false, R"(,"enable_thinking":false)"));
-  assert(qwen35_off_plan.find(R"(<think>\n\n</think>\n\n","thinking_start_tag")") !=
+  assert(qwen35_off_plan.json.find(R"(<think>\n\n</think>\n\n","thinking_start_tag")") !=
          std::string::npos);
-  assert(qwen35_off_plan.find(R"("reasoning_budget_tokens":0)") !=
+  assert(qwen35_off_plan.json.find(R"("reasoning_budget_tokens":0)") !=
          std::string::npos);
   assert(read_stream(qwen35_off_plan, "Hello", 1) == parts("Hello", "", 0));
   assert(read_stream(qwen35_off_plan, "<thi", 1) == parts("", "", 0));
@@ -1777,7 +1837,7 @@ int main() {
          parts("Hello", "", 0));
   assert(read_stream(qwen35_off_plan, "<think>\n</think>\n\nHello", 0) ==
          parts("Hello", "", 0));
-  const std::string qwen35_off_tools_plan = plan_of(
+  const planned_chat qwen35_off_tools_plan = plan_of(
       qwen35_model, chat_request(true, R"(,"enable_thinking":false)"));
   assert(read_stream(qwen35_off_tools_plan, "<think>\n</think>\n\nHello <", 0) ==
          parts("Hello <", "", 0));
@@ -1816,7 +1876,7 @@ int main() {
   for (const char *template_name :
        {"openbmb-MiniCPM5-1B.jinja", "inclusionai-ling-3.0-flash.jinja"}) {
     llama_dart_model *tagged_model = template_model(template_name);
-    const std::string tagged_plan =
+    const planned_chat tagged_plan =
         plan_of(tagged_model, chat_request(true, off_with_tools));
     assert(has(read_stream(tagged_plan, "I'm fine >_<", 1),
                R"("content":"I'm fine >_")"));
@@ -1827,7 +1887,7 @@ int main() {
     llama_dart_model_free(tagged_model);
   }
   llama_dart_model *qwen3_coder_model = template_model("Qwen3-Coder.jinja");
-  const std::string qwen3_coder_plan =
+  const planned_chat qwen3_coder_plan =
       plan_of(qwen3_coder_model, chat_request(true, separated));
   assert(has(read_stream(qwen3_coder_plan, "#include <func", 1),
              R"("content":"#include ")"));
@@ -1849,7 +1909,7 @@ int main() {
   llama_dart_model *deepseek_model =
       template_model("deepseek-ai-DeepSeek-V3.2.jinja");
   // Whitespace the parser skipped is not text it withheld.
-  const std::string deepseek_schema_plan = plan_of(
+  const planned_chat deepseek_schema_plan = plan_of(
       deepseek_model,
       chat_request(
           false,
@@ -1858,7 +1918,7 @@ int main() {
                          "weigh</think>```json\n{\"a\":1}\n", 0),
              R"("content":"{\"a\":1}","reasoning_content")"));
   // Output that ends inside a character still reads as valid text.
-  const std::string deepseek_tools_plan =
+  const planned_chat deepseek_tools_plan =
       plan_of(deepseek_model, chat_request(true, separated));
   assert(read_stream(deepseek_tools_plan, "weigh</think>Hello\n\n<\xEF", 0) ==
          parts(R"(Hello\n\n<)", "weigh", 0));
@@ -1866,7 +1926,7 @@ int main() {
              R"("content":"Hello\n\n<")"));
   // A piece that could still close the reasoning block is never read as
   // response text, and is reasoning once the output has ended.
-  const std::string deepseek_plan =
+  const planned_chat deepseek_plan =
       plan_of(deepseek_model, chat_request(false, separated));
   assert(read_stream(deepseek_plan, "weigh", 1) == parts("", "weigh", 0));
   assert(read_stream(deepseek_plan, "weigh<", 1) == parts("", "weigh", 0));
@@ -1875,7 +1935,7 @@ int main() {
 
   llama_dart_model *ling3_model =
       template_model("inclusionai-ling-3.0-flash.jinja");
-  const std::string ling3_plan =
+  const planned_chat ling3_plan =
       plan_of(ling3_model, chat_request(false, R"(,"enable_thinking":true)"));
   assert(read_stream(ling3_plan, "weigh <t", 1) == parts("", "weigh ", 0));
   assert(read_stream(ling3_plan, "weigh <table> more</think>Hi", 1) ==
@@ -1885,7 +1945,7 @@ int main() {
 
   // Ended output is not rejected for its last piece: the piece is text.
   llama_dart_model *kimi_k3_model = template_model("Kimi-K3.jinja");
-  const std::string kimi_k3_plan =
+  const planned_chat kimi_k3_plan =
       plan_of(kimi_k3_model, chat_request(false, separated));
   assert(has(read_stream(kimi_k3_plan,
                          "weigh<|close|>think<|sep|>\n\nHello <|o", 0),
@@ -1897,7 +1957,7 @@ int main() {
   const char malformed_chat_request[] = "{";
   assert(llama_dart_model_create_chat_plan(
              model, reinterpret_cast<const uint8_t *>(malformed_chat_request),
-             std::strlen(malformed_chat_request), &chat_plan) ==
+             std::strlen(malformed_chat_request), &chat_plan, nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(chat_plan.data == nullptr);
   assert(chat_plan.size == 0);

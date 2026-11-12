@@ -285,6 +285,33 @@ Current verification:
   `llama_dart_model_load`). With version 5 the same sequence loads and
   generates twice. The emulator exercises only the failed-creation path; no
   device with a working Vulkan driver has run version 5.
+- On 2026-11-12 the upstream pin moved from `b11371` to release `v0.9.0`
+  (`cd959bae99ff4bed22bef2604f45241c09bbb8c8`) and the overlay became
+  version 6 ([upstream sync](upstream_sync.md)). It pins these normalized
+  source/output SHA-256 pairs: `dequant_funcs.glsl` and `mul_mm_funcs.glsl`
+  as before, `mul_mm.comp`
+  `81db472d38b89c8555e3ee6facfec2d1140ab422472b8f8c34cdd56fd248ef9b` /
+  `0cb7c1357320807f5c2570a8e4c1819774bce29a4771100cffed6d14b6601bc3`, and
+  `ggml-vulkan.cpp`
+  `ab0ad31fea14e43f3e7762601f2164ee57629191a082ef86f5ac0e95430fc47d` /
+  `4502ba0d68252e4d43ab8675adf0964a960fb4f8e9c7c0f3b6c276ad554bf383`.
+  Direct offline CMake cross-compiles of the opt-in Vulkan bridge, with an
+  overlay prepared by the hook's own code, passed for `arm64-v8a` and
+  `x86_64` at Android API 28 from macOS 27.0.1 with CMake 4.4.5, NDK
+  `30.0.14904198`, bundled Vulkan-Headers 1.4.357.0 and that NDK's glslc
+  v2022.3. Both libraries have 16 KiB `LOAD` alignment, depend only on
+  `libm.so`, `libdl.so`, `libvulkan.so` and `libc.so`, and embed both
+  safe-policy markers. This is compile and link evidence only: no Android
+  device or emulator has run this pin, and the Qualcomm K-quant policy has
+  not been checked against a CPU oracle since `b10217`. On the macOS arm64
+  host (Metal) the pin passed `ctest` (3/3), `dart test` (220 tests, 12
+  optional-fixture skips), the `LLAMA_DART_TEST_MODEL` tests with Qwen3.5 4B
+  Q4_K_M, and the example's `flutter test`. With the same model,
+  `LlamaEngine.chat` streamed thinking off, thinking on, a 24-token
+  reasoning budget and a tool call: reasoning and response text arrived
+  apart, and the terminal message carried the parsed call. The
+  fixture-pinned tool, multimodal, audio, embedding, reranker, LoRA, MTP and
+  speculative tests were not run.
 - Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
   Android's explicit opt-in, bundled Vulkan-Hpp pin, selected-NDK `glslc`,
   CPU-only overrides, target-specific header-root propagation, desktop
