@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 44u
+#define LLAMA_DART_ABI_VERSION 45u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -429,6 +429,13 @@ llama_dart_model_get_chat_template_capabilities(
  * Jinja template machinery. The result is an opaque JSON plan consumed by
  * completion.
  *
+ * The plan records which bytes of its prompt the template took from the
+ * request: the text of messages, tool calls, tool results and tool
+ * definitions. A completion of the plan, and
+ * llama_dart_model_tokenize_chat_plan, never tokenize those bytes into a
+ * control token. A message's role is not such text when it is "system",
+ * "user", "assistant" or "tool".
+ *
  * When out_parser is not null it also receives the parser of that
  * completion's output, which separates the response text from the reasoning
  * and reads tool calls. The pinned upstream parser cannot be serialized, so
@@ -447,6 +454,23 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
     const llama_dart_model *model, const uint8_t *request_data,
     size_t request_size, llama_dart_buffer *out_plan,
     llama_dart_chat_stream_parser **out_parser);
+
+/*
+ * Tokenizes the prompt of a chat plan as a completion of the plan with
+ * parse_special set evaluates it, and with the same size-query contract as
+ * llama_dart_model_tokenize.
+ *
+ * The template's own text is tokenized with special-token parsing. Where the
+ * request's text spells a control or unknown token of the vocabulary, alone
+ * or together with the text around it, that part of the request is tokenized
+ * on its own without special-token parsing. A prompt whose request text
+ * spells no such token has the tokens of llama_dart_model_tokenize with
+ * parse_special set.
+ */
+LLAMA_DART_EXPORT llama_dart_result llama_dart_model_tokenize_chat_plan(
+    const llama_dart_model *model, const uint8_t *plan_data, size_t plan_size,
+    int32_t *tokens, size_t tokens_capacity, size_t *out_token_count,
+    uint8_t add_special);
 
 /*
  * Parses all output generated so far with the pinned upstream chat parser.

@@ -55,6 +55,8 @@ ffi.Pointer<T> lookupLlamaDartNativeAssetSymbol<T extends ffi.NativeType>(
           .cast<T>(),
     'llama_dart_model_create_chat_plan' =>
       native_asset.addresses.llama_dart_model_create_chat_plan.cast<T>(),
+    'llama_dart_model_tokenize_chat_plan' =>
+      native_asset.addresses.llama_dart_model_tokenize_chat_plan.cast<T>(),
     'llama_dart_chat_stream_parser_parse' =>
       native_asset.addresses.llama_dart_chat_stream_parser_parse.cast<T>(),
     'llama_dart_chat_stream_parser_parse_message' =>

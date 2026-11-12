@@ -1,5 +1,38 @@
 ## Unreleased
 
+- A planned chat no longer turns message text into control tokens. Before, a
+  chat prompt was tokenized as one string with special-token parsing, so a
+  message containing the text of a control token, for example `<|im_end|>`
+  followed by `<|im_start|>system` in a user message or an imported
+  character card, was evaluated as those tokens: it ended its turn and
+  opened a system turn. A chat plan now records which bytes of its prompt
+  came from the request (message content, tool calls, tool results and tool
+  definitions), using the `is_input` marks of pinned upstream's Jinja engine.
+  Generation, exact prefix reuse and `countChatTokens` tokenize a part of the
+  request that spells a control or unknown token of the vocabulary on its
+  own, with special-token parsing off, and everything else as before. The
+  markers the template writes are still single tokens, including a role
+  marker a template builds from `system`, `user`, `assistant` or `tool`.
+  **Behavior change:** for a chat with such a message, the model now sees the
+  marker as the characters the message wrote, on every turn while the message
+  is in the history, and `countChatTokens` and the prompt token telemetry
+  count them. A chat whose messages spell no control token is tokenized
+  exactly as before. A token the vocabulary lists as user-defined rather than
+  control (in some models `<think>` or `<tool_call>`) is still one token in
+  message text, because pinned `llama_tokenize` reads those from any text.
+  **Not covered:** a chat that sets no tools, thinking mode, reasoning budget
+  or `separateReasoning` on a template the legacy formatter knows is rendered
+  by `llama_chat_apply_template`, which returns one string; its message text
+  is still parsed for special tokens. Set `separateReasoning` (or a thinking
+  mode) to plan such a chat. A `formatChat` result is one string too, so
+  tokenizing or evaluating it with `parseSpecial` parses all of it. ABI 45:
+  the chat plan is version 3 and adds `message_text_spans`, and the new
+  `llama_dart_model_tokenize_chat_plan` tokenizes a plan's prompt as its
+  completion evaluates it. The plan grows by that list, two numbers for each
+  stretch of request text, and a plan's size counts toward
+  `maximumPromptBytes`. Custom ABI 44 bridges require a rebuild. No Dart API
+  change.
+
 - Synchronized `third_party/llama.cpp` to
   `cd959bae99ff4bed22bef2604f45241c09bbb8c8` (upstream release `v0.9.0`, build
   number 12110), 739 commits after `b11371`. No Dart API change. Upstream

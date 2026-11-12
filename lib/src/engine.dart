@@ -714,6 +714,16 @@ final class LlamaEngine {
   /// text KV state only if its committed token history is an exact prefix of
   /// the newly rendered and tokenized full prompt. A mismatch resets the
   /// session and evaluates the full prompt. Media prompts are not eligible.
+  ///
+  /// A chat that sets tools, a thinking mode, a reasoning budget or
+  /// [GenerationConfig.separateReasoning] is rendered by the template planner,
+  /// which records where the text of [messages] is in the prompt. Message
+  /// text is then never evaluated as a control token of the model: a message
+  /// that writes `<|im_end|>` is evaluated as those characters, while the
+  /// markers the template writes stay single tokens. Any other chat is
+  /// rendered by the built-in formatter when it knows the template. That
+  /// formatter returns one string, so message text that spells a control
+  /// token is evaluated as that token.
   Stream<GenerationChunk> chat({
     required List<ChatMessage> messages,
     GenerationConfig config = const GenerationConfig(),
@@ -903,6 +913,11 @@ final class LlamaEngine {
 
   /// Applies the loaded model's chat template without starting generation.
   /// [maximumPromptBytes] uses the same source-buffer policy as [chat].
+  ///
+  /// The returned string does not say which of its text came from
+  /// [messages]. Tokenizing or evaluating it with `parseSpecial: true` parses
+  /// special tokens in message text as well, which [chat] does not do for a
+  /// planned chat.
   Future<String> formatChat(
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
@@ -942,6 +957,9 @@ final class LlamaEngine {
   /// Pass the generation's [enableThinking] value to count that exact rendered
   /// mode, including its private-reasoning prefix and native chat-plan path.
   /// Include [reasoningBudgetTokens] to charge the same plan metadata as chat.
+  /// The count is the number of prompt tokens [chat] evaluates for the same
+  /// arguments, including message text that it keeps from becoming control
+  /// tokens.
   Future<int> countChatTokens(
     List<ChatMessage> messages, {
     bool addAssistantPrompt = true,
