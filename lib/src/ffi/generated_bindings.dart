@@ -606,6 +606,96 @@ class LlamaDartBridgeBindings {
         )
       >();
 
+  llama_dart_result llama_dart_chat_stream_parser_create(
+    ffi.Pointer<ffi.Uint8> plan_data,
+    int plan_size,
+    ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>> out_parser,
+  ) {
+    return llama_dart_result.fromValue(
+      _llama_dart_chat_stream_parser_create(plan_data, plan_size, out_parser),
+    );
+  }
+
+  late final _llama_dart_chat_stream_parser_createPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
+          )
+        >
+      >('llama_dart_chat_stream_parser_create');
+  late final _llama_dart_chat_stream_parser_create =
+      _llama_dart_chat_stream_parser_createPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<ffi.Uint8>,
+              int,
+              ffi.Pointer<ffi.Pointer<llama_dart_chat_stream_parser>>,
+            )
+          >();
+
+  llama_dart_result llama_dart_chat_stream_parser_parse(
+    ffi.Pointer<llama_dart_chat_stream_parser> parser,
+    ffi.Pointer<ffi.Uint8> output_data,
+    int output_size,
+    int is_partial,
+    ffi.Pointer<llama_dart_buffer> out_parts_json,
+  ) {
+    return llama_dart_result.fromValue(
+      _llama_dart_chat_stream_parser_parse(
+        parser,
+        output_data,
+        output_size,
+        is_partial,
+        out_parts_json,
+      ),
+    );
+  }
+
+  late final _llama_dart_chat_stream_parser_parsePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<llama_dart_chat_stream_parser>,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Uint8,
+            ffi.Pointer<llama_dart_buffer>,
+          )
+        >
+      >('llama_dart_chat_stream_parser_parse');
+  late final _llama_dart_chat_stream_parser_parse =
+      _llama_dart_chat_stream_parser_parsePtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<llama_dart_chat_stream_parser>,
+              ffi.Pointer<ffi.Uint8>,
+              int,
+              int,
+              ffi.Pointer<llama_dart_buffer>,
+            )
+          >();
+
+  void llama_dart_chat_stream_parser_free(
+    ffi.Pointer<llama_dart_chat_stream_parser> parser,
+  ) {
+    return _llama_dart_chat_stream_parser_free(parser);
+  }
+
+  late final _llama_dart_chat_stream_parser_freePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<llama_dart_chat_stream_parser>)
+        >
+      >('llama_dart_chat_stream_parser_free');
+  late final _llama_dart_chat_stream_parser_free =
+      _llama_dart_chat_stream_parser_freePtr
+          .asFunction<
+            void Function(ffi.Pointer<llama_dart_chat_stream_parser>)
+          >();
+
   llama_dart_result llama_dart_json_schema_to_grammar(
     ffi.Pointer<ffi.Uint8> schema_data,
     int schema_size,
@@ -1225,6 +1315,8 @@ final class llama_dart_generation extends ffi.Opaque {}
 
 final class llama_dart_lora_adapter extends ffi.Opaque {}
 
+final class llama_dart_chat_stream_parser extends ffi.Opaque {}
+
 enum llama_dart_gpu_backend {
   LLAMA_DART_GPU_BACKEND_AUTO(0),
   LLAMA_DART_GPU_BACKEND_CPU(1),
@@ -1688,6 +1780,9 @@ final class llama_dart_chat_template_capabilities extends ffi.Struct {
 
   @ffi.Uint8()
   external int supports_parallel_tool_calls;
+
+  @ffi.Uint8()
+  external int marks_reasoning;
 }
 
 final class llama_dart_string_view extends ffi.Struct {
@@ -1907,4 +2002,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 42;
+const int LLAMA_DART_ABI_VERSION = 43;

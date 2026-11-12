@@ -792,6 +792,7 @@ void main() {
         expect(templateCapabilities.supportsTools, isTrue);
         expect(templateCapabilities.supportsToolCalls, isTrue);
         expect(templateCapabilities.supportsParallelToolCalls, isFalse);
+        expect(templateCapabilities.marksReasoning, isTrue);
         final textMessages = <ChatMessage>[ChatMessage.user('hello')];
         expect(await engine.formatChat(textMessages), 'hello');
         expect(await engine.countChatTokens(textMessages), 7);
@@ -4639,6 +4640,7 @@ llama_dart_model_get_chat_template_capabilities(
   out_capabilities->supports_tools = 1;
   out_capabilities->supports_tool_calls = 1;
   out_capabilities->supports_parallel_tool_calls = 0;
+  out_capabilities->marks_reasoning = 1;
   last_error = "";
   return LLAMA_DART_SUCCESS;
 }

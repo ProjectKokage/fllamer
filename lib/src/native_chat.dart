@@ -20,6 +20,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return withLoadedModel(
@@ -31,6 +32,7 @@ extension NativeChatOps on NativeLlamaBridge {
         toolCalling: toolCalling,
         enableThinking: enableThinking,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         maximumPromptBytes: maximumPromptBytes,
       ),
     );
@@ -43,6 +45,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     final prepared = prepareMultimodalChat(
@@ -57,6 +60,7 @@ extension NativeChatOps on NativeLlamaBridge {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     ).prompt;
   }
@@ -71,24 +75,35 @@ extension NativeChatOps on NativeLlamaBridge {
     bool? enableThinking,
     int? maximumPromptBytes,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
   }) {
     final parseOutput = _requiresChatPlan(messages, toolCalling);
-    if (parseOutput ||
-        enableThinking != null ||
-        reasoningBudgetTokens != null) {
-      final plan = _createChatPlan(
-        model,
-        messages,
-        toolCalling,
-        addAssistantPrompt: addAssistantPrompt,
-        grammar: grammar,
-        jsonSchema: jsonSchema,
-        enableThinking: enableThinking,
-        maximumPromptBytes: maximumPromptBytes,
-        reasoningBudgetTokens: reasoningBudgetTokens,
-        parseOutput: parseOutput,
-      );
-      return NativeRenderedChat(prompt: plan.prompt, plan: plan);
+    final needsPlan =
+        parseOutput || enableThinking != null || reasoningBudgetTokens != null;
+    if (needsPlan || separateReasoning) {
+      try {
+        final plan = _createChatPlan(
+          model,
+          messages,
+          toolCalling,
+          addAssistantPrompt: addAssistantPrompt,
+          grammar: grammar,
+          jsonSchema: jsonSchema,
+          enableThinking: enableThinking,
+          maximumPromptBytes: maximumPromptBytes,
+          reasoningBudgetTokens: reasoningBudgetTokens,
+          separateReasoning: separateReasoning,
+          parseOutput: parseOutput,
+        );
+        return NativeRenderedChat(prompt: plan.prompt, plan: plan);
+      } on UnsupportedFeatureException {
+        if (needsPlan) {
+          rethrow;
+        }
+        // Separation alone was asked of a template the planner cannot
+        // render. The legacy formatter renders it, and its output streams as
+        // generated.
+      }
     }
 
     try {
@@ -114,6 +129,7 @@ extension NativeChatOps on NativeLlamaBridge {
         enableThinking: enableThinking,
         maximumPromptBytes: maximumPromptBytes,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         parseOutput: false,
       );
       return NativeRenderedChat(prompt: plan.prompt, plan: plan);
@@ -139,6 +155,7 @@ extension NativeChatOps on NativeLlamaBridge {
         supportsTools: out.ref.supports_tools != 0,
         supportsToolCalls: out.ref.supports_tool_calls != 0,
         supportsParallelToolCalls: out.ref.supports_parallel_tool_calls != 0,
+        marksReasoning: out.ref.marks_reasoning != 0,
       );
     } finally {
       calloc.free(out);
@@ -152,6 +169,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return withLoadedModel(
@@ -163,6 +181,7 @@ extension NativeChatOps on NativeLlamaBridge {
         toolCalling: toolCalling,
         enableThinking: enableThinking,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         maximumPromptBytes: maximumPromptBytes,
       ),
     );
@@ -175,6 +194,7 @@ extension NativeChatOps on NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     final prompt = formatChatWithModel(
@@ -184,6 +204,7 @@ extension NativeChatOps on NativeLlamaBridge {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
     if (maximumPromptBytes == null) {
@@ -233,6 +254,7 @@ extension NativeChatOps on NativeLlamaBridge {
     bool? enableThinking,
     int? maximumPromptBytes,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     required bool parseOutput,
   }) {
     var tools = toolCalling.toJson();
@@ -253,6 +275,14 @@ extension NativeChatOps on NativeLlamaBridge {
         );
         toolChoice = 'required';
     }
+    // The one rule for parsed streams: a plan whose stream is parsed is asked
+    // to separate reasoning, so its parser never reads reasoning as response
+    // text.
+    final parsesStream =
+        parseOutput ||
+        enableThinking != null ||
+        reasoningBudgetTokens != null ||
+        separateReasoning;
     final request = <String, Object?>{
       'messages': <Map<String, Object?>>[
         for (final message in messages) _chatMessageToOpenAiJson(message),
@@ -265,6 +295,7 @@ extension NativeChatOps on NativeLlamaBridge {
       'json_schema': ?jsonSchema,
       'enable_thinking': ?enableThinking,
       'reasoning_budget_tokens': ?reasoningBudgetTokens,
+      if (parsesStream) 'separate_reasoning': true,
     };
     final requestBytes = encodePromptJson(request, maximumPromptBytes);
     final requestPointer = calloc<ffi.Uint8>(requestBytes.length);
@@ -315,6 +346,7 @@ extension NativeChatOps on NativeLlamaBridge {
         json: planJson,
         prompt: decoded['prompt'] as String,
         parseOutput: parseOutput,
+        parsesStream: parsesStream,
         usedToolCallIds: <String>{
           for (final message in messages) ...<String>{
             for (final call in message.toolCalls)
@@ -332,6 +364,89 @@ extension NativeChatOps on NativeLlamaBridge {
       bindings.llama_dart_buffer_free(out.ref.data);
       calloc.free(out);
       calloc.free(requestPointer);
+    }
+  }
+
+  ffi.Pointer<llama_dart_chat_stream_parser> _createChatStreamParser(
+    NativeChatPlan plan,
+  ) {
+    final planBytes = utf8.encode(plan.json);
+    final planPointer = calloc<ffi.Uint8>(planBytes.length);
+    final out = calloc<ffi.Pointer<llama_dart_chat_stream_parser>>();
+    try {
+      planPointer.asTypedList(planBytes.length).setAll(0, planBytes);
+      check(
+        bindings.llama_dart_chat_stream_parser_create(
+          planPointer,
+          planBytes.length,
+          out,
+        ),
+      );
+      final parser = out.value;
+      if (parser == ffi.nullptr) {
+        throw const NativeBridgeException(
+          'Native bridge returned a null chat stream parser.',
+        );
+      }
+      return parser;
+    } finally {
+      calloc.free(out);
+      calloc.free(planPointer);
+    }
+  }
+
+  ({String text, String reasoningText, int toolCallBytes}) _parseChatStream(
+    ffi.Pointer<llama_dart_chat_stream_parser> parser,
+    String output, {
+    required bool partial,
+  }) {
+    final outputBytes = utf8.encode(output);
+    final outputPointer = outputBytes.isEmpty
+        ? ffi.nullptr
+        : calloc<ffi.Uint8>(outputBytes.length);
+    final out = calloc<llama_dart_buffer>();
+    try {
+      if (outputBytes.isNotEmpty) {
+        outputPointer.asTypedList(outputBytes.length).setAll(0, outputBytes);
+      }
+      check(
+        bindings.llama_dart_chat_stream_parser_parse(
+          parser,
+          outputPointer,
+          outputBytes.length,
+          partial ? 1 : 0,
+          out,
+        ),
+      );
+      final data = out.ref.data;
+      final size = out.ref.size;
+      final decoded = data == ffi.nullptr || size == 0
+          ? null
+          : jsonDecode(utf8.decode(data.asTypedList(size)));
+      if (decoded is! Map<String, Object?> ||
+          decoded['content'] is! String ||
+          decoded['reasoning_content'] is! String ||
+          decoded['tool_call_bytes'] is! int) {
+        throw const GenerationException(
+          'Native bridge returned invalid parsed chat output.',
+        );
+      }
+      return (
+        text: decoded['content']! as String,
+        reasoningText: decoded['reasoning_content']! as String,
+        toolCallBytes: decoded['tool_call_bytes']! as int,
+      );
+    } on FormatException catch (error) {
+      throw GenerationException(
+        'Native bridge returned invalid parsed chat output.',
+        cause: error,
+      );
+    } finally {
+      bindings.llama_dart_buffer_free(out.ref.data);
+      calloc.free(out);
+      if (outputPointer != ffi.nullptr) {
+        calloc.free(outputPointer);
+      }
     }
   }
 
@@ -652,13 +767,125 @@ final class NativeChatPlan {
     required this.json,
     required this.prompt,
     required this.parseOutput,
+    required this.parsesStream,
     required Set<String> usedToolCallIds,
   }) : usedToolCallIds = Set<String>.unmodifiable(usedToolCallIds);
 
   final String json;
   final String prompt;
   final bool parseOutput;
+
+  /// Whether streamed output is parsed into response text and reasoning.
+  ///
+  /// True for a plan that asked the template for tools, a thinking mode, a
+  /// reasoning budget or the separation itself. Such a plan was asked to
+  /// separate reasoning. A plan made only because the legacy formatter could
+  /// not render the template streams its output as generated.
+  final bool parsesStream;
   final Set<String> usedToolCallIds;
+}
+
+/// Separates a planned chat response's text from its reasoning while the
+/// response is generated, using the pinned upstream chat parser.
+final class NativeChatStreamParser {
+  NativeChatStreamParser(this._bridge, NativeChatPlan plan)
+    : _parser = _bridge._createChatStreamParser(plan);
+
+  final NativeLlamaBridge _bridge;
+  ffi.Pointer<llama_dart_chat_stream_parser> _parser;
+  String _text = '';
+  String _reasoningText = '';
+  int _toolCallBytes = 0;
+
+  /// Parses [output], everything generated so far, and returns what it adds
+  /// to the response text and to the reasoning since the previous call, and
+  /// whether a tool call grew.
+  ///
+  /// Before [isDone] an end of [output] that could still become one of the
+  /// template's markers is left unread. The last call delivers it as response
+  /// text or as reasoning, whichever the model was writing, unless the output
+  /// ends inside a tool call or the parser rejects the output.
+  ({String text, String reasoningText, bool writesToolCall}) advance(
+    String output, {
+    required bool isDone,
+  }) {
+    if (_parser == ffi.nullptr) {
+      throw const ResourceDisposedException('Chat stream parser is closed.');
+    }
+    final parsed = isDone
+        ? _parseComplete(output)
+        : _bridge._parseChatStream(_parser, output, partial: true);
+    final text = _added(_text, parsed.text)!;
+    final reasoningText = _added(_reasoningText, parsed.reasoningText)!;
+    final writesToolCall = parsed.toolCallBytes > _toolCallBytes;
+    _text += text;
+    _reasoningText += reasoningText;
+    if (writesToolCall) {
+      _toolCallBytes = parsed.toolCallBytes;
+    }
+    return (
+      text: text,
+      reasoningText: reasoningText,
+      writesToolCall: writesToolCall,
+    );
+  }
+
+  /// Reads the finished response as ended output when the parser accepts it
+  /// and that reading continues what was streamed.
+  ///
+  /// The parser rejects output that does not follow the template's format,
+  /// and a reading of ended output may divide the output differently from the
+  /// readings made while it streamed. The response is then read the way it
+  /// was read while it streamed, so the last step never contradicts text
+  /// that was already delivered. An end of the output that could still have
+  /// become a marker is not delivered in that case.
+  ({String text, String reasoningText, int toolCallBytes}) _parseComplete(
+    String output,
+  ) {
+    try {
+      final complete = _bridge._parseChatStream(
+        _parser,
+        output,
+        partial: false,
+      );
+      if (_added(_text, complete.text, orNull: true) != null &&
+          _added(_reasoningText, complete.reasoningText, orNull: true) !=
+              null) {
+        return complete;
+      }
+    } on GenerationException {
+      // The parser rejects the output.
+    }
+    return _bridge._parseChatStream(_parser, output, partial: true);
+  }
+
+  void close() {
+    if (_parser == ffi.nullptr) {
+      return;
+    }
+    _bridge.bindings.llama_dart_chat_stream_parser_free(_parser);
+    _parser = ffi.nullptr;
+  }
+}
+
+/// The part of [current] after [delivered], which was already streamed.
+///
+/// The parser may briefly report less than it did before; nothing is taken
+/// back then. Text that no longer begins with what was streamed is an error,
+/// or null with [orNull].
+String? _added(String delivered, String current, {bool orNull = false}) {
+  if (current.startsWith(delivered)) {
+    return current.substring(delivered.length);
+  }
+  if (delivered.startsWith(current)) {
+    return '';
+  }
+  if (orNull) {
+    return null;
+  }
+  throw const GenerationException(
+    'The chat parser changed output that was already streamed.',
+  );
 }
 
 final class NativeRenderedChat {

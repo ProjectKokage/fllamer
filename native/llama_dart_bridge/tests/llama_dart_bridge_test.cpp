@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <vector>
@@ -1165,6 +1166,7 @@ int main() {
   assert(chat_capabilities.struct_size == sizeof(chat_capabilities));
   assert(chat_capabilities.supports_tools == 0);
   assert(chat_capabilities.supports_tool_calls == 0);
+  assert(chat_capabilities.marks_reasoning == 0);
 
   const char simple_chat_request[] =
       R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true})";
@@ -1283,6 +1285,7 @@ int main() {
   assert(chat_capabilities.supports_tools == 1);
   assert(chat_capabilities.supports_tool_calls == 1);
   assert(chat_capabilities.supports_parallel_tool_calls == 1);
+  assert(chat_capabilities.marks_reasoning == 1);
 
   prompt = {};
   assert(llama_dart_model_apply_chat_template(
@@ -1344,6 +1347,108 @@ int main() {
          std::string::npos);
   assert(gemma4_thinking_off_plan.find(
              R"("reasoning_budget_tokens":0)") != std::string::npos);
+
+  // The stream parser separates reasoning from the response text for output
+  // that stops anywhere, using the plan's own parser.
+  llama_dart_chat_stream_parser *stream_parser = nullptr;
+  assert(llama_dart_chat_stream_parser_create(
+             chat_plan.data, chat_plan.size, &stream_parser) ==
+         LLAMA_DART_SUCCESS);
+  assert(stream_parser != nullptr);
+  const auto parse_stream = [&](const char *output, uint8_t is_partial) {
+    llama_dart_buffer parts{};
+    assert(llama_dart_chat_stream_parser_parse(
+               stream_parser, reinterpret_cast<const uint8_t *>(output),
+               std::strlen(output), is_partial, &parts) ==
+           LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(parts.data),
+                           parts.size);
+    llama_dart_buffer_free(parts.data);
+    return json;
+  };
+  assert(parse_stream("", 1) == R"({"content":"","reasoning_content":"","tool_call_bytes":0})");
+  assert(parse_stream("<|channel>thought\nweigh", 1) ==
+         R"({"content":"","reasoning_content":"weigh","tool_call_bytes":0})");
+  // A piece that could still become the end marker is withheld.
+  assert(parse_stream("<|channel>thought\nweigh<chan", 1) ==
+         R"({"content":"","reasoning_content":"weigh","tool_call_bytes":0})");
+  assert(parse_stream("<|channel>thought\nweigh<channel|>ans", 1) ==
+         R"({"content":"ans","reasoning_content":"weigh","tool_call_bytes":0})");
+  assert(parse_stream("<|channel>thought\nweigh<channel|>answer", 0) ==
+         R"({"content":"answer","reasoning_content":"weigh","tool_call_bytes":0})");
+  assert(parse_stream("answer", 1) ==
+         R"({"content":"answer","reasoning_content":"","tool_call_bytes":0})");
+  // A character whose last bytes have not arrived is left for the next call.
+  assert(parse_stream("caf\xC3", 1) ==
+         R"({"content":"caf","reasoning_content":"","tool_call_bytes":0})");
+  assert(parse_stream("caf\xC3\xA9", 1) ==
+         "{\"content\":\"caf\xC3\xA9\",\"reasoning_content\":\"\","
+         "\"tool_call_bytes\":0}");
+  assert(parse_stream("<|channel>thought\n\xE6\x80", 1) ==
+         R"({"content":"","reasoning_content":"","tool_call_bytes":0})");
+  // Generated output may contain a NUL byte.
+  {
+    const char nul_output[] = {'a', '\0', 'b'};
+    llama_dart_buffer parts{};
+    assert(llama_dart_chat_stream_parser_parse(
+               stream_parser, reinterpret_cast<const uint8_t *>(nul_output),
+               sizeof(nul_output), 1, &parts) == LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(parts.data),
+                           parts.size);
+    llama_dart_buffer_free(parts.data);
+    assert(json ==
+           R"({"content":"a\u0000b","reasoning_content":"","tool_call_bytes":0})");
+  }
+  llama_dart_chat_stream_parser_free(stream_parser);
+
+  // A request can ask for the separation alone, without a thinking mode.
+  const char gemma4_separate_reasoning_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true,"separate_reasoning":true})";
+  llama_dart_buffer separated_plan{};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 gemma4_separate_reasoning_request),
+             std::strlen(gemma4_separate_reasoning_request),
+             &separated_plan) == LLAMA_DART_SUCCESS);
+  const std::string separated_plan_json(
+      reinterpret_cast<const char *>(separated_plan.data),
+      separated_plan.size);
+  assert(separated_plan_json.find(R"("reasoning_budget_tokens":-1)") !=
+         std::string::npos);
+  stream_parser = nullptr;
+  assert(llama_dart_chat_stream_parser_create(
+             separated_plan.data, separated_plan.size, &stream_parser) ==
+         LLAMA_DART_SUCCESS);
+  assert(parse_stream("<|channel>thought\nweigh<channel|>answer", 1) ==
+         R"({"content":"answer","reasoning_content":"weigh","tool_call_bytes":0})");
+  llama_dart_chat_stream_parser_free(stream_parser);
+  llama_dart_buffer_free(separated_plan.data);
+  const char invalid_separate_reasoning_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"separate_reasoning":1})";
+  separated_plan = {};
+  assert(llama_dart_model_create_chat_plan(
+             tool_model,
+             reinterpret_cast<const uint8_t *>(
+                 invalid_separate_reasoning_request),
+             std::strlen(invalid_separate_reasoning_request),
+             &separated_plan) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  llama_dart_chat_stream_parser_free(nullptr);
+  stream_parser = reinterpret_cast<llama_dart_chat_stream_parser *>(
+      static_cast<uintptr_t>(1));
+  assert(llama_dart_chat_stream_parser_create(
+             invalid_chat_plan, sizeof(invalid_chat_plan), &stream_parser) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stream_parser == nullptr);
+  assert(llama_dart_chat_stream_parser_create(nullptr, 0, nullptr) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  llama_dart_buffer stream_parts{
+      reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(1)), 123};
+  assert(llama_dart_chat_stream_parser_parse(nullptr, nullptr, 0, 1,
+                                             &stream_parts) ==
+         LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  assert(stream_parts.data == nullptr);
+  assert(stream_parts.size == 0);
   llama_dart_buffer_free(chat_plan.data);
 
   const char gemma4_thinking_start[] = "<|channel>thought";
@@ -1393,6 +1498,28 @@ int main() {
   assert(valid_gemma4_message.find("{\\\"query\\\":\\\"alpha\\\"}") !=
          std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
+
+  // A tool call that is still being written is reported by size, not as
+  // response text.
+  llama_dart_chat_stream_parser *tool_stream_parser = nullptr;
+  assert(llama_dart_chat_stream_parser_create(
+             chat_plan.data, chat_plan.size, &tool_stream_parser) ==
+         LLAMA_DART_SUCCESS);
+  const char partial_gemma4_call[] = R"(<|tool_call>call:lookup{query: <|"|>al)";
+  llama_dart_buffer tool_stream_parts{};
+  assert(llama_dart_chat_stream_parser_parse(
+             tool_stream_parser,
+             reinterpret_cast<const uint8_t *>(partial_gemma4_call),
+             std::strlen(partial_gemma4_call), 1, &tool_stream_parts) ==
+         LLAMA_DART_SUCCESS);
+  const std::string tool_stream_json(
+      reinterpret_cast<const char *>(tool_stream_parts.data),
+      tool_stream_parts.size);
+  assert(tool_stream_json.find(R"("content":"")") != std::string::npos);
+  assert(tool_stream_json.find(R"("tool_call_bytes":0)") ==
+         std::string::npos);
+  llama_dart_buffer_free(tool_stream_parts.data);
+  llama_dart_chat_stream_parser_free(tool_stream_parser);
 
   // The pristine upstream Gemma 4 grammar accepts generic dictionary members.
   // The checked Dart wrapper validates this parsed call against the matching
@@ -1475,6 +1602,296 @@ int main() {
   assert(tool_message_text.find("alpha") != std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
   llama_dart_buffer_free(chat_plan.data);
+
+  // What a plan's parser reads from generated output, while it streams
+  // (is_partial 1), when it has ended (is_partial 0), and as the terminal
+  // message.
+  const auto plan_of = [](const llama_dart_model *planned_model,
+                          const std::string &request) {
+    llama_dart_buffer plan{};
+    assert(llama_dart_model_create_chat_plan(
+               planned_model,
+               reinterpret_cast<const uint8_t *>(request.data()),
+               request.size(), &plan) == LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(plan.data),
+                           plan.size);
+    llama_dart_buffer_free(plan.data);
+    return json;
+  };
+  const auto read_stream = [](const std::string &plan,
+                              const std::string &output, uint8_t is_partial) {
+    llama_dart_chat_stream_parser *parser = nullptr;
+    assert(llama_dart_chat_stream_parser_create(
+               reinterpret_cast<const uint8_t *>(plan.data()), plan.size(),
+               &parser) == LLAMA_DART_SUCCESS);
+    llama_dart_buffer parts{};
+    assert(llama_dart_chat_stream_parser_parse(
+               parser, reinterpret_cast<const uint8_t *>(output.data()),
+               output.size(), is_partial, &parts) == LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(parts.data),
+                           parts.size);
+    llama_dart_buffer_free(parts.data);
+    llama_dart_chat_stream_parser_free(parser);
+    return json;
+  };
+  const auto read_message = [](const std::string &plan,
+                               const std::string &output) {
+    llama_dart_buffer message{};
+    assert(llama_dart_chat_parse_output(
+               reinterpret_cast<const uint8_t *>(plan.data()), plan.size(),
+               reinterpret_cast<const uint8_t *>(output.data()),
+               output.size(), &message) == LLAMA_DART_SUCCESS);
+    const std::string json(reinterpret_cast<const char *>(message.data),
+                           message.size);
+    llama_dart_buffer_free(message.data);
+    return json;
+  };
+  const auto parts = [](const char *content, const char *reasoning,
+                        int tool_call_bytes) {
+    return std::string(R"({"content":")") + content +
+           R"(","reasoning_content":")" + reasoning +
+           R"(","tool_call_bytes":)" + std::to_string(tool_call_bytes) + "}";
+  };
+  const std::string lookup_tools =
+      R"([{"type":"function","function":{"name":"lookup","description":"Look up local data","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}}}])";
+  const auto chat_request = [&](bool with_tools, const char *extra) {
+    return std::string(
+               R"({"messages":[{"role":"user","content":"hello"}],"tools":)") +
+           (with_tools ? lookup_tools : std::string("[]")) +
+           R"(,"tool_choice":"auto","parallel_tool_calls":false,"add_generation_prompt":true)" +
+           extra + "}";
+  };
+
+  // A tool chat that asks for the separation gets its reasoning apart from
+  // the response text and from the call, in the stream and in the message.
+  const std::string gemma4_tools_plan =
+      plan_of(tool_model, chat_request(true, R"(,"separate_reasoning":true)"));
+  const char gemma4_reasoned_call[] =
+      "<|channel>thought\nweigh<channel|>"
+      R"(<|tool_call>call:lookup{query:<|"|>alpha<|"|>}<tool_call|>)";
+  assert(read_stream(gemma4_tools_plan, "<|channel>thought\nweigh<channel|>",
+                     1) == parts("", "weigh", 0));
+  assert(read_stream(gemma4_tools_plan, gemma4_reasoned_call, 1) ==
+         parts("", "weigh", 23));
+  assert(read_stream(gemma4_tools_plan, gemma4_reasoned_call, 0) ==
+         parts("", "weigh", 23));
+  const std::string gemma4_reasoned_message =
+      read_message(gemma4_tools_plan, gemma4_reasoned_call);
+  assert(gemma4_reasoned_message.find("lookup") != std::string::npos);
+  assert(gemma4_reasoned_message.find("<|channel>") == std::string::npos);
+  assert(gemma4_reasoned_message.find(R"("content":"weigh)") ==
+         std::string::npos);
+
+  // While output streams, a trailing piece that could still become a marker
+  // is withheld. Once the output has ended it cannot, so it is response text.
+  const std::string gemma4_off_plan =
+      plan_of(tool_model, chat_request(false, R"(,"enable_thinking":false)"));
+  assert(read_stream(gemma4_off_plan, "I'm fine >_<", 1) ==
+         parts("I'm fine >_", "", 0));
+  assert(read_stream(gemma4_off_plan, "I'm fine >_<", 0) ==
+         parts("I'm fine >_<", "", 0));
+  assert(read_stream(gemma4_off_plan, "I'm fine >_<chan", 0) ==
+         parts("I'm fine >_<chan", "", 0));
+  assert(read_stream(gemma4_tools_plan, "I'm fine >_<", 1) ==
+         parts("I'm fine >_", "", 0));
+  assert(read_stream(gemma4_tools_plan, "I'm fine >_<", 0) ==
+         parts("I'm fine >_<", "", 0));
+  assert(read_message(gemma4_tools_plan, "I'm fine >_<")
+             .find(R"("content":"I'm fine >_<")") != std::string::npos);
+  // A complete marker is never response text: a stray end marker, a call
+  // that is still being written, a call the parser rejects.
+  assert(read_stream(gemma4_off_plan, "fine<channel|>", 0) ==
+         parts("fine", "", 0));
+  assert(read_stream(gemma4_tools_plan, "Hello<|tool_call>call:look", 0)
+             .find(R"("content":"Hello")") != std::string::npos);
+  assert(read_stream(gemma4_tools_plan, "Hello<|tool_call>call:unknown{", 0) ==
+         parts("Hello", "", 0));
+  // The end of a reasoning block that never closed is reasoning.
+  assert(read_stream(gemma4_off_plan, "<|channel>thought\nweigh<chan", 1) ==
+         parts("", "weigh", 0));
+  assert(read_stream(gemma4_off_plan, "<|channel>thought\nweigh<chan", 0) ==
+         parts("", "weigh<chan", 0));
+
+  const auto load_with_template = [&](const char *vocab_path,
+                                      const char *template_name) {
+    const std::string template_path =
+        std::string(LLAMA_DART_TEST_TEMPLATE_DIR) + "/" + template_name;
+    std::ifstream template_file(template_path, std::ios::binary);
+    assert(template_file.good());
+    const std::string source((std::istreambuf_iterator<char>(template_file)),
+                             std::istreambuf_iterator<char>());
+    llama_dart_model_load_config template_config = fixture_config;
+    template_config.model_path_data =
+        reinterpret_cast<const uint8_t *>(vocab_path);
+    template_config.model_path_size = std::strlen(vocab_path);
+    template_config.chat_template_data =
+        reinterpret_cast<const uint8_t *>(source.data());
+    template_config.chat_template_size = source.size();
+    llama_dart_model *loaded = nullptr;
+    assert(llama_dart_model_load(&template_config, &loaded) ==
+           LLAMA_DART_SUCCESS);
+    return loaded;
+  };
+  const auto marks_reasoning = [](const llama_dart_model *inspected) {
+    llama_dart_chat_template_capabilities capabilities{};
+    capabilities.struct_size = sizeof(capabilities);
+    assert(llama_dart_model_get_chat_template_capabilities(
+               inspected, &capabilities) == LLAMA_DART_SUCCESS);
+    return capabilities.marks_reasoning != 0;
+  };
+
+  // Qwen 3.5 ends its generation prompt inside a reasoning block, or, with
+  // thinking off, after an empty one.
+  llama_dart_model *qwen35_model =
+      load_with_template(LLAMA_DART_TEST_QWEN_VOCAB_MODEL, "Qwen3.5-4B.jinja");
+  assert(marks_reasoning(qwen35_model));
+  const std::string qwen35_tools_plan = plan_of(
+      qwen35_model, chat_request(true, R"(,"separate_reasoning":true)"));
+  assert(qwen35_tools_plan.find(R"(<think>\n","thinking_start_tag")") !=
+         std::string::npos);
+  // The response text holds nothing of the block the prompt opened.
+  assert(read_stream(qwen35_tools_plan, "weigh\n</think>\n\nHi <", 1) ==
+         parts("Hi ", R"(weigh\n)", 0));
+  assert(read_stream(qwen35_tools_plan, "weigh\n</think>\n\nHi <", 0) ==
+         parts("Hi <", R"(weigh\n)", 0));
+  assert(read_message(qwen35_tools_plan, "weigh\n</think>\n\nHi <")
+             .find(R"("content":"Hi <")") != std::string::npos);
+
+  // With thinking off the prompt's empty block is the one block the parser
+  // expects. A model that opens a block of its own has it closed at once by
+  // the zero reasoning budget; that block is reasoning too, not response text.
+  const std::string qwen35_off_plan = plan_of(
+      qwen35_model, chat_request(false, R"(,"enable_thinking":false)"));
+  assert(qwen35_off_plan.find(R"(<think>\n\n</think>\n\n","thinking_start_tag")") !=
+         std::string::npos);
+  assert(qwen35_off_plan.find(R"("reasoning_budget_tokens":0)") !=
+         std::string::npos);
+  assert(read_stream(qwen35_off_plan, "Hello", 1) == parts("Hello", "", 0));
+  assert(read_stream(qwen35_off_plan, "<thi", 1) == parts("", "", 0));
+  assert(read_stream(qwen35_off_plan, "<thi", 0) == parts("<thi", "", 0));
+  assert(read_stream(qwen35_off_plan, "<3 you", 1) == parts("<3 you", "", 0));
+  assert(read_stream(qwen35_off_plan, "<think>", 1) == parts("", "", 0));
+  assert(read_stream(qwen35_off_plan, "<think>\n</think>", 1) ==
+         parts("", "", 0));
+  assert(read_stream(qwen35_off_plan, "<think>\n</think>\n\nHello", 1) ==
+         parts("Hello", "", 0));
+  assert(read_stream(qwen35_off_plan, "<think>\n</think>\n\nHello", 0) ==
+         parts("Hello", "", 0));
+  const std::string qwen35_off_tools_plan = plan_of(
+      qwen35_model, chat_request(true, R"(,"enable_thinking":false)"));
+  assert(read_stream(qwen35_off_tools_plan, "<think>\n</think>\n\nHello <", 0) ==
+         parts("Hello <", "", 0));
+  assert(read_message(qwen35_off_tools_plan, "<think>\n</think>\n\nHello")
+             .find(R"("content":"Hello")") != std::string::npos);
+  llama_dart_model_free(qwen35_model);
+
+  // An LFM2 template marks reasoning only when its source has the marker,
+  // although the upstream parser names the markers for every LFM2 template.
+  llama_dart_model *lfm2_plain_model = load_with_template(
+      LLAMA_DART_TEST_QWEN_VOCAB_MODEL, "LFM2.5-Instruct.jinja");
+  assert(!marks_reasoning(lfm2_plain_model));
+  llama_dart_model_free(lfm2_plain_model);
+  llama_dart_model *lfm2_reasoning_model = load_with_template(
+      LLAMA_DART_TEST_QWEN_VOCAB_MODEL, "LFM2.5-8B-A1B.jinja");
+  assert(marks_reasoning(lfm2_reasoning_model));
+  llama_dart_model_free(lfm2_reasoning_model);
+
+  const auto has = [](const std::string &json, const char *piece) {
+    return json.find(piece) != std::string::npos;
+  };
+  const auto template_model = [&](const char *template_name) {
+    return load_with_template(LLAMA_DART_TEST_QWEN_VOCAB_MODEL, template_name);
+  };
+  const char off_with_tools[] = R"(,"enable_thinking":false)";
+  const char separated[] = R"(,"separate_reasoning":true)";
+
+  // A response that is only a piece withheld as a possible marker.
+  assert(read_stream(gemma4_off_plan, "<", 1) == parts("", "", 0));
+  assert(read_stream(gemma4_off_plan, "<", 0) == parts("<", "", 0));
+  assert(read_stream(gemma4_tools_plan, "<", 0) == parts("<", "", 0));
+  assert(has(read_message(gemma4_tools_plan, "<"), R"("content":"<")"));
+
+  // Templates whose tool call begins with the marker that ends the response
+  // text: the withheld piece is response text, a call being written is not.
+  for (const char *template_name :
+       {"openbmb-MiniCPM5-1B.jinja", "inclusionai-ling-3.0-flash.jinja"}) {
+    llama_dart_model *tagged_model = template_model(template_name);
+    const std::string tagged_plan =
+        plan_of(tagged_model, chat_request(true, off_with_tools));
+    assert(has(read_stream(tagged_plan, "I'm fine >_<", 1),
+               R"("content":"I'm fine >_")"));
+    assert(has(read_stream(tagged_plan, "I'm fine >_<", 0),
+               R"("content":"I'm fine >_<")"));
+    assert(has(read_message(tagged_plan, "I'm fine >_<"),
+               R"("content":"I'm fine >_<")"));
+    llama_dart_model_free(tagged_model);
+  }
+  llama_dart_model *qwen3_coder_model = template_model("Qwen3-Coder.jinja");
+  const std::string qwen3_coder_plan =
+      plan_of(qwen3_coder_model, chat_request(true, separated));
+  assert(has(read_stream(qwen3_coder_plan, "#include <func", 1),
+             R"("content":"#include ")"));
+  assert(has(read_stream(qwen3_coder_plan, "#include <func", 0),
+             R"("content":"#include <func")"));
+  assert(has(read_message(qwen3_coder_plan, "#include <func"),
+             R"("content":"#include <func")"));
+  const char unfinished_call[] =
+      "Sure <tool_call>\n<function=lookup>\n<parameter=query>\nal";
+  const std::string unfinished_call_parts =
+      read_stream(qwen3_coder_plan, unfinished_call, 0);
+  assert(has(unfinished_call_parts, R"("content":"Sure ")"));
+  assert(!has(unfinished_call_parts, R"("tool_call_bytes":0)"));
+  assert(has(read_stream(qwen3_coder_plan, "Sure <tool_call>\n<function=look",
+                         0),
+             R"("content":"Sure ")"));
+  llama_dart_model_free(qwen3_coder_model);
+
+  llama_dart_model *deepseek_model =
+      template_model("deepseek-ai-DeepSeek-V3.2.jinja");
+  // Whitespace the parser skipped is not text it withheld.
+  const std::string deepseek_schema_plan = plan_of(
+      deepseek_model,
+      chat_request(
+          false,
+          R"(,"separate_reasoning":true,"json_schema":{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]})"));
+  assert(has(read_stream(deepseek_schema_plan,
+                         "weigh</think>```json\n{\"a\":1}\n", 0),
+             R"("content":"{\"a\":1}","reasoning_content")"));
+  // Output that ends inside a character still reads as valid text.
+  const std::string deepseek_tools_plan =
+      plan_of(deepseek_model, chat_request(true, separated));
+  assert(read_stream(deepseek_tools_plan, "weigh</think>Hello\n\n<\xEF", 0) ==
+         parts(R"(Hello\n\n<)", "weigh", 0));
+  assert(has(read_message(deepseek_tools_plan, "weigh</think>Hello\n\n<\xEF"),
+             R"("content":"Hello\n\n<")"));
+  // A piece that could still close the reasoning block is never read as
+  // response text, and is reasoning once the output has ended.
+  const std::string deepseek_plan =
+      plan_of(deepseek_model, chat_request(false, separated));
+  assert(read_stream(deepseek_plan, "weigh", 1) == parts("", "weigh", 0));
+  assert(read_stream(deepseek_plan, "weigh<", 1) == parts("", "weigh", 0));
+  assert(read_stream(deepseek_plan, "weigh<", 0) == parts("", "weigh<", 0));
+  llama_dart_model_free(deepseek_model);
+
+  llama_dart_model *ling3_model =
+      template_model("inclusionai-ling-3.0-flash.jinja");
+  const std::string ling3_plan =
+      plan_of(ling3_model, chat_request(false, R"(,"enable_thinking":true)"));
+  assert(read_stream(ling3_plan, "weigh <t", 1) == parts("", "weigh ", 0));
+  assert(read_stream(ling3_plan, "weigh <table> more</think>Hi", 1) ==
+         parts("Hi", "weigh <table> more", 0));
+  assert(read_stream(ling3_plan, "weigh <t", 0) == parts("", "weigh <t", 0));
+  llama_dart_model_free(ling3_model);
+
+  // Ended output is not rejected for its last piece: the piece is text.
+  llama_dart_model *kimi_k3_model = template_model("Kimi-K3.jinja");
+  const std::string kimi_k3_plan =
+      plan_of(kimi_k3_model, chat_request(false, separated));
+  assert(has(read_stream(kimi_k3_plan,
+                         "weigh<|close|>think<|sep|>\n\nHello <|o", 0),
+             R"(Hello <|o","reasoning_content":"weigh")"));
+  llama_dart_model_free(kimi_k3_model);
+
   llama_dart_model_free(tool_model);
 
   const char malformed_chat_request[] = "{";

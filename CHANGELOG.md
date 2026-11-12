@@ -1,5 +1,55 @@
 ## Unreleased
 
+- Chat streams are parsed while they are generated. A chat that asks its
+  template for tools, a thinking mode (`enableThinking` true or false) or a
+  reasoning budget, or that sets the new `GenerationConfig.separateReasoning`,
+  now streams the response text alone in
+  `GenerationChunk.text`, the reasoning in the new
+  `GenerationChunk.reasoningText`, and marks a chunk that added to a tool
+  call with the new `GenerationChunk.writesToolCall`. The pinned upstream
+  chat parser does the separation, so it follows whatever markers the
+  template uses. Before, `text` was the raw output for every chat: a
+  template whose generation prompt always opens its reasoning block made
+  every thinking-off response begin with a bare end marker such as
+  `</think>`, and thinking-on responses carried the whole block.
+  **Behavior change:** an application that removed reasoning or tool-call
+  markup from `text` itself no longer receives it there. A chat that asks
+  none of these, and raw completion, still stream the output as generated.
+  The terminal `assistantMessage` of a tool chat is read the same way as its
+  stream, so for a tool chat that sets no thinking mode its text no longer
+  contains the reasoning block; before, the block and its markers were part
+  of that text. An end of the output that could still become one of the
+  template's markers, such as a lone `<`, is held back from `text` and
+  `reasoningText` while the response streams and delivered when the response
+  ends, as response text or as reasoning, in the stream and in the terminal
+  message. It is not delivered when the response ends inside a tool call, or
+  when the template's parser rejects the output (text that does not follow
+  the template's format, a malformed tool call); rejected output ends as it
+  was read while it streamed. With thinking off, a block that a model writes
+  at the start of its output although the generation prompt already holds an
+  empty one is read as reasoning. One case still reaches `text`: the parsers
+  of most templates expect one reasoning block, so a model that goes on
+  reasoning after a reasoning budget closed its block, or that opens another
+  block later in its output, has that text and its markers delivered as
+  response text.
+  **Migration:** remove any filter that strips reasoning or tool-call markup
+  from `GenerationChunk.text` on such chats; read reasoning from
+  `reasoningText` if it is wanted. `LlamaChatTemplateCapabilities` has a new
+  required field, `marksReasoning`; code that constructs it must pass it.
+  `separateReasoning` asks for the separation without choosing a thinking
+  mode: the chat is rendered through the model's own template, where
+  llama.cpp supplies `enable_thinking` as `true`, and a template the planner
+  cannot render falls back to the legacy formatter with the output streamed
+  as generated. `LlamaEngine.formatChat` and `countChatTokens` take the same
+  flag. `LlamaChatTemplateCapabilities.marksReasoning` reports whether the
+  template itself marks its reasoning: upstream names a start and an end
+  marker for it, and the start marker occurs in the template's source or in
+  the generation prompt it renders. `reasoningBudgetTokens` works with such a
+  template. ABI 43 adds
+  `llama_dart_chat_stream_parser_create`, `_parse` and `_free`, the chat
+  request field `separate_reasoning`, and
+  `llama_dart_chat_template_capabilities.marks_reasoning`.
+
 - Fixed a crash on the second on-device model load in one process after a
   first load whose Vulkan device creation threw. The pinned
   `ggml_vk_get_device` registered the device before building it, so when

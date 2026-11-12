@@ -81,12 +81,22 @@ constraint. Named tool choice is implemented by exposing only the selected
 tool to the upstream template and requiring a call. Raw completion has no chat
 template and therefore rejects tool configuration.
 
-`GenerationChunk.text` remains the raw streamed model output. Use the terminal
-chunk's `assistantMessage` for normalized content and typed `toolCalls`.
+A tool-aware chat is read by the pinned upstream parser while it streams,
+whether or not it also sets a thinking mode: `GenerationChunk.text` carries
+the response text without tool-call markup or reasoning,
+`GenerationChunk.reasoningText` carries the reasoning, and
+`GenerationChunk.writesToolCall` is true on a chunk that added to a call. Use
+the terminal chunk's `assistantMessage` for normalized content and typed
+`toolCalls`; it is parsed from the complete raw output the same way, so its
+text equals the streamed `text` and holds no reasoning. A model that reasons
+again after its reasoning block has closed is the exception: the parsers of
+most templates expect one block, and the later text arrives as response text.
 `GenerationChunk.stopReason` is non-null on terminal chunks. If `maxTokens` is
-reached before strict chat parsing can finish, the stream fails with an
+reached and the pinned parser rejects the output, the stream fails with an
 explicit maximum-token `GenerationException` rather than a generic parser
-message.
+message. The parser does not reject a tool call that the output merely stops
+inside: the call arrives with the arguments written so far, and the stream
+fails with a `GenerationException` when those are not complete JSON.
 
 An opt-in checksum-pinned official Apache-2.0 Qwen2.5 0.5B fixture verifies
 weighted generation through the full path: live template capability detection,

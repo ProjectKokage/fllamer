@@ -212,6 +212,362 @@ void main() {
       }
     });
 
+    test('a chat that sets a thinking mode streams its response text and its '
+        'reasoning apart', () async {
+      final active = fixture;
+      final activeCounters = counters;
+      if (active == null || activeCounters == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'reasoning-stream.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      // The fake generation returns "weigh", "ing</thi", "nk>ans" and "wer".
+      Future<List<GenerationChunk>> streamed({
+        required bool? enableThinking,
+        bool separateReasoning = false,
+      }) => engine
+          .chat(
+            messages: <ChatMessage>[ChatMessage.user('hello')],
+            config: GenerationConfig(
+              maxTokens: 4,
+              streamChunkTokens: 1,
+              enableThinking: enableThinking,
+              separateReasoning: separateReasoning,
+            ),
+          )
+          .where((chunk) => chunk.generatedTokens == null)
+          .toList();
+
+      try {
+        // A thinking mode, or the separation asked for on its own.
+        for (final enableThinking in <bool?>[true, false, null]) {
+          final createdBefore = activeCounters.streamParserCreations();
+          final separationsBefore = activeCounters.separationRequests();
+          final chunks = await streamed(
+            enableThinking: enableThinking,
+            separateReasoning: enableThinking == null,
+          );
+          expect(
+            <(String, String)>[
+              for (final chunk in chunks) (chunk.reasoningText, chunk.text),
+            ],
+            <(String, String)>[
+              ('weigh', ''),
+              // "</thi" could still become the end marker.
+              ('ing', ''),
+              ('', 'ans'),
+              ('', 'wer'),
+            ],
+            reason: 'enableThinking: $enableThinking',
+          );
+          expect(chunks.last.isDone, isTrue);
+          expect(activeCounters.streamParserCreations(), createdBefore + 1);
+          // Every plan whose stream is parsed is asked to separate reasoning.
+          expect(
+            activeCounters.separationRequests(),
+            separationsBefore + 1,
+            reason: 'enableThinking: $enableThinking',
+          );
+          expect(
+            activeCounters.streamParserFrees(),
+            activeCounters.streamParserCreations(),
+          );
+        }
+
+        // Nothing was asked of the template: the output streams as generated.
+        final createdBefore = activeCounters.streamParserCreations();
+        final separationsBefore = activeCounters.separationRequests();
+        final raw = await streamed(enableThinking: null);
+        expect(
+          <String>[for (final chunk in raw) chunk.text].join(),
+          'weighing</think>answer',
+        );
+        expect(raw.every((chunk) => chunk.reasoningText.isEmpty), isTrue);
+        expect(activeCounters.streamParserCreations(), createdBefore);
+        expect(activeCounters.separationRequests(), separationsBefore);
+      } finally {
+        await engine.close();
+      }
+    });
+
+    test('separation asked of a template the planner cannot render uses the '
+        'legacy formatter and streams the output as generated', () async {
+      final active = fixture;
+      final activeCounters = counters;
+      if (active == null || activeCounters == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'plan-unsupported.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      try {
+        activeCounters.reset();
+        final createdBefore = activeCounters.streamParserCreations();
+        final chunks = await engine
+            .chat(
+              messages: <ChatMessage>[ChatMessage.user('hello')],
+              config: const GenerationConfig(
+                maxTokens: 1,
+                separateReasoning: true,
+              ),
+            )
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
+        expect(chunks.single.text, 'terminal');
+        expect(chunks.single.reasoningText, isEmpty);
+        expect(activeCounters.planCalls(), 1);
+        expect(activeCounters.applyCalls(), 1);
+        expect(activeCounters.streamParserCreations(), createdBefore);
+        expect(
+          await engine.formatChat(<ChatMessage>[
+            ChatMessage.user('hello'),
+          ], separateReasoning: true),
+          'legacy:assistant',
+        );
+
+        // A thinking mode is a demand on the template, not a preference.
+        await expectLater(
+          engine
+              .chat(
+                messages: <ChatMessage>[ChatMessage.user('hello')],
+                config: const GenerationConfig(
+                  maxTokens: 1,
+                  enableThinking: true,
+                ),
+              )
+              .toList(),
+          throwsA(isA<UnsupportedFeatureException>()),
+        );
+      } finally {
+        await engine.close();
+      }
+    });
+
+    test('a finished response whose complete reading contradicts what was '
+        'streamed ends as it was streamed', () async {
+      final active = fixture;
+      if (active == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'divergent-final.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      try {
+        final chunks = await engine
+            .chat(
+              messages: <ChatMessage>[ChatMessage.user('hello')],
+              config: const GenerationConfig(
+                maxTokens: 4,
+                streamChunkTokens: 1,
+                enableThinking: true,
+              ),
+            )
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
+        expect(
+          <(String, String)>[
+            for (final chunk in chunks) (chunk.reasoningText, chunk.text),
+          ],
+          <(String, String)>[
+            ('weigh', ''),
+            ('ing', ''),
+            ('', 'ans'),
+            ('', 'wer'),
+          ],
+        );
+        expect(chunks.last.isDone, isTrue);
+      } finally {
+        await engine.close();
+      }
+    });
+
+    test('a tool chat that sets no thinking mode streams its reasoning, its '
+        'response text and its call apart', () async {
+      final active = fixture;
+      final activeCounters = counters;
+      if (active == null || activeCounters == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      final engine = await LlamaEngine.load(
+        LlamaModelConfig(
+          modelPath: 'tool-stream.gguf',
+          nativeLibraryPath: active.libraryPath,
+        ),
+      );
+      try {
+        final separationsBefore = activeCounters.separationRequests();
+        // The fake generation returns "weigh</think>", "Sure <", "call>look"
+        // and "up</call>".
+        final chunks = await engine
+            .chat(
+              messages: <ChatMessage>[ChatMessage.user('hello')],
+              config: const GenerationConfig(
+                maxTokens: 4,
+                streamChunkTokens: 1,
+                toolCalling: LlamaToolCallingConfig(
+                  tools: <LlamaToolDefinition>[
+                    LlamaToolDefinition(
+                      name: 'lookup',
+                      description: 'Look up a value.',
+                      parametersSchema: <String, Object?>{
+                        'type': 'object',
+                        'properties': <String, Object?>{
+                          'query': <String, Object?>{'type': 'string'},
+                        },
+                        'required': <Object?>['query'],
+                        'additionalProperties': false,
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            )
+            .where((chunk) => chunk.generatedTokens == null)
+            .toList();
+        expect(
+          <(String, String, bool)>[
+            for (final chunk in chunks)
+              (chunk.reasoningText, chunk.text, chunk.writesToolCall),
+          ],
+          <(String, String, bool)>[
+            ('weigh', '', false),
+            // "<" could still become the call marker.
+            ('', 'Sure ', false),
+            ('', '', true),
+            ('', '', true),
+          ],
+        );
+        // The plan was asked to separate reasoning because its stream is
+        // parsed.
+        expect(activeCounters.separationRequests(), separationsBefore + 1);
+        final message = chunks.last.assistantMessage!;
+        expect(message.text, 'Sure ');
+        expect(message.toolCalls.single.name, 'lookup');
+        expect(message.toolCalls.single.arguments, <String, Object?>{
+          'query': 'alpha',
+        });
+      } finally {
+        await engine.close();
+      }
+    });
+
+    test('a stream the parser cannot read fails, and the engine generates '
+        'again', () async {
+      final active = fixture;
+      final activeCounters = counters;
+      if (active == null || activeCounters == null) {
+        markTestSkipped('A C compiler is not available for the fake bridge.');
+        return;
+      }
+      for (final (modelPath, message) in <(String, String)>[
+        // The native parser reports an error on the second step.
+        ('stream-parse-error.gguf', 'failed to parse chat output: boom'),
+        // The second step reads reasoning that does not continue the first.
+        (
+          'changed-output.gguf',
+          'The chat parser changed output that was already streamed.',
+        ),
+      ]) {
+        final engine = await LlamaEngine.load(
+          LlamaModelConfig(
+            modelPath: modelPath,
+            nativeLibraryPath: active.libraryPath,
+          ),
+        );
+        try {
+          final resetsBefore = activeCounters.contextResets();
+          final received = <GenerationChunk>[];
+          await expectLater(
+            engine
+                .chat(
+                  messages: <ChatMessage>[ChatMessage.user('hello')],
+                  config: const GenerationConfig(
+                    maxTokens: 4,
+                    streamChunkTokens: 1,
+                    enableThinking: true,
+                  ),
+                )
+                .where((chunk) => chunk.generatedTokens == null)
+                .forEach(received.add),
+            throwsA(
+              isA<GenerationException>().having(
+                (error) => error.message,
+                'message',
+                message,
+              ),
+            ),
+            reason: modelPath,
+          );
+          expect(
+            <(String, String, bool)>[
+              for (final chunk in received)
+                (chunk.reasoningText, chunk.text, chunk.isDone),
+            ],
+            <(String, String, bool)>[('weigh', '', false)],
+            reason: modelPath,
+          );
+          // The failed generation was freed and its context reset.
+          expect(
+            activeCounters.contextResets(),
+            resetsBefore + 1,
+            reason: modelPath,
+          );
+          expect(
+            activeCounters.streamParserFrees(),
+            activeCounters.streamParserCreations(),
+            reason: modelPath,
+          );
+          final raw = await engine
+              .chat(
+                messages: <ChatMessage>[ChatMessage.user('hello')],
+                config: const GenerationConfig(
+                  maxTokens: 4,
+                  streamChunkTokens: 1,
+                ),
+              )
+              .where((chunk) => chunk.generatedTokens == null)
+              .toList();
+          expect(
+            <String>[for (final chunk in raw) chunk.text].join(),
+            'weighing</think>answer',
+            reason: modelPath,
+          );
+        } finally {
+          await engine.close();
+        }
+      }
+    });
+
+    test('separation without a thinking mode cannot be combined with '
+        'request-owned structured output', () {
+      expect(
+        () => const GenerationConfig(
+          grammar: 'root ::= "a"',
+          separateReasoning: true,
+        ).validate(),
+        throwsArgumentError,
+      );
+      const GenerationConfig(
+        grammar: 'root ::= "a"',
+        enableThinking: false,
+        separateReasoning: true,
+      ).validate();
+    });
+
     test(
       'reasoning budget uses llama.cpp default-on through the Jinja plan',
       () async {
@@ -497,12 +853,32 @@ final class _FakeBridgeCounters {
       parseCalls = library
           .lookupFunction<ffi.Uint32 Function(), int Function()>(
             'fake_parse_calls',
+          ),
+      streamParserCreations = library
+          .lookupFunction<ffi.Uint32 Function(), int Function()>(
+            'fake_stream_parser_creations',
+          ),
+      streamParserFrees = library
+          .lookupFunction<ffi.Uint32 Function(), int Function()>(
+            'fake_stream_parser_frees',
+          ),
+      separationRequests = library
+          .lookupFunction<ffi.Uint32 Function(), int Function()>(
+            'fake_separation_requests',
+          ),
+      contextResets = library
+          .lookupFunction<ffi.Uint32 Function(), int Function()>(
+            'fake_context_resets',
           );
 
   final void Function() reset;
   final int Function() applyCalls;
   final int Function() planCalls;
   final int Function() parseCalls;
+  final int Function() streamParserCreations;
+  final int Function() streamParserFrees;
+  final int Function() separationRequests;
+  final int Function() contextResets;
 }
 
 final class _FakeBridgeFixture {
@@ -577,6 +953,12 @@ enum fake_mode {
   MODE_THINKING = 6,
   MODE_OLD_THINKING = 7,
   MODE_OVERSIZED = 8,
+  MODE_REASONING_STREAM = 9,
+  MODE_PLAN_UNSUPPORTED = 10,
+  MODE_DIVERGENT_FINAL = 11,
+  MODE_TOOL_STREAM = 12,
+  MODE_STREAM_PARSE_ERROR = 13,
+  MODE_CHANGED_OUTPUT = 14,
 };
 
 static const char *last_error = "";
@@ -584,10 +966,21 @@ static uintptr_t fake_model_storage;
 static uintptr_t fake_context_storage;
 static uintptr_t fake_generation_storage;
 static enum fake_mode current_mode = MODE_FALLBACK;
+
+static int streams_reasoning(void) {
+  return current_mode == MODE_REASONING_STREAM ||
+         current_mode == MODE_DIVERGENT_FINAL ||
+         current_mode == MODE_STREAM_PARSE_ERROR ||
+         current_mode == MODE_CHANGED_OUTPUT;
+}
+
 static uint32_t apply_calls;
 static uint32_t plan_calls;
+static uint32_t separation_requests;
 static uint32_t parse_calls;
+static uint32_t context_resets;
 static int generation_active;
+static int generation_step;
 
 static llama_dart_result fail(llama_dart_result result, const char *message) {
   last_error = message;
@@ -635,7 +1028,12 @@ LLAMA_DART_EXPORT void fake_reset_counters(void) {
 
 LLAMA_DART_EXPORT uint32_t fake_apply_calls(void) { return apply_calls; }
 LLAMA_DART_EXPORT uint32_t fake_plan_calls(void) { return plan_calls; }
+
+LLAMA_DART_EXPORT uint32_t fake_separation_requests(void) {
+  return separation_requests;
+}
 LLAMA_DART_EXPORT uint32_t fake_parse_calls(void) { return parse_calls; }
+LLAMA_DART_EXPORT uint32_t fake_context_resets(void) { return context_resets; }
 
 LLAMA_DART_EXPORT uint32_t llama_dart_abi_version(void) {
   return LLAMA_DART_ABI_VERSION;
@@ -652,8 +1050,26 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_load(
     return fail(LLAMA_DART_ERROR_MODEL_LOAD, "invalid model config");
   }
   if (bytes_contain(config->model_path_data, config->model_path_size,
-                    "oversized")) {
+                    "tool-stream")) {
+    current_mode = MODE_TOOL_STREAM;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "stream-parse-error")) {
+    current_mode = MODE_STREAM_PARSE_ERROR;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "changed-output")) {
+    current_mode = MODE_CHANGED_OUTPUT;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "oversized")) {
     current_mode = MODE_OVERSIZED;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "plan-unsupported")) {
+    current_mode = MODE_PLAN_UNSUPPORTED;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "divergent-final")) {
+    current_mode = MODE_DIVERGENT_FINAL;
+  } else if (bytes_contain(config->model_path_data, config->model_path_size,
+                           "reasoning-stream")) {
+    current_mode = MODE_REASONING_STREAM;
   } else if (bytes_contain(config->model_path_data, config->model_path_size,
                     "legacy-error")) {
     current_mode = MODE_ERROR;
@@ -698,7 +1114,8 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_apply_chat_template(
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid messages");
   }
   if (current_mode == MODE_LEGACY || current_mode == MODE_THINKING ||
-      current_mode == MODE_OLD_THINKING) {
+      current_mode == MODE_OLD_THINKING ||
+      current_mode == MODE_PLAN_UNSUPPORTED) {
     return copy_buffer(add_assistant_prompt != 0
         ? "legacy:assistant"
         : "legacy:no-assistant", out_prompt);
@@ -719,6 +1136,10 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
     return fail(LLAMA_DART_ERROR_INTERNAL,
                 "chat plan must not be created in this mode");
   }
+  if (current_mode == MODE_PLAN_UNSUPPORTED) {
+    return fail(LLAMA_DART_ERROR_UNSUPPORTED,
+                "chat template could not create a plan");
+  }
   if (request_data == NULL || request_size == 0 || out_plan == NULL) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid chat request");
   }
@@ -737,10 +1158,17 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
       strstr(request, "\"reasoning_budget_tokens\":8") != NULL;
   const int media_request =
       strstr(request, "left<__media__>middle<__media__>right") != NULL;
+  const int separation_requested =
+      strstr(request, "\"separate_reasoning\":true") != NULL;
   free(request);
-  if (!no_tools) {
+  if (separation_requested) {
+    ++separation_requests;
+  }
+  if (no_tools == (current_mode == MODE_TOOL_STREAM)) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
-                "ordinary fallback injected tool metadata");
+                current_mode == MODE_TOOL_STREAM
+                    ? "tool chat did not forward its tools"
+                    : "ordinary fallback injected tool metadata");
   }
   if ((current_mode == MODE_THINKING ||
        current_mode == MODE_OLD_THINKING) &&
@@ -771,24 +1199,217 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_model_create_chat_plan(
       "{\"version\":1,\"prompt\":\"%s\",\"grammar\":\"\","
       "\"grammar_lazy\":false,\"grammar_triggers\":[],"
       "\"preserved_tokens\":[],\"additional_stops\":[],"
-      "%s\"generation_prompt\":\"\"}", prompt, reasoning_fields);
+      "%s%s\"generation_prompt\":\"\"}",
+      prompt, reasoning_fields,
+      // Only the tool stream reads it; other plans keep their size.
+      current_mode == MODE_TOOL_STREAM && separation_requested
+          ? "\"separates_reasoning\":1,"
+          : "");
   if (size <= 0 || (size_t)size >= sizeof(plan)) {
     return fail(LLAMA_DART_ERROR_INTERNAL, "chat plan buffer overflow");
   }
   return copy_buffer(plan, out_plan);
 }
 
+static uintptr_t fake_stream_parser_storage;
+static int stream_parser_separates;
+static uint32_t stream_parser_creations;
+static uint32_t stream_parser_frees;
+
+LLAMA_DART_EXPORT uint32_t fake_stream_parser_creations(void) {
+  return stream_parser_creations;
+}
+
+LLAMA_DART_EXPORT uint32_t fake_stream_parser_frees(void) {
+  return stream_parser_frees;
+}
+
+LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_create(
+    const uint8_t *plan_data, size_t plan_size,
+    llama_dart_chat_stream_parser **out_parser) {
+  if (plan_data == NULL || plan_size == 0 || out_parser == NULL) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid stream parser");
+  }
+  ++stream_parser_creations;
+  stream_parser_separates =
+      bytes_contain(plan_data, plan_size, "\"separates_reasoning\":1");
+  *out_parser = (llama_dart_chat_stream_parser *)&fake_stream_parser_storage;
+  last_error = "";
+  return LLAMA_DART_SUCCESS;
+}
+
+/*
+ * Reads output as reasoning, response text and one tool call:
+ * "reasoning</think>text<call>name</call>". Reasoning is taken out of the
+ * text only for a plan that was asked to separate it; otherwise the block
+ * stays in the text as generated. While the output is partial, a trailing
+ * piece that could still become "<call>" is withheld from the text. Once the
+ * output has ended it is text.
+ */
+static void read_tool_stream(const char *output, int separates, int is_partial,
+                             size_t *reasoning_size, const char **text,
+                             size_t *text_size, size_t *tool_call_bytes) {
+  static const char reasoning_end[] = "</think>";
+  static const char call_start[] = "<call>";
+  const size_t call_start_size = sizeof(call_start) - 1;
+  *reasoning_size = 0;
+  *text = output;
+  *tool_call_bytes = 0;
+  const char *end = strstr(output, reasoning_end);
+  if (separates && end != NULL) {
+    *reasoning_size = (size_t)(end - output);
+    *text = end + sizeof(reasoning_end) - 1;
+  }
+  const char *call = strstr(*text, call_start);
+  if (call != NULL) {
+    const char *name = call + call_start_size;
+    const char *call_end = strstr(name, "</call>");
+    *text_size = (size_t)(call - *text);
+    *tool_call_bytes = call_end != NULL ? (size_t)(call_end - name)
+                                        : strlen(name);
+    return;
+  }
+  *text_size = strlen(*text);
+  if (is_partial) {
+    for (size_t held = call_start_size - 1; held > 0; --held) {
+      if (held <= *text_size &&
+          memcmp(*text + *text_size - held, call_start, held) == 0) {
+        *text_size -= held;
+        break;
+      }
+    }
+  }
+}
+
+/*
+ * Stands in for the upstream parser. Text before "</think>" is reasoning and
+ * text after it is the response. Without that marker the output is the
+ * response, except in MODE_REASONING_STREAM, whose output begins inside a
+ * reasoning block. A partial parse withholds a trailing piece of the marker.
+ */
+LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_stream_parser_parse(
+    const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
+    size_t output_size, uint8_t is_partial, llama_dart_buffer *out_parts_json) {
+  static const char marker[] = "</think>";
+  const size_t marker_size = sizeof(marker) - 1;
+  if (parser == NULL || out_parts_json == NULL || output_size > 256) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "invalid stream parse");
+  }
+  char output[257];
+  if (output_size > 0) {
+    memcpy(output, output_data, output_size);
+  }
+  output[output_size] = '\0';
+  if (current_mode == MODE_TOOL_STREAM) {
+    size_t reasoning_size = 0;
+    const char *text = NULL;
+    size_t text_size = 0;
+    size_t tool_call_bytes = 0;
+    read_tool_stream(output, stream_parser_separates, is_partial,
+                     &reasoning_size, &text, &text_size, &tool_call_bytes);
+    char parts[640];
+    const int size = snprintf(
+        parts, sizeof(parts),
+        "{\"content\":\"%.*s\",\"reasoning_content\":\"%.*s\","
+        "\"tool_call_bytes\":%zu}",
+        (int)text_size, text, (int)reasoning_size, output, tool_call_bytes);
+    if (size <= 0 || (size_t)size >= sizeof(parts)) {
+      return fail(LLAMA_DART_ERROR_INTERNAL, "parsed output buffer overflow");
+    }
+    return copy_buffer(parts, out_parts_json);
+  }
+  // Both modes read their first piece, "weigh", as reasoning.
+  if (current_mode == MODE_STREAM_PARSE_ERROR && output_size > 5) {
+    return fail(LLAMA_DART_ERROR_GENERATION,
+                "failed to parse chat output: boom");
+  }
+  if (current_mode == MODE_CHANGED_OUTPUT && output_size > 5) {
+    return copy_buffer(
+        "{\"content\":\"\",\"reasoning_content\":\"other\","
+        "\"tool_call_bytes\":0}",
+        out_parts_json);
+  }
+  const char *end = strstr(output, marker);
+  size_t reasoning_size = 0;
+  const char *content = output;
+  if (end != NULL) {
+    reasoning_size = (size_t)(end - output);
+    content = end + marker_size;
+  } else if (streams_reasoning()) {
+    reasoning_size = output_size;
+    content = output + output_size;
+    if (is_partial) {
+      for (size_t held = marker_size - 1; held > 0; --held) {
+        if (held <= output_size &&
+            memcmp(output + output_size - held, marker, held) == 0) {
+          reasoning_size = output_size - held;
+          break;
+        }
+      }
+    }
+  }
+  if (current_mode == MODE_DIVERGENT_FINAL && !is_partial) {
+    // A complete reading that divides the output differently.
+    reasoning_size = 0;
+    content = "rewritten";
+  }
+  char parts[640];
+  const int size = snprintf(
+      parts, sizeof(parts),
+      "{\"content\":\"%s\",\"reasoning_content\":\"%.*s\","
+      "\"tool_call_bytes\":0}",
+      content,
+      (int)reasoning_size, output);
+  if (size <= 0 || (size_t)size >= sizeof(parts)) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "parsed output buffer overflow");
+  }
+  return copy_buffer(parts, out_parts_json);
+}
+
+LLAMA_DART_EXPORT void llama_dart_chat_stream_parser_free(
+    llama_dart_chat_stream_parser *parser) {
+  if (parser != NULL) {
+    ++stream_parser_frees;
+  }
+  last_error = "";
+}
+
 LLAMA_DART_EXPORT llama_dart_result llama_dart_chat_parse_output(
     const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
     size_t output_size, llama_dart_buffer *out_message_json) {
-  (void)plan_data;
-  (void)plan_size;
-  (void)output_data;
-  (void)output_size;
-  (void)out_message_json;
   ++parse_calls;
-  return fail(LLAMA_DART_ERROR_INTERNAL,
-              "plain fallback output must not be parsed");
+  if (current_mode != MODE_TOOL_STREAM || out_message_json == NULL ||
+      output_size > 256) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "plain fallback output must not be parsed");
+  }
+  char output[257];
+  if (output_size > 0) {
+    memcpy(output, output_data, output_size);
+  }
+  output[output_size] = '\0';
+  size_t reasoning_size = 0;
+  const char *text = NULL;
+  size_t text_size = 0;
+  size_t tool_call_bytes = 0;
+  read_tool_stream(
+      output,
+      bytes_contain(plan_data, plan_size, "\"separates_reasoning\":1"), 0,
+      &reasoning_size, &text, &text_size, &tool_call_bytes);
+  char message[640];
+  const int size = snprintf(
+      message, sizeof(message),
+      "{\"role\":\"assistant\",\"content\":\"%.*s\"%s}",
+      (int)text_size, text,
+      tool_call_bytes == 0
+          ? ""
+          : ",\"tool_calls\":[{\"type\":\"function\",\"function\":{"
+            "\"name\":\"lookup\","
+            "\"arguments\":\"{\\\"query\\\":\\\"alpha\\\"}\"}}]");
+  if (size <= 0 || (size_t)size >= sizeof(message)) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "parsed message buffer overflow");
+  }
+  return copy_buffer(message, out_message_json);
 }
 
 LLAMA_DART_EXPORT llama_dart_result llama_dart_model_tokenize(
@@ -830,6 +1451,7 @@ LLAMA_DART_EXPORT void llama_dart_context_free(llama_dart_context *context) {
 LLAMA_DART_EXPORT llama_dart_result llama_dart_context_reset(
     llama_dart_context *context) {
   (void)context;
+  ++context_resets;
   generation_active = 0;
   last_error = "";
   return LLAMA_DART_SUCCESS;
@@ -846,8 +1468,11 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_start(
     llama_dart_context *context, const llama_dart_completion_config *config,
     llama_dart_generation **out_generation) {
   (void)context;
+  const int planned = config != NULL && config->chat_plan_data != NULL &&
+                      config->chat_plan_size != 0;
+  // Only the template the planner cannot render generates without a plan.
   if (config == NULL || out_generation == NULL || generation_active ||
-      config->chat_plan_data == NULL || config->chat_plan_size == 0 ||
+      planned == (current_mode == MODE_PLAN_UNSUPPORTED) ||
       config->parse_special != 1 ||
       config->add_special != LLAMA_DART_ADD_SPECIAL_IF_CONTEXT_EMPTY) {
     return fail(LLAMA_DART_ERROR_GENERATION,
@@ -897,6 +1522,7 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_start(
     }
   }
   generation_active = 1;
+  generation_step = 0;
   *out_generation = (llama_dart_generation *)&fake_generation_storage;
   last_error = "";
   return LLAMA_DART_SUCCESS;
@@ -910,15 +1536,37 @@ LLAMA_DART_EXPORT llama_dart_result llama_dart_generation_next(
       out_done == NULL) {
     return fail(LLAMA_DART_ERROR_GENERATION, "invalid generation step");
   }
-  const llama_dart_result copied = copy_buffer("terminal", out_text);
+  // Reasoning, its end marker and the response arrive split across steps.
+  static const char *const reasoning_stream_pieces[] = {
+      "weigh", "ing</thi", "nk>ans", "wer"};
+  // Reasoning, response text that ends with the first byte of the call
+  // marker, and the call.
+  static const char *const tool_stream_pieces[] = {
+      "weigh</think>", "Sure <", "call>look", "up</call>"};
+  static const char *const terminal_piece[] = {"terminal"};
+  const char *const *pieces = terminal_piece;
+  int last_step = 0;
+  if (streams_reasoning()) {
+    pieces = reasoning_stream_pieces;
+    last_step = 3;
+  } else if (current_mode == MODE_TOOL_STREAM) {
+    pieces = tool_stream_pieces;
+    last_step = 3;
+  }
+  if (generation_step > last_step) {
+    return fail(LLAMA_DART_ERROR_GENERATION, "generation is already done");
+  }
+  const llama_dart_result copied =
+      copy_buffer(pieces[generation_step], out_text);
   if (copied != LLAMA_DART_SUCCESS) {
     return copied;
   }
   memset(out_stats, 0, sizeof(*out_stats));
   out_stats->struct_size = sizeof(*out_stats);
   out_stats->prompt_tokens = 3;
-  out_stats->generated_tokens = 1;
-  *out_done = 1;
+  out_stats->generated_tokens = generation_step + 1;
+  *out_done = generation_step == last_step;
+  generation_step += 1;
   last_error = "";
   return LLAMA_DART_SUCCESS;
 }

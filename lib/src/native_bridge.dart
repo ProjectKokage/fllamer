@@ -139,6 +139,7 @@ final class NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return Isolate.run(
@@ -149,6 +150,7 @@ final class NativeLlamaBridge {
         toolCalling: toolCalling,
         enableThinking: enableThinking,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         maximumPromptBytes: maximumPromptBytes,
       ),
     );
@@ -161,6 +163,7 @@ final class NativeLlamaBridge {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return Isolate.run(
@@ -171,6 +174,7 @@ final class NativeLlamaBridge {
         toolCalling: toolCalling,
         enableThinking: enableThinking,
         reasoningBudgetTokens: reasoningBudgetTokens,
+        separateReasoning: separateReasoning,
         maximumPromptBytes: maximumPromptBytes,
       ),
     );

@@ -288,6 +288,7 @@ final class GenerationConfig {
     this.toolCalling = const LlamaToolCallingConfig(),
     this.enableThinking,
     this.reasoningBudgetTokens,
+    this.separateReasoning = false,
   });
 
   const GenerationConfig.jsonMode({
@@ -314,7 +315,8 @@ final class GenerationConfig {
   }) : grammar = llamaJsonGrammar,
        jsonSchema = null,
        grammarRoot = 'root',
-       reasoningBudgetTokens = null;
+       reasoningBudgetTokens = null,
+       separateReasoning = false;
 
   factory GenerationConfig.jsonSchema({
     required Map<String, Object?> schema,
@@ -404,7 +406,10 @@ final class GenerationConfig {
   /// Non-null values are applied only by [LlamaEngine.chat]. When `false` and
   /// the selected template exposes paired reasoning markers, native sampling
   /// also closes any unexpected reasoning block immediately before allowing
-  /// the public response to continue.
+  /// the public response to continue. A non-null value also has the stream
+  /// parsed: `GenerationChunk.text` is the response text and
+  /// `GenerationChunk.reasoningText` the reasoning. [separateReasoning] asks
+  /// for that parsing without choosing a mode.
   final bool? enableThinking;
 
   /// Maximum tokens counted inside each chat-template reasoning block.
@@ -415,6 +420,18 @@ final class GenerationConfig {
   /// A non-null value leaves thinking at llama.cpp's default (`true`) when
   /// [enableThinking] is `null`, and is invalid when it is explicitly `false`.
   final int? reasoningBudgetTokens;
+
+  /// Asks [LlamaEngine.chat] for the reasoning apart from the response text
+  /// without choosing a thinking mode.
+  ///
+  /// The chat is rendered through the model's own template, where llama.cpp
+  /// supplies its default `enable_thinking` value (`true`), and the stream is
+  /// parsed as it is for a non-null [enableThinking]. A template the planner
+  /// cannot render is formatted by the legacy formatter instead, and its
+  /// output streams as generated. Pass the same value to
+  /// [LlamaEngine.countChatTokens] and [LlamaEngine.formatChat] to count or
+  /// read the prompt this renders.
+  final bool separateReasoning;
 
   void validate() {
     if (maxTokens <= 0) {
@@ -538,7 +555,9 @@ final class GenerationConfig {
         'must not be provided with grammar',
       );
     }
-    if ((enableThinking == true || this.reasoningBudgetTokens != null) &&
+    if ((enableThinking == true ||
+            this.reasoningBudgetTokens != null ||
+            (separateReasoning && enableThinking == null)) &&
         (grammar != null || jsonSchema != null)) {
       throw ArgumentError.value(
         enableThinking,

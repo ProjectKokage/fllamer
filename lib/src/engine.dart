@@ -641,6 +641,8 @@ final class LlamaReranker implements Reranker {
 final class GenerationChunk {
   const GenerationChunk({
     required this.text,
+    this.reasoningText = '',
+    this.writesToolCall = false,
     this.isDone = false,
     this.telemetry,
     this.assistantMessage,
@@ -648,7 +650,30 @@ final class GenerationChunk {
     this.generatedTokens,
   });
 
+  /// Text this chunk adds to the response.
+  ///
+  /// A chat that asked its template for tools, a thinking mode or a reasoning
+  /// budget, or that set `GenerationConfig.separateReasoning`, is read by the
+  /// pinned upstream chat parser as it streams: this is the response text
+  /// alone, and reasoning arrives in [reasoningText]. An end of the output
+  /// that could still become one of the template's markers, such as a lone
+  /// `<`, is held back until the next chunk decides it, or until the response
+  /// ends. Any other chat, and raw completion, stream the output as
+  /// generated.
+  ///
+  /// The parsers of most templates expect one reasoning block. A model that
+  /// goes on reasoning after a reasoning budget closed its block, or that
+  /// opens another block later in its output, has that text delivered here.
   final String text;
+
+  /// Reasoning this chunk adds, for a chat whose stream is parsed; otherwise
+  /// empty. The reasoning block the parser reads is never part of [text].
+  final String reasoningText;
+
+  /// Whether this chunk added to a tool call the response is writing, for a
+  /// chat whose stream is parsed. The typed calls arrive in the terminal
+  /// [assistantMessage]; their text is never part of [text].
+  final bool writesToolCall;
   final bool isDone;
   final GenerationTelemetry? telemetry;
   final ChatMessage? assistantMessage;
@@ -714,6 +739,8 @@ final class LlamaEngine {
         .map(
           (chunk) => GenerationChunk(
             text: chunk.text,
+            reasoningText: chunk.reasoningText,
+            writesToolCall: chunk.writesToolCall,
             isDone: chunk.isDone,
             generatedTokens: chunk.generatedTokens,
             telemetry: chunk.telemetry,
@@ -735,7 +762,8 @@ final class LlamaEngine {
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
     if (checkedConfig.enableThinking != null ||
-        checkedConfig.reasoningBudgetTokens != null) {
+        checkedConfig.reasoningBudgetTokens != null ||
+        checkedConfig.separateReasoning) {
       throw const UnsupportedFeatureException(
         'Thinking control requires chat messages and a model chat template.',
       );
@@ -771,7 +799,8 @@ final class LlamaEngine {
     final checkedConfig = _snapshotGenerationConfig(config);
     checkedConfig.validate();
     if (checkedConfig.enableThinking != null ||
-        checkedConfig.reasoningBudgetTokens != null) {
+        checkedConfig.reasoningBudgetTokens != null ||
+        checkedConfig.separateReasoning) {
       throw const UnsupportedFeatureException(
         'Thinking control requires chat messages and a model chat template.',
       );
@@ -880,12 +909,14 @@ final class LlamaEngine {
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) async {
     _ensureOpen();
     GenerationConfig(
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
     ).validate();
     _validatePromptSource(messages, maximumPromptBytes);
     final checkedMessages = _snapshotChatMessages(messages);
@@ -901,6 +932,7 @@ final class LlamaEngine {
       toolCalling: checkedToolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -916,12 +948,14 @@ final class LlamaEngine {
     LlamaToolCallingConfig toolCalling = const LlamaToolCallingConfig(),
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) async {
     _ensureOpen();
     GenerationConfig(
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
     ).validate();
     _validatePromptSource(messages, maximumPromptBytes);
     if (messages.any((message) => message.hasNonTextParts)) {
@@ -940,6 +974,7 @@ final class LlamaEngine {
       toolCalling: checkedToolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -1175,6 +1210,7 @@ GenerationConfig _snapshotGenerationConfig(GenerationConfig config) {
     toolCalling: _snapshotToolCallingConfig(config.toolCalling),
     enableThinking: config.enableThinking,
     reasoningBudgetTokens: config.reasoningBudgetTokens,
+    separateReasoning: config.separateReasoning,
   );
 }
 

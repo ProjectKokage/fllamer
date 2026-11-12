@@ -3,6 +3,7 @@
 #include "gpu_policy.h"
 #include "ggml-backend.h"
 #include "llama.h"
+#include "chat-peg-parser.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
@@ -11,6 +12,7 @@
 #include "log.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
+#include "peg-parser.h"
 #include "prompt_prefix.h"
 #include "reasoning-budget.h"
 #include "reasoning_sampler.h"
@@ -38,6 +40,8 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 #ifndef LLAMA_DART_UPSTREAM_COMMIT
@@ -3787,6 +3791,88 @@ llama_dart_result llama_dart_model_apply_chat_template(
   }
 }
 
+namespace {
+// Why the reasoning markers a template exposes cannot be used, or nullptr.
+const char *invalid_reasoning_markers(const common_chat_params &params) {
+  const auto blank = [](const std::string &tag) {
+    return std::all_of(tag.begin(), tag.end(), [](unsigned char character) {
+      return std::isspace(character);
+    });
+  };
+  if (params.thinking_end_tags.size() > kMaxReasoningEndTags) {
+    return "chat template exposes too many thinking end tags";
+  }
+  const std::string &start_tag = params.thinking_start_tag;
+  if (!start_tag.empty() &&
+      (start_tag.size() > kMaxReasoningTagBytes ||
+       string_contains_nul(start_tag) || blank(start_tag))) {
+    return "chat template thinking start tag is invalid";
+  }
+  for (const std::string &end_tag : params.thinking_end_tags) {
+    if (end_tag.empty() || end_tag.size() > kMaxReasoningTagBytes ||
+        string_contains_nul(end_tag) || blank(end_tag)) {
+      return "chat template thinking tags are invalid";
+    }
+  }
+  return nullptr;
+}
+
+// Whether the template, rendered with thinking on, marks its reasoning with a
+// usable start marker and end marker. The template must use the start marker
+// itself, in its source or in the generation prompt it renders: an upstream
+// parser may name markers for a whole model family, including templates that
+// never use them.
+bool template_marks_reasoning(const common_chat_templates *templates) {
+  try {
+    common_chat_msg message;
+    message.role = "user";
+    message.content = "test";
+    common_chat_templates_inputs inputs;
+    inputs.messages = {message};
+    inputs.use_jinja = true;
+    inputs.add_generation_prompt = true;
+    inputs.enable_thinking = true;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    const common_chat_params params =
+        common_chat_templates_apply(templates, inputs);
+    if (params.thinking_start_tag.empty() ||
+        params.thinking_end_tags.empty() ||
+        invalid_reasoning_markers(params) != nullptr) {
+      return false;
+    }
+    const std::string start_tag = string_strip(params.thinking_start_tag);
+    return common_chat_templates_source(templates).find(start_tag) !=
+               std::string::npos ||
+           params.generation_prompt.find(start_tag) != std::string::npos;
+  } catch (const std::bad_alloc &) {
+    throw;
+  } catch (const std::exception &) {
+    // A template the planner cannot render exposes no markers.
+    return false;
+  }
+}
+
+// Removes a trailing UTF-8 sequence whose last bytes have not arrived.
+void drop_incomplete_utf8_tail(std::string *text) {
+  const size_t size = text->size();
+  for (size_t back = 1; back <= 4 && back <= size; ++back) {
+    const unsigned char byte =
+        static_cast<unsigned char>((*text)[size - back]);
+    if ((byte & 0xC0u) == 0x80u) {
+      continue;
+    }
+    const size_t length = (byte & 0xE0u) == 0xC0u   ? 2
+                          : (byte & 0xF0u) == 0xE0u ? 3
+                          : (byte & 0xF8u) == 0xF0u ? 4
+                                                    : 1;
+    if (length > back) {
+      text->resize(size - back);
+    }
+    return;
+  }
+}
+} // namespace
+
 llama_dart_result llama_dart_model_get_chat_template_capabilities(
     const llama_dart_model *model,
     llama_dart_chat_template_capabilities *out_capabilities) {
@@ -3823,6 +3909,8 @@ llama_dart_result llama_dart_model_get_chat_template_capabilities(
         caps.at("supports_tool_calls") ? 1 : 0;
     out_capabilities->supports_parallel_tool_calls =
         caps.at("supports_parallel_tool_calls") ? 1 : 0;
+    out_capabilities->marks_reasoning =
+        template_marks_reasoning(templates.get()) ? 1 : 0;
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   } catch (const std::bad_alloc &) {
@@ -3911,6 +3999,17 @@ llama_dart_result llama_dart_model_create_chat_plan(
       // enable_thinking is omitted, common_chat uses llama.cpp's default true.
       inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     }
+    if (request.contains("separate_reasoning")) {
+      if (!request.at("separate_reasoning").is_boolean()) {
+        return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                    "separate_reasoning must be a boolean");
+      }
+      if (request.at("separate_reasoning").get<bool>()) {
+        // Reasoning-aware parsing alone. enable_thinking keeps the value
+        // set above, or llama.cpp's default true.
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+      }
+    }
     inputs.grammar = request.value("grammar", "");
     if (request.contains("json_schema") &&
         !request.at("json_schema").is_null()) {
@@ -3987,31 +4086,8 @@ llama_dart_result llama_dart_model_create_chat_plan(
       return fail(LLAMA_DART_ERROR_UNSUPPORTED,
                   "chat template does not expose thinking tags");
     }
-    if (params.thinking_end_tags.size() > kMaxReasoningEndTags) {
-      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                  "chat template exposes too many thinking end tags");
-    }
-    if (has_thinking_start &&
-        (params.thinking_start_tag.size() > kMaxReasoningTagBytes ||
-         string_contains_nul(params.thinking_start_tag) ||
-         std::all_of(params.thinking_start_tag.begin(),
-                     params.thinking_start_tag.end(),
-                     [](unsigned char character) {
-                       return std::isspace(character);
-                     }))) {
-      return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                  "chat template thinking start tag is invalid");
-    }
-    for (const std::string &end_tag : params.thinking_end_tags) {
-      if (end_tag.empty() || end_tag.size() > kMaxReasoningTagBytes ||
-          string_contains_nul(end_tag) ||
-          std::all_of(end_tag.begin(), end_tag.end(),
-                      [](unsigned char character) {
-                        return std::isspace(character);
-                      })) {
-        return fail(LLAMA_DART_ERROR_UNSUPPORTED,
-                    "chat template thinking tags are invalid");
-      }
+    if (const char *reason = invalid_reasoning_markers(params)) {
+      return fail(LLAMA_DART_ERROR_UNSUPPORTED, reason);
     }
     // Some reasoning models can emit a thinking start even when their
     // template receives enable_thinking=false. When the applied template
@@ -4042,6 +4118,201 @@ llama_dart_result llama_dart_model_create_chat_plan(
   }
 }
 
+namespace {
+// Reads the output of a planned chat with the plan's own parser.
+struct chat_output_reader {
+  // The parser is given the generation prompt with each read, not here.
+  common_chat_parser_params params;
+  std::string generation_prompt;
+  // The template's reasoning start marker, when the chat has thinking off and
+  // its generation prompt already holds a closed reasoning block. Otherwise
+  // empty.
+  std::string prefilled_reasoning_start;
+  // The markers the end of unfinished output may be the beginning of: those
+  // at which the parser stops reading a run of text, and the template's
+  // reasoning start marker.
+  std::vector<std::string> markers;
+  // A character that occurs in none of them, or NUL when there is none.
+  char plain_character = '\0';
+};
+
+void load_chat_output_reader(const parsed_chat_plan &plan,
+                             chat_output_reader *reader) {
+  reader->params.format = plan.format;
+  reader->params.parse_tool_calls = true;
+  reader->generation_prompt = plan.generation_prompt;
+  if (plan.parser.empty()) {
+    return;
+  }
+  reader->params.parser.load(plan.parser);
+  const common_peg_arena &parser = reader->params.parser;
+  for (common_peg_parser_id id = 0; id < parser.size(); ++id) {
+    const auto *text = std::get_if<common_peg_until_parser>(&parser.get(id));
+    if (text == nullptr) {
+      continue;
+    }
+    for (const std::string &marker : text->delimiters) {
+      if (!marker.empty()) {
+        reader->markers.push_back(marker);
+      }
+    }
+  }
+  // A parser that begins with an optional reasoning block waits for the rest
+  // of a start marker in the same way.
+  const std::string start_marker = string_strip(plan.thinking_start_tag);
+  if (!start_marker.empty()) {
+    reader->markers.push_back(start_marker);
+  }
+  for (const char candidate : std::string_view(
+           "~^#%&*+=?@$!;:,.0123456789abcdefghijklmnopqrstuvwxyz")) {
+    if (std::none_of(reader->markers.begin(),
+                     reader->markers.end(),
+                     [candidate](const std::string &marker) {
+                       return marker.find(candidate) != std::string::npos;
+                     })) {
+      reader->plain_character = candidate;
+      break;
+    }
+  }
+  // A zero reasoning budget is how a plan records that thinking is off for a
+  // template with reasoning markers.
+  const std::string &start_tag = plan.thinking_start_tag;
+  const size_t prefilled = plan.reasoning_budget_tokens == 0
+                               ? plan.generation_prompt.find(start_tag)
+                               : std::string::npos;
+  if (prefilled != std::string::npos &&
+      std::any_of(plan.thinking_end_tags.begin(), plan.thinking_end_tags.end(),
+                  [&](const std::string &end_tag) {
+                    return plan.generation_prompt.find(
+                               end_tag, prefilled + start_tag.size()) !=
+                           std::string::npos;
+                  })) {
+    reader->prefilled_reasoning_start = start_tag;
+  }
+}
+
+bool starts_with(std::string_view text, std::string_view prefix) {
+  return text.size() >= prefix.size() &&
+         text.compare(0, prefix.size(), prefix) == 0;
+}
+
+// The size of the longest end of `text` that begins one of the reader's
+// markers without completing it. More output could turn that piece into the
+// marker, so until then it is neither text nor markup.
+size_t undecided_end_size(const chat_output_reader &reader,
+                          std::string_view text) {
+  size_t longest = 0;
+  for (const std::string &marker : reader.markers) {
+    for (size_t size = std::min(marker.size() - 1, text.size());
+         size > longest; --size) {
+      if (text.compare(text.size() - size, size, marker, 0, size) == 0) {
+        longest = size;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+// Parses `output`, all of a chat's generated output so far. Output that has
+// ended must be a message the parser accepts; output that still streams may
+// stop anywhere.
+//
+// While output streams, an end that could still become a marker is left
+// unread. The pinned parser withholds such a piece only from the run of text
+// it is reading, and what follows in its grammar may then read the piece as
+// something else, for example a possible end of reasoning as response text,
+// which later output takes back. Without the piece no reading is taken back.
+//
+// Once the output has ended, that piece can no longer become a marker: it is
+// text, in the response or in the reasoning, wherever the parser was reading.
+// The parser has no way to be told so, and withholds the piece however it is
+// called. It is therefore given the output followed by one character that
+// occurs in no marker. When that adds the piece, or the end of it, and the
+// character to the response text or to the reasoning, the piece is text
+// there, and the character is taken off again. Otherwise the output ends in
+// a tool call or in markup, and is read as it stands.
+//
+// With thinking off, a template may end its generation prompt with an empty
+// reasoning block, which is the one block its parser expects. A model that
+// opens a block of its own anyway has it closed at once by the zero reasoning
+// budget. That block is read in place of the prompt's, so it is reasoning and
+// not response text.
+common_chat_msg read_chat_output(const chat_output_reader &reader,
+                                 std::string output, bool has_ended) {
+  // Bytes of a character that has not arrived whole belong to later output.
+  drop_incomplete_utf8_tail(&output);
+  const std::string &reasoning_start = reader.prefilled_reasoning_start;
+  std::string_view prompt = reader.generation_prompt;
+  if (!reasoning_start.empty() && starts_with(output, reasoning_start)) {
+    prompt = prompt.substr(0, prompt.find(reasoning_start));
+  } else if (!has_ended && !output.empty() &&
+             starts_with(reasoning_start, output)) {
+    // The output so far could still become the start marker.
+    common_chat_msg nothing;
+    nothing.role = "assistant";
+    return nothing;
+  }
+  std::string_view decided = output;
+  for (size_t undecided = undecided_end_size(reader, decided); undecided > 0;
+       undecided = undecided_end_size(reader, decided)) {
+    decided.remove_suffix(undecided);
+  }
+  const std::string_view undecided =
+      std::string_view(output).substr(decided.size());
+  std::string input(prompt);
+  input += decided;
+  if (!has_ended || undecided.empty()) {
+    return common_chat_parse(input, !has_ended, reader.params);
+  }
+  const std::string before = input;
+  input += undecided;
+  if (reader.plain_character != '\0') {
+    try {
+      const common_chat_msg read =
+          common_chat_parse(before, true, reader.params);
+      common_chat_msg followed = common_chat_parse(
+          input + reader.plain_character, false, reader.params);
+      // Whether `text` is `was`, then an end of the undecided piece, then
+      // the plain character. The parser may skip the beginning of the piece,
+      // for example as whitespace between a reasoning block and the response.
+      const auto adds_undecided_end = [&](const std::string &text,
+                                          const std::string &was) {
+        if (text.size() <= was.size() || !starts_with(text, was) ||
+            text.back() != reader.plain_character) {
+          return false;
+        }
+        const std::string_view added =
+            std::string_view(text).substr(was.size(),
+                                          text.size() - was.size() - 1);
+        return added.size() <= undecided.size() &&
+               undecided.substr(undecided.size() - added.size()) == added;
+      };
+      if (followed.reasoning_content == read.reasoning_content &&
+          adds_undecided_end(followed.content, read.content)) {
+        followed.content.pop_back();
+        return followed;
+      }
+      if (followed.content == read.content &&
+          adds_undecided_end(followed.reasoning_content,
+                             read.reasoning_content)) {
+        followed.reasoning_content.pop_back();
+        return followed;
+      }
+    } catch (const std::bad_alloc &) {
+      throw;
+    } catch (const std::exception &) {
+      // The output does not end in text.
+    }
+  }
+  return common_chat_parse(input, false, reader.params);
+}
+} // namespace
+
+struct llama_dart_chat_stream_parser {
+  chat_output_reader reader;
+};
+
 llama_dart_result llama_dart_chat_parse_output(
     const uint8_t *plan_data, size_t plan_size, const uint8_t *output_data,
     size_t output_size, llama_dart_buffer *out_message_json) {
@@ -4068,17 +4339,11 @@ llama_dart_result llama_dart_chat_parse_output(
   }
 
   try {
-    common_chat_parser_params parser_params;
-    parser_params.format = plan.format;
-    parser_params.generation_prompt = plan.generation_prompt;
-    parser_params.parse_tool_calls = true;
-    if (!plan.parser.empty()) {
-      parser_params.parser.load(plan.parser);
-    }
+    chat_output_reader reader;
+    load_chat_output_reader(plan, &reader);
     const std::string output(
         reinterpret_cast<const char *>(output_data), output_size);
-    const common_chat_msg message =
-        common_chat_parse(output, false, parser_params);
+    const common_chat_msg message = read_chat_output(reader, output, true);
     const std::string message_json =
         message.to_json_oaicompat().dump();
     const llama_dart_result copied =
@@ -4097,6 +4362,99 @@ llama_dart_result llama_dart_chat_parse_output(
     return fail(LLAMA_DART_ERROR_INTERNAL,
                 "unknown chat output parsing failure");
   }
+}
+
+llama_dart_result llama_dart_chat_stream_parser_create(
+    const uint8_t *plan_data, size_t plan_size,
+    llama_dart_chat_stream_parser **out_parser) {
+  if (out_parser == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_parser must not be null");
+  }
+  *out_parser = nullptr;
+
+  parsed_chat_plan plan;
+  const llama_dart_result parsed =
+      parse_chat_plan(plan_data, plan_size, &plan);
+  if (parsed != LLAMA_DART_SUCCESS) {
+    return parsed;
+  }
+
+  try {
+    auto parser = std::make_unique<llama_dart_chat_stream_parser>();
+    load_chat_output_reader(plan, &parser->reader);
+    *out_parser = parser.release();
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail_parts(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                      "chat plan parser is invalid: ", error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat stream parser creation failure");
+  }
+}
+
+llama_dart_result llama_dart_chat_stream_parser_parse(
+    const llama_dart_chat_stream_parser *parser, const uint8_t *output_data,
+    size_t output_size, uint8_t is_partial, llama_dart_buffer *out_parts_json) {
+  if (out_parts_json == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_parts_json must not be null");
+  }
+  out_parts_json->data = nullptr;
+  out_parts_json->size = 0;
+  if (parser == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "parser must not be null");
+  }
+  if (output_data == nullptr && output_size > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "output_data must not be null when output_size is positive");
+  }
+  if (!fits_int32(output_size)) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "chat output is too large");
+  }
+
+  try {
+    const std::string output(
+        reinterpret_cast<const char *>(output_data), output_size);
+    const common_chat_msg message =
+        read_chat_output(parser->reader, output, is_partial == 0);
+    size_t tool_call_bytes = 0;
+    for (const common_chat_tool_call &call : message.tool_calls) {
+      tool_call_bytes += call.name.size() + call.arguments.size();
+    }
+    const std::string parts_json =
+        nlohmann::ordered_json{
+            {"content", message.content},
+            {"reasoning_content", message.reasoning_content},
+            {"tool_call_bytes", tool_call_bytes},
+        }
+            .dump(-1, ' ', false,
+                  nlohmann::ordered_json::error_handler_t::replace);
+    const llama_dart_result copied = copy_to_buffer(parts_json, out_parts_json);
+    if (copied != LLAMA_DART_SUCCESS) {
+      return copied;
+    }
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail_parts(LLAMA_DART_ERROR_GENERATION,
+                      "failed to parse chat output: ", error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL,
+                "unknown chat output parsing failure");
+  }
+}
+
+void llama_dart_chat_stream_parser_free(
+    llama_dart_chat_stream_parser *parser) {
+  delete parser;
+  last_error.clear();
 }
 
 llama_dart_result llama_dart_json_schema_to_grammar(

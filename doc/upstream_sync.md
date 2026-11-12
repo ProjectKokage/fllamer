@@ -258,6 +258,60 @@ state only when its committed token history is an exact prefix of the newly
 tokenized full prompt; a mismatch clears the context before evaluating the
 full prompt.
 
+ABI 43 adds the chat stream parser: `llama_dart_chat_stream_parser_create`
+loads a chat plan's parser once, `llama_dart_chat_stream_parser_parse` runs
+pinned `common_chat_parse` over all output generated so far, with
+`is_partial` for output that stops anywhere, and returns the response text,
+the reasoning and the size of the tool calls parsed so far. The Dart worker
+calls it once per streamed chunk and publishes what each call adds. A partial
+result never ends inside a UTF-8 sequence, and output may contain NUL bytes.
+A chat request's `"separate_reasoning": true` selects reasoning-aware parsing
+without setting `enable_thinking`, which keeps upstream's default `true`.
+`llama_dart_chat_template_capabilities.marks_reasoning` reports whether the
+template, rendered with thinking on, exposes a usable reasoning start marker
+and end marker, and uses the start marker in its source or in the generation
+prompt it renders. Upstream's LFM2, Kimi K2 and Ministral parsers name markers
+for templates that have none.
+
+The bridge reads chat output through one function for the stream and for the
+terminal message. Three of its steps depend on upstream details that a sync
+must recheck:
+
+- Upstream's `until` parser cuts text before a piece that could begin one of
+  its delimiters, also when the output has ended (`common/peg-parser.cpp`;
+  `common_chat_peg_parse` always parses leniently). What follows in a
+  template's grammar may then read that piece as something else. Ling 3 and
+  Kimi K3 read a possible end of reasoning as response text, and DeepSeek
+  V3.2 and V4 read a reasoning block that ends in such a piece as response
+  text, which a later parse takes back. The bridge therefore removes such an
+  end from the output before a partial parse. It collects the markers from
+  `common_peg_until_parser::delimiters` of every parser in the plan's arena,
+  and adds the plan's reasoning start marker, because a parser that begins
+  with an optional reasoning block waits for the rest of that literal in the
+  same way.
+- For output that has ended, the bridge parses the output followed by one
+  character that occurs in none of those markers. When that adds the removed
+  piece, or the end of it, and the character to the response text or to the
+  reasoning, relative to the parse without the piece, the piece is text
+  there and the character is taken off; otherwise the output is parsed as it
+  stands. This relies on `common_chat_parse` failing only for output the
+  grammar rejects, with or without `is_partial`.
+- Upstream prepends the plan's generation prompt to the output before
+  parsing. The bridge does that itself and leaves
+  `common_chat_parser_params::generation_prompt` empty, so that for a plan
+  with thinking off whose generation prompt holds a closed reasoning block,
+  output that begins with the template's start marker is parsed against the
+  generation prompt cut before that block.
+
+A partial parse can still report text that a later parse takes back when the
+output does not follow the template's format at all, for example plain text
+for the Cohere Command R7B template, which requires its response marker, or a
+tool call the template's parser rejects. Upstream then returns whatever it
+parsed before the mismatch. The Dart stream keeps what it delivered, delivers
+nothing that is taken back, and fails with "The chat parser changed output
+that was already streamed" when a later parse reads different text in its
+place.
+
 ABI 42 appends `maximum_token_piece_bytes` to `llama_dart_model_info`.
 Model loading scans each vocabulary ID once with pinned
 `llama_token_to_piece(vocab, token, buffer, 0, 0, true)`. A negative return is

@@ -103,7 +103,7 @@ void main() async {
   assembly can use `LlamaEngine.countChatTokens()` to enforce the complete
   model-specific prompt budget without reopening the model. Vector-index JSON
   persistence and loading also encode/decode outside the caller isolate.
-- Native ABI smoke bridge (current ABI 42): version, capabilities, backend
+- Native ABI smoke bridge (current ABI 43): version, capabilities, backend
   init/free, model load/free, context create/free, model metadata, tokenization,
   detokenization, and last-error functions.
 - Generated Dart FFI bindings from `native/llama_dart_bridge/include/llama_dart.h`.
@@ -139,10 +139,43 @@ void main() async {
   generatable. Markerless templates retain template-only Off behavior.
   Thinking chat cannot be combined with an app-supplied raw
   grammar, JSON mode, or JSON schema because that constraint would also apply
-  to reasoning. Planner-owned tool grammar remains supported. Typed terminal
-  parsing keeps reasoning separate from the normalized assistant value, but
-  streamed `GenerationChunk.text` is raw model output and can contain reasoning;
-  apps must filter it before display, history, or speech. Raw `complete()` and
+  to reasoning. Planner-owned tool grammar remains supported. A
+  chat that asks its template for tools, a thinking mode or a reasoning
+  budget, or that sets `GenerationConfig.separateReasoning`, is read by
+  the pinned upstream chat parser while it streams:
+  `GenerationChunk.text` carries the response text alone,
+  `GenerationChunk.reasoningText` carries the reasoning, and
+  `GenerationChunk.writesToolCall` marks a chunk that added to a tool call.
+  The parser follows whatever markers the template uses. The reasoning block
+  and its markers stay out of `text` when the generation prompt opened the
+  block, when sampling closed it, and when a model writes a block at the
+  start of its output although thinking is off and the prompt already holds
+  an empty one. Tool-call markup stays out of `text` too. One case is not
+  covered: the parsers of most templates expect one reasoning block, so a
+  model that goes on reasoning after a reasoning budget closed its block, or
+  that opens a second block later in its output, has that text and its
+  markers delivered in `text`. An end of the output that could still become
+  one of the template's markers, such as a lone `<`, is held back from
+  `text` and `reasoningText` while the response streams, until the next
+  chunk decides it. When the response ends it is delivered: as response text
+  or as reasoning, whichever the model was writing. Two cases do not deliver
+  it: a response that ends inside a tool call, where the piece belongs to
+  the unfinished call, and output that the template's parser rejects, such
+  as text that does not follow the template's format or a malformed tool
+  call. Rejected output ends as it was read while it streamed, and a tool
+  chat fails with a `GenerationException`. The terminal
+  `assistantMessage` of a tool chat is read the same way, so its text is the
+  streamed `text` and holds no reasoning. `separateReasoning` asks for this
+  without choosing a thinking mode; when the planner cannot render the
+  model's template it uses the legacy formatter and streams the output as
+  generated.
+  `LlamaChatTemplateCapabilities.marksReasoning` tells whether the template
+  itself marks its reasoning: upstream names a start and an end marker for
+  it, and the start marker occurs in the template's source or in the
+  generation prompt it renders. `reasoningBudgetTokens` works with such a
+  template. A chat that asks none of these, and raw completion, stream the
+  output as generated; it can then contain reasoning, and apps must filter it
+  before display, history, or speech. Raw `complete()` and
   `continueCompletion()` calls reject thinking controls.
   Chat may also set `reasoningBudgetTokens` to cap each reasoning block
   independently of the total `maxTokens`. A budget leaves

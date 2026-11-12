@@ -290,6 +290,7 @@ final class NativeEngineHandles {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return bridge.formatChatWithModel(
@@ -299,6 +300,7 @@ final class NativeEngineHandles {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -309,6 +311,7 @@ final class NativeEngineHandles {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) {
     return bridge.countChatTokensWithModel(
@@ -318,6 +321,7 @@ final class NativeEngineHandles {
       toolCalling: toolCalling,
       enableThinking: enableThinking,
       reasoningBudgetTokens: reasoningBudgetTokens,
+      separateReasoning: separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
   }
@@ -715,6 +719,7 @@ final class NativeEngineHandles {
       jsonSchema: config.jsonSchema,
       enableThinking: config.enableThinking,
       reasoningBudgetTokens: config.reasoningBudgetTokens,
+      separateReasoning: config.separateReasoning,
       maximumPromptBytes: maximumPromptBytes,
     );
     return startCompletionStream(
@@ -951,6 +956,7 @@ final class NativeStreamingGeneration {
   final NativeLlamaBridge bridge;
   final int chunkTokens;
   final NativeChatPlan? chatPlan;
+  NativeChatStreamParser? _streamParser;
   final LlamaToolCallingConfig toolCalling;
   final void Function()? _onClose;
   final ffi.Pointer<llama_dart_buffer> _out = calloc<llama_dart_buffer>();
@@ -966,6 +972,8 @@ final class NativeStreamingGeneration {
 
   ({
     String text,
+    String reasoningText,
+    bool writesToolCall,
     bool isDone,
     GenerationTelemetry? telemetry,
     ChatMessage? assistantMessage,
@@ -1031,8 +1039,11 @@ final class NativeStreamingGeneration {
                 toolCalling,
                 telemetry.stopReason,
               );
+        final parts = _streamedParts(chunk.toString(), isDone: true);
         return (
-          text: chunk.toString(),
+          text: parts.text,
+          reasoningText: parts.reasoningText,
+          writesToolCall: parts.writesToolCall,
           isDone: true,
           telemetry: telemetry,
           assistantMessage: assistantMessage,
@@ -1042,12 +1053,32 @@ final class NativeStreamingGeneration {
         break;
       }
     }
+    final parts = _streamedParts(chunk.toString(), isDone: false);
     return (
-      text: chunk.toString(),
+      text: parts.text,
+      reasoningText: parts.reasoningText,
+      writesToolCall: parts.writesToolCall,
       isDone: false,
       telemetry: null,
       assistantMessage: null,
     );
+  }
+
+  /// What this step adds to the stream: [generated] as it is, or, for a plan
+  /// whose stream is parsed, the response text and reasoning it completes.
+  ({String text, String reasoningText, bool writesToolCall}) _streamedParts(
+    String generated, {
+    required bool isDone,
+  }) {
+    final plan = chatPlan;
+    if (plan == null || !plan.parsesStream) {
+      return (text: generated, reasoningText: '', writesToolCall: false);
+    }
+    if (generated.isEmpty && !isDone) {
+      return (text: '', reasoningText: '', writesToolCall: false);
+    }
+    final parser = _streamParser ??= NativeChatStreamParser(bridge, plan);
+    return parser.advance(_generated.toString(), isDone: isDone);
   }
 
   void close() {
@@ -1056,6 +1087,7 @@ final class NativeStreamingGeneration {
     }
     _closed = true;
     try {
+      _streamParser?.close();
       bridge.bindings.llama_dart_buffer_free(_out.ref.data);
       _out.ref.data = ffi.nullptr;
       _out.ref.size = 0;

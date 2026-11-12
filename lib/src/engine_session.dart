@@ -173,6 +173,8 @@ final class NativeLlamaEngineSession {
   Stream<
     ({
       String text,
+      String reasoningText,
+      bool writesToolCall,
       bool isDone,
       GenerationTelemetry? telemetry,
       ChatMessage? assistantMessage,
@@ -203,6 +205,8 @@ final class NativeLlamaEngineSession {
   Stream<
     ({
       String text,
+      String reasoningText,
+      bool writesToolCall,
       bool isDone,
       GenerationTelemetry? telemetry,
       ChatMessage? assistantMessage,
@@ -221,6 +225,8 @@ final class NativeLlamaEngineSession {
   Stream<
     ({
       String text,
+      String reasoningText,
+      bool writesToolCall,
       bool isDone,
       GenerationTelemetry? telemetry,
       ChatMessage? assistantMessage,
@@ -231,6 +237,8 @@ final class NativeLlamaEngineSession {
     late final StreamController<
       ({
         String text,
+        String reasoningText,
+        bool writesToolCall,
         bool isDone,
         GenerationTelemetry? telemetry,
         ChatMessage? assistantMessage,
@@ -294,6 +302,8 @@ final class NativeLlamaEngineSession {
         StreamController<
           ({
             String text,
+            String reasoningText,
+            bool writesToolCall,
             bool isDone,
             GenerationTelemetry? telemetry,
             ChatMessage? assistantMessage,
@@ -339,6 +349,8 @@ final class NativeLlamaEngineSession {
                 // completes that request nor permits another native batch.
                 controller.add((
                   text: '',
+                  reasoningText: '',
+                  writesToolCall: false,
                   isDone: false,
                   telemetry: null,
                   assistantMessage: null,
@@ -353,9 +365,14 @@ final class NativeLlamaEngineSession {
                   releaseSlot();
                 }
                 if (!controller.isClosed &&
-                    (message.text.isNotEmpty || message.isDone)) {
+                    (message.text.isNotEmpty ||
+                        message.reasoningText.isNotEmpty ||
+                        message.writesToolCall ||
+                        message.isDone)) {
                   controller.add((
                     text: message.text,
+                    reasoningText: message.reasoningText,
+                    writesToolCall: message.writesToolCall,
                     isDone: message.isDone,
                     telemetry: message.telemetry,
                     assistantMessage: message.assistantMessage,
@@ -513,6 +530,7 @@ final class NativeLlamaEngineSession {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) => _request(
     FormatChatRequest(
@@ -521,6 +539,7 @@ final class NativeLlamaEngineSession {
       toolCalling,
       enableThinking,
       reasoningBudgetTokens,
+      separateReasoning,
       maximumPromptBytes,
     ),
   );
@@ -531,6 +550,7 @@ final class NativeLlamaEngineSession {
     required LlamaToolCallingConfig toolCalling,
     bool? enableThinking,
     int? reasoningBudgetTokens,
+    bool separateReasoning = false,
     int? maximumPromptBytes,
   }) => _request(
     CountChatTokensRequest(
@@ -539,6 +559,7 @@ final class NativeLlamaEngineSession {
       toolCalling,
       enableThinking,
       reasoningBudgetTokens,
+      separateReasoning,
       maximumPromptBytes,
     ),
   );
