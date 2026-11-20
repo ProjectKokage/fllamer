@@ -1,4 +1,7 @@
-## Unreleased
+## 0.3.0
+
+- 0.2.3 and 0.2.4 were not published to pub.dev; this release includes
+  their entries below as well as these.
 
 - A planned chat no longer turns message text into control tokens. Before, a
   chat prompt was tokenized as one string with special-token parsing, so a
