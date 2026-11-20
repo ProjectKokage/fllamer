@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 
-import '../hook/src/android_vulkan_shader_overlay.dart';
+import 'package:fllamer/src/hook/android_vulkan_shader_overlay.dart';
 
 void main() {
   final shaderDirectory = Directory(

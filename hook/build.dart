@@ -5,7 +5,7 @@ import 'package:code_assets/code_assets.dart';
 import 'package:crypto/crypto.dart';
 import 'package:hooks/hooks.dart';
 
-import 'src/android_vulkan_shader_overlay.dart';
+import 'package:fllamer/src/hook/android_vulkan_shader_overlay.dart';
 
 const _libraryName = 'llama_dart_bridge';
 const _assetName = 'llama_dart_bridge';
@@ -168,7 +168,7 @@ Uri cmakeBuildDirectoryForNativeAssetsBuild({
 
 List<Uri> _nativeBuildDependencies(Uri packageRoot) {
   final dependencies = <Uri>[
-    packageRoot.resolve('hook/src/android_vulkan_shader_overlay.dart'),
+    packageRoot.resolve('lib/src/hook/android_vulkan_shader_overlay.dart'),
     packageRoot.resolve('third_party/llama.cpp/CMakeLists.txt'),
     packageRoot.resolve('third_party/llama.cpp/LICENSE'),
   ];
