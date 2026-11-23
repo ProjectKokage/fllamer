@@ -415,7 +415,7 @@ Model files, adapters, and mmproj files are app-supplied data with their own
 licenses.
 
 The upstream submodule is pinned at
-`cd959bae99ff4bed22bef2604f45241c09bbb8c8` (`v0.9.0`).
+`b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (`v1.0.0`).
 
 See [doc/feature_matrix.md](doc/feature_matrix.md) and
 [doc/upstream_sync.md](doc/upstream_sync.md). Architecture, native build, and

@@ -60,7 +60,7 @@ function(fllamer_apply_android_vulkan_shader_overlay target overlay_shader_dir)
   file(SHA256 "${_overlay_vulkan}" _overlay_vulkan_sha256)
   if(
     NOT _overlay_vulkan_sha256 STREQUAL
-    "4502ba0d68252e4d43ab8675adf0964a960fb4f8e9c7c0f3b6c276ad554bf383"
+    "efd05b15b8340f42f07d8d586d4ebe3f3bcff09076c59d07c84a4908e009357d"
   )
     message(FATAL_ERROR "Android Vulkan native source overlay is not exact")
   endif()

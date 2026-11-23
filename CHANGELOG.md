@@ -1,3 +1,27 @@
+## Unreleased
+
+- Synchronized `third_party/llama.cpp` to
+  `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (upstream release `v1.0.0`, build
+  number 12359), 249 commits after `v0.9.0`. No Dart API change and no ABI
+  change (ABI 45): upstream removed its deprecated public API, none of which
+  the bridge called, so the bridge source is unchanged and custom ABI 45
+  bridges only need a rebuild against the new pin. Saved state keeps
+  upstream's session format version 11. **Behavior changes from upstream:**
+  the Gemma 4 grammar and parser follow the keys of each tool's
+  `parametersSchema` (declared names, required properties, and other keys only
+  where the schema allows them), so a call with an undeclared key can no
+  longer be generated and is rejected by the parser instead of by fllamer's
+  schema validation; both fail with `GenerationException`. Value types are
+  still checked only by fllamer after parsing. Upstream also dropped its
+  tool-response rewrite for Gemma 4 GGUFs that embed an outdated chat
+  template, and fixed the JSON Schema grammar for `allOf` of plain types,
+  which used to produce an empty-object grammar. The Android Vulkan
+  build-output overlay is version 7: every transform is kept, the shader
+  transforms are byte-identical, and the Qualcomm predicate in
+  `ggml-vulkan.cpp` is inserted after upstream's new
+  `ggml_vk_amd_large_tile_supported`. Version 7 cross-compiles for arm64-v8a
+  and x86_64 and has not run on a device.
+
 ## 0.3.0
 
 - 0.2.3 and 0.2.4 were not published to pub.dev; this release includes

@@ -10,7 +10,7 @@ import 'package:fllamer/src/hook/android_vulkan_shader_overlay.dart';
 const _libraryName = 'llama_dart_bridge';
 const _assetName = 'llama_dart_bridge';
 const _cmakeBuildType = 'RelWithDebInfo';
-const _androidVulkanShaderOverlayVersion = '6';
+const _androidVulkanShaderOverlayVersion = '7';
 const minimumIosVersion = 15;
 const maximumDefaultBuildJobs = 4;
 const minimumVulkanCmakeMajor = 3;
