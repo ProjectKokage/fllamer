@@ -69,14 +69,32 @@ Parallel calls are enabled only when both the request and model template allow
 them. Missing model-generated call IDs receive unique per-engine IDs.
 
 Gemma 4 uses a model-specific non-JSON argument syntax. The pinned upstream
-planner constrains it with a grammar that follows the keys of each declared
-`parametersSchema`: the declared property names, which of them are required,
-and whether other keys are allowed. It does not follow the types of the
-values, so `{query: 5}` can be generated and is parsed for a `query` declared
-as a string. Regardless of model family, fllamer validates every parsed terminal
-call against its matching schema before `assistantMessage` is returned.
-Invalid calls fail with `GenerationException`; they are never handed to
-application tool dispatch.
+planner constrains it with a grammar and parser that follow each declared
+`parametersSchema`:
+
+- Keys are the declared property names, in the template's order (sorted by
+  name, ignoring case), with the required ones present.
+- Another key is accepted only when the schema sets `additionalProperties`.
+  A schema that lists `properties` and leaves `additionalProperties` out
+  allows no other key here, although JSON Schema and fllamer's own validator
+  read that as allowing any. Set `additionalProperties: true` to let a
+  Gemma 4 model add keys.
+- A property declared as an array or an object must be one, and an object's
+  keys follow the same rules.
+- The type of a string, number, boolean or null value is not followed:
+  `{query: 5}` can be generated and is parsed for a `query` declared as a
+  string.
+
+For properties `zulu`, `alpha` and `tags` (an array), `{alpha: …, tags: […],
+zulu: …}` is a call; `{zulu: …, alpha: …}`, `{alpha: …, extra: 1}` and
+`{tags: 5}` are not. Output that holds such a call fails with a
+`GenerationException` whose message is the upstream parser's ("failed to
+parse chat output…"), not fllamer's schema message.
+
+Regardless of model family, fllamer validates every parsed terminal call
+against its matching schema before `assistantMessage` is returned. Invalid
+calls fail with `GenerationException`; they are never handed to application
+tool dispatch.
 
 Active tools cannot be combined with a custom grammar or JSON Schema response
 constraint. Named tool choice is implemented by exposing only the selected

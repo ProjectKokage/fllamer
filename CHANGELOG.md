@@ -6,26 +6,47 @@
   change (ABI 45): upstream removed its deprecated public API, none of which
   the bridge called, so the bridge source is unchanged and custom ABI 45
   bridges only need a rebuild against the new pin. Saved state keeps
-  upstream's session format version 11. **Behavior changes from upstream:**
-  the Gemma 4 grammar and parser follow the keys of each tool's
-  `parametersSchema` (declared names, required properties, and other keys only
-  where the schema allows them), so a call with an undeclared key can no
-  longer be generated and is rejected by the parser instead of by fllamer's
-  schema validation; both fail with `GenerationException`. Value types are
-  still checked only by fllamer after parsing. Upstream also dropped its
-  tool-response rewrite for Gemma 4 GGUFs that embed an outdated chat
-  template, and fixed the JSON Schema grammar for `allOf` of plain types,
-  which used to produce an empty-object grammar. A model's greedy output on
-  CPU can differ from the previous pin: with a `v0.9.0` bridge and this one,
-  Qwen3.5 2B Q6_K answered identically and LFM2.5 1.2B Q6_K worded its
-  answers differently from identical prompts. Upstream changed CPU kernels
-  in between (for example #32128 and #29810); which change moves that
-  model's output was not determined. The Android Vulkan
-  build-output overlay is version 7: every transform is kept, the shader
-  transforms are byte-identical, and the Qualcomm predicate in
-  `ggml-vulkan.cpp` is inserted after upstream's new
-  `ggml_vk_amd_large_tile_supported`. Version 7 cross-compiles for arm64-v8a
-  and x86_64 and has not run on a device.
+  upstream's session format version 11. The Android Vulkan build-output
+  overlay is version 7: every transform is kept, the shader transforms are
+  byte-identical, and the Qualcomm predicate in `ggml-vulkan.cpp` is inserted
+  after upstream's new `ggml_vk_amd_large_tile_supported`. Version 7
+  cross-compiles for arm64-v8a and x86_64 and has not run on a device.
+  **Behavior changes from upstream:**
+  - Gemma 4 tool calls follow each tool's `parametersSchema` during
+    generation and parsing. Keys must be declared ones, in the template's
+    order (sorted by name, ignoring case), with the required ones present.
+    Another key is accepted only when the schema sets
+    `additionalProperties`; a schema that lists `properties` and leaves
+    `additionalProperties` out allows none. A property declared as an array
+    or an object must be one, and an object's own keys follow the same
+    rules. Example: for properties `zulu`, `alpha` and `tags` (an array),
+    `{alpha: …, tags: […], zulu: …}` is a call, and `{zulu: …, alpha: …}`,
+    `{alpha: …, extra: 1}` and `{tags: 5}` are not. Such a call can no
+    longer be generated, and output that holds one fails with
+    `GenerationException` ("failed to parse chat output…") from upstream's
+    parser. Before, any such call was parsed and fllamer's schema validation
+    decided. That validation accepts keys in any order and, under a schema
+    without `additionalProperties`, an extra key, so those two kinds of call
+    used to reach the application.
+    The type of a string, number, boolean or null value is still checked
+    only by fllamer after parsing.
+  - Upstream dropped its tool-response rewrite for Gemma 4 GGUFs that embed
+    a chat template older than the official one. Tool results in such a
+    chat were not checked on this pin.
+  - The JSON Schema grammar for `allOf` of plain types is no longer an
+    empty-object grammar.
+  - Tool-call arguments keep valid JSON when a model writes a raw control
+    character inside a quoted string (it is escaped), and invalid UTF-8 in a
+    tool call becomes U+FFFD.
+  - `shiftContext()` moves the kept positions with each model's own RoPE
+    parameters, which changes its result for models that override them,
+    LFM2 among them.
+  - A model's greedy output can differ from the previous pin. On CPU with a
+    `v0.9.0` bridge and this one, Qwen3.5 2B Q6_K answered identically and
+    LFM2.5 1.2B Q6_K worded its answers differently from identical prompts.
+    Upstream changed CPU and Metal kernels and accumulation precision in
+    between (for example #32128, #29810, #31854, #31851 and #30982); which
+    change moves that model's output was not determined.
 
 ## 0.3.0
 

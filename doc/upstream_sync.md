@@ -81,16 +81,23 @@ The `v1.0.0` sync made the overlay version 7. Every transform is kept and
 none is replaced by an upstream change: between the pins upstream changed
 neither the three shader files nor the quantized matrix routes the policy
 guards (the Q4_K matrix-vector registrations, the kernel choice in
-`ggml_vk_mul_mat_q_f16`, the matrix-vector dispatch, the `MUL_MAT`+`ADD`
-fusion check and the `MUL_MAT`/`MUL_MAT_ID` support check). The three shader
-transforms and their hashes are unchanged. In `ggml-vulkan.cpp` only the
+`ggml_vk_mul_mat_q_f16`, the matrix-vector dispatch and the `MUL_MAT`+`ADD`
+fusion check). The `MUL_MAT`/`MUL_MAT_ID` support check changed in one line
+after the place the policy is inserted: it now also refuses a BF16 precision
+request for the second operand (#31851), which sends more operations to the
+CPU and none to a quantized kernel. The three shader transforms and their
+hashes are unchanged. In `ggml-vulkan.cpp` only the
 place where `ggml_vk_is_qualcomm_proprietary` is inserted moved: upstream
 added `ggml_vk_amd_large_tile_supported` (#31587) directly before
 `ggml_vk_load_shaders`, so the predicate now follows that function. Upstream's
 own Qualcomm change in this range (#30829) caps the rows of scalar flash
-attention for head sizes above 128 and does not touch K-quant weights; its
-new prefill flash-attention kernel (#29357) is registered for Intel only.
-Version 7 has the same standing as version 6.
+attention for head sizes above 128 and does not touch K-quant weights. Its
+new prefill flash-attention kernel (#29357) is enabled on Intel Xe, or on
+another device with 32-wide subgroups and 16x16x16 cooperative matrices when
+`GGML_VK_FORCE_XE_FA` is set; it reads F16 keys and values and no weights.
+As before, the overlay does not guard `MUL_MAT_ID` for Q4_K weights; that
+route is the same at both pins. Version 7 has the same standing as version
+6.
 
 To sync upstream, fetch and inspect an explicit commit, check it out detached
 inside the submodule, and stage the updated gitlink:
@@ -226,26 +233,52 @@ not. `tools/mtmd/clip.h` is gone (#31865); the bridge includes only `mtmd.h`
 and `mtmd-helper.h`. `LLAMA_SESSION_VERSION` is still 11 and
 `LLAMA_STATE_SEQ_VERSION` still 4.
 
-Three upstream behaviors changed with the pin:
+These upstream behaviors changed with the pin:
 
-- The Gemma 4 parser and grammar follow the keys of each tool's parameter
-  schema (#31915): declared property names in the template's sorted order,
-  required properties, and other keys only where the schema allows
-  additional properties. Value types are still not followed. A call with a
-  key the schema does not declare can therefore not be generated under the
-  grammar, and `common_chat_parse` rejects it in ended output, which the
-  bridge reports as `LLAMA_DART_ERROR_GENERATION`. Before, it parsed and
-  Dart's schema validation rejected it.
+- The Gemma 4 parser and grammar follow each tool's parameter schema
+  (#31915, `common/parsers/gemma4.cpp`) when its root is an object that
+  upstream can convert; otherwise they keep the generic dictionary. Declared
+  property names come in the template's order, sorted by name without
+  regard to case, with the required ones present. Other keys are accepted
+  only after the declared ones and only when the schema sets
+  `additionalProperties`: upstream reads a schema that lists `properties`
+  and leaves `additionalProperties` out as allowing none
+  (`common/json-schema.cpp`), where fllamer's validator reads it as allowing
+  any. A property declared as an array, a tuple or an object, or through
+  `$ref`, `anyOf` or a one-member `allOf` of those, must have that shape,
+  and an object's keys follow the same rules. The type of a string, number,
+  boolean, null, enum or const value is not followed. A call outside these
+  rules can not be generated under the grammar, and `common_chat_parse`
+  rejects it in ended output, which the bridge reports as
+  `LLAMA_DART_ERROR_GENERATION` with upstream's message. Before, any
+  dictionary parsed and Dart's schema validation decided, naming the tool
+  and the key. A partial parse while output streams still does not fail.
 - The same change removed upstream's compatibility rewrite of tool responses
-  for outdated Gemma 4 chat templates. A Gemma 4 GGUF that embeds a template
-  from before the official one renders tool results as its own template
-  writes them.
+  for outdated Gemma 4 chat templates. No such template was run on this
+  pin, so how one renders a tool result now is not known.
+- `json_schema_to_grammar` no longer turns an `allOf` of plain types into an
+  empty-object grammar (#31834).
+- Tool-call arguments in the Python-like syntax (LFM2 and LFM2.5) escape raw
+  control characters inside quoted strings (#31937), and tool ids and
+  argument values replace invalid UTF-8 with U+FFFD (#31861).
+- Context shifting rotates the kept keys with per-model RoPE parameters
+  (#31683). Models that override them, LFM2 among them, shift to a different
+  result than before.
+- Arithmetic changed in several kernels (#31854, #29810 and #32128 on CPU,
+  #30982 on Metal, #31851 for accumulation precision), so output for a fixed
+  seed can differ between the pins ([native builds](native_builds.md)).
+- `mtmd` computes audio log-mel in the graph (#31808) and refuses a Qwen-VL
+  projector whose spatial merge is not 2x2 or that lacks its projector or
+  patch-embedding tensors (#32129, #32130).
 - With an integrated MTP head, `common_speculative` keeps the target's hidden
-  rows in a device buffer when the two contexts allow it and reads row
-  `k - 1` of the last target decode there. The bridge already hands it the
-  entries of one `llama_decode` call directly after that call, with every
-  row output and at most `llama_n_batch` entries, which is what that path
-  asserts.
+  rows in a device buffer when the two contexts allow it. It reads row
+  `k - 1` of the last target decode there, asserts that the batch has at
+  most `llama_n_batch` entries, and reads the buffer again in
+  `common_speculative_accept`, so no target decode may come between the
+  verifying decode and that call. The bridge hands it the entries of one
+  `llama_decode` call directly after that call, with every row output and at
+  most `llama_n_batch` entries, and accepts before it decodes a replacement
+  token. No MTP model has run on this pin.
 
 `LlamaEngine.warmUp()` follows pinned `common_init_from_params` semantics: it
 uses BOS/EOS tokens with token zero as a fallback, runs encoder and decoder
