@@ -354,7 +354,11 @@ Current verification:
   arrived apart, and the terminal message carried the parsed call), followed
   a JSON Schema with an `allOf` integer and a GBNF grammar, generated again
   after a stream was cancelled, and described a JPEG through `mtmd`; the
-  embeddings CLI ran with Granite 97M Q8_0. The Gemma 4 fixture test below
+  embeddings CLI ran with Granite 97M Q8_0. Against a `v0.9.0` build of the
+  bridge on CPU at temperature 0, Qwen3.5 2B Q6_K produced the same prompts,
+  token counts and output for plain chat, a JSON Schema, a reasoning budget
+  and a tool call; LFM2.5 1.2B Q6_K produced the same prompts and token
+  counts and different wording. The Gemma 4 fixture test below
   fails on this pin and on `v0.9.0` alike: since upstream #28335
   (2026-09-04) the E2B projector decodes causally, so the request it expects
   to be rejected generates. The fixture-pinned TinyGemma3, audio, embedding,

@@ -15,7 +15,12 @@
   still checked only by fllamer after parsing. Upstream also dropped its
   tool-response rewrite for Gemma 4 GGUFs that embed an outdated chat
   template, and fixed the JSON Schema grammar for `allOf` of plain types,
-  which used to produce an empty-object grammar. The Android Vulkan
+  which used to produce an empty-object grammar. A model's greedy output on
+  CPU can differ from the previous pin: with a `v0.9.0` bridge and this one,
+  Qwen3.5 2B Q6_K answered identically and LFM2.5 1.2B Q6_K worded its
+  answers differently from identical prompts. Upstream changed CPU kernels
+  in between (for example #32128 and #29810); which change moves that
+  model's output was not determined. The Android Vulkan
   build-output overlay is version 7: every transform is kept, the shader
   transforms are byte-identical, and the Qualcomm predicate in
   `ggml-vulkan.cpp` is inserted after upstream's new
