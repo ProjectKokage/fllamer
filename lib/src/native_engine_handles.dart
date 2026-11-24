@@ -232,6 +232,24 @@ final class NativeEngineHandles {
     bridge.check(bridge.bindings.llama_dart_context_reset(context));
   }
 
+  int keepConversation() {
+    final tokens = calloc<ffi.Uint32>();
+    try {
+      bridge.check(
+        bridge.bindings.llama_dart_context_keep_conversation(context, tokens),
+      );
+      return tokens.value;
+    } finally {
+      calloc.free(tokens);
+    }
+  }
+
+  void forgetConversation() {
+    bridge.check(
+      bridge.bindings.llama_dart_context_forget_conversation(context),
+    );
+  }
+
   void warmUp() {
     bridge.check(bridge.bindings.llama_dart_context_warm_up(context));
   }

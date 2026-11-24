@@ -1038,6 +1038,30 @@ final class LlamaEngine {
     await _native.reset();
   }
 
+  /// Keeps the conversation the context holds before another prompt replaces
+  /// it. The context returns to its kept prompt boundary (see [chat]'s
+  /// `reusePromptPrefix`): the point where the turn of the last message began
+  /// in the last planned chat read with prefix reuse. Every token read after
+  /// it is dropped, and the native session copies the state there. A later
+  /// chat with prefix reuse whose prompt starts with those tokens, when the
+  /// context does not hold them, puts that state back and reads only the
+  /// rest; the copy is then freed. One conversation is kept; keeping another
+  /// frees the previous one first, and [forgetConversation] frees it.
+  ///
+  /// Returns how many tokens were kept, or null when the context holds no
+  /// such point and is unchanged.
+  Future<int?> keepConversation() async {
+    _ensureOpen();
+    final tokens = await _native.keepConversation();
+    return tokens == 0 ? null : tokens;
+  }
+
+  /// Frees a conversation [keepConversation] kept.
+  Future<void> forgetConversation() async {
+    _ensureOpen();
+    await _native.forgetConversation();
+  }
+
   /// Discards old context tokens while preserving a prefix and recent tail.
   ///
   /// When [discardTokens] is omitted, half of the removable suffix is

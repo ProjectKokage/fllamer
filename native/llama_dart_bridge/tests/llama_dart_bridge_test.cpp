@@ -2864,6 +2864,15 @@ int main() {
       assert(llama_dart_context_get_info(context, &context_info) ==
              LLAMA_DART_SUCCESS);
       assert(context_info.used_tokens == 0);
+      // An empty context holds no prompt boundary: nothing to keep.
+      uint32_t kept_tokens = 7;
+      assert(llama_dart_context_keep_conversation(context, &kept_tokens) ==
+             LLAMA_DART_SUCCESS);
+      assert(kept_tokens == 0);
+      assert(llama_dart_context_keep_conversation(context, nullptr) ==
+             LLAMA_DART_ERROR_INVALID_ARGUMENT);
+      assert(llama_dart_context_forget_conversation(context) ==
+             LLAMA_DART_SUCCESS);
       generation = nullptr;
       llama_dart_generation *next_generation = nullptr;
       const llama_dart_result next_generation_result =
@@ -2903,6 +2912,14 @@ int main() {
   assert(llama_dart_context_create(nullptr, &context_config, &context) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(llama_dart_context_reset(nullptr) == LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  {
+    uint32_t kept_tokens = 7;
+    assert(llama_dart_context_keep_conversation(nullptr, &kept_tokens) ==
+           LLAMA_DART_ERROR_INVALID_ARGUMENT);
+    assert(kept_tokens == 0);
+    assert(llama_dart_context_forget_conversation(nullptr) ==
+           LLAMA_DART_ERROR_INVALID_ARGUMENT);
+  }
   assert(llama_dart_context_warm_up(nullptr) ==
          LLAMA_DART_ERROR_INVALID_ARGUMENT);
   assert(llama_dart_context_cancel(nullptr) ==

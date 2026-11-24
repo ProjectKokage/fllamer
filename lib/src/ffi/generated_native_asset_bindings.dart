@@ -313,6 +313,22 @@ external void llama_dart_context_free(ffi.Pointer<llama_dart_context> context);
 @ffi.Native<ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)>()
 external int llama_dart_context_reset(ffi.Pointer<llama_dart_context> context);
 
+@ffi.Native<
+  ffi.UnsignedInt Function(
+    ffi.Pointer<llama_dart_context>,
+    ffi.Pointer<ffi.Uint32>,
+  )
+>()
+external int llama_dart_context_keep_conversation(
+  ffi.Pointer<llama_dart_context> context,
+  ffi.Pointer<ffi.Uint32> out_tokens,
+);
+
+@ffi.Native<ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)>()
+external int llama_dart_context_forget_conversation(
+  ffi.Pointer<llama_dart_context> context,
+);
+
 @ffi.Native<ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)>()
 external int llama_dart_context_warm_up(
   ffi.Pointer<llama_dart_context> context,
@@ -755,6 +771,23 @@ class _SymbolAddresses {
   >
   get llama_dart_context_reset =>
       ffi.Native.addressOf(self.llama_dart_context_reset);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.UnsignedInt Function(
+        ffi.Pointer<llama_dart_context>,
+        ffi.Pointer<ffi.Uint32>,
+      )
+    >
+  >
+  get llama_dart_context_keep_conversation =>
+      ffi.Native.addressOf(self.llama_dart_context_keep_conversation);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)
+    >
+  >
+  get llama_dart_context_forget_conversation =>
+      ffi.Native.addressOf(self.llama_dart_context_forget_conversation);
   ffi.Pointer<
     ffi.NativeFunction<
       ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)
@@ -1542,4 +1575,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 45;
+const int LLAMA_DART_ABI_VERSION = 46;

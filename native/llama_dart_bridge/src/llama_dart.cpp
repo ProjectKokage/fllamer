@@ -98,6 +98,12 @@ struct llama_dart_context {
   // message or the reply differently from what was read continues from here.
   std::vector<llama_token> boundary_tokens;
   std::vector<uint8_t> boundary_state;
+  // A conversation kept at its prompt boundary before another prompt
+  // replaced the context: the tokens up to the boundary and the whole
+  // sequence state there. A later prompt that starts with those tokens puts
+  // it back and reads only the rest.
+  std::vector<llama_token> kept_tokens;
+  std::vector<uint8_t> kept_state;
   uint32_t speculative_ngram_n = 0;
   uint32_t speculative_ngram_m = 0;
   uint32_t kv_cache_key_type = LLAMA_DART_KV_CACHE_DEFAULT;
@@ -1330,6 +1336,13 @@ llama_dart_result decode_prompt_tokens(llama_dart_context *context,
   return decode_prompt_tokens(context, tokens.data(), tokens.size());
 }
 
+void clear_kept_conversation(llama_dart_context *context) {
+  context->kept_tokens.clear();
+  context->kept_tokens.shrink_to_fit();
+  context->kept_state.clear();
+  context->kept_state.shrink_to_fit();
+}
+
 void clear_prompt_boundary(llama_dart_context *context) {
   context->boundary_tokens.clear();
   context->boundary_tokens.shrink_to_fit();
@@ -1553,22 +1566,58 @@ llama_dart_result prepare_completion_prompt_reuse(
   const bool history_matches_position =
       context->position >= 0 && static_cast<size_t>(context->position) ==
                                     context->token_history.size();
-  if (history_matches_position && reuse.exact_prefix) {
+  const bool without_speculation =
+      context->speculative_type == LLAMA_DART_SPECULATIVE_NONE;
+  // Three ways to continue: the committed history, the kept boundary inside
+  // it, and a kept conversation the context no longer holds. The one that
+  // covers the most of the prompt is used.
+  const bool exact = history_matches_position && reuse.exact_prefix;
+  const bool boundary =
+      history_matches_position && without_speculation &&
+      prompt_continues_boundary(context->token_history,
+                                context->boundary_tokens, prepared->tokens);
+  const bool kept = without_speculation &&
+                    is_proper_token_prefix(context->kept_tokens,
+                                           prepared->tokens);
+  const size_t in_context = std::max(
+      exact ? reuse.suffix_start : 0,
+      boundary ? context->boundary_tokens.size() : 0);
+  const bool kept_is_longest =
+      kept && context->kept_tokens.size() > in_context;
+  if (!kept_is_longest && exact) {
     prepared->suffix_start = reuse.suffix_start;
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   }
-  if (history_matches_position &&
-      context->speculative_type == LLAMA_DART_SPECULATIVE_NONE &&
-      prompt_continues_boundary(context->token_history,
-                                context->boundary_tokens, prepared->tokens) &&
-      restore_prompt_boundary(context)) {
+  if (!kept_is_longest && boundary && restore_prompt_boundary(context)) {
     prepared->suffix_start = context->boundary_tokens.size();
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   }
 
   const llama_dart_result reset = llama_dart_context_reset(context);
+  if (reset == LLAMA_DART_SUCCESS && kept) {
+    // The kept conversation goes back once; it is freed either way.
+    const size_t size = context->kept_state.size();
+    const bool restored =
+        size > 0 && llama_state_seq_set_data_ext(
+                        context->context, context->kept_state.data(), size,
+                        0, LLAMA_STATE_SEQ_FLAGS_NONE) == size;
+    if (restored) {
+      context->token_history = std::move(context->kept_tokens);
+      context->position =
+          static_cast<int32_t>(context->token_history.size());
+      prepared->suffix_start = context->token_history.size();
+      clear_kept_conversation(context);
+      last_error.clear();
+      return LLAMA_DART_SUCCESS;
+    }
+    clear_kept_conversation(context);
+    const llama_dart_result cleared = llama_dart_context_reset(context);
+    if (cleared != LLAMA_DART_SUCCESS) {
+      return cleared;
+    }
+  }
   if (reset != LLAMA_DART_SUCCESS) {
     return reset;
   }
@@ -5492,6 +5541,87 @@ llama_dart_result llama_dart_context_reset(llama_dart_context *context) {
   }
 }
 
+llama_dart_result
+llama_dart_context_keep_conversation(llama_dart_context *context,
+                                     uint32_t *out_tokens) {
+  if (out_tokens == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_tokens must not be null");
+  }
+  *out_tokens = 0;
+  if (context == nullptr || context->context == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "context must not be null");
+  }
+  if (context->active_generations > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "context still has active generations");
+  }
+  try {
+    // A conversation kept earlier is let go before this one is copied, so
+    // two are never held at once.
+    clear_kept_conversation(context);
+    const std::vector<llama_token> &boundary = context->boundary_tokens;
+    const std::vector<llama_token> &history = context->token_history;
+    const bool holds_boundary =
+        context->speculative_type == LLAMA_DART_SPECULATIVE_NONE &&
+        context->position >= 0 &&
+        static_cast<size_t>(context->position) == history.size() &&
+        !boundary.empty() && boundary.size() <= history.size() &&
+        std::equal(boundary.begin(), boundary.end(), history.begin());
+    if (!holds_boundary) {
+      last_error.clear();
+      return LLAMA_DART_SUCCESS;
+    }
+    if (boundary.size() < history.size() &&
+        !restore_prompt_boundary(context)) {
+      const llama_dart_result reset = llama_dart_context_reset(context);
+      return reset != LLAMA_DART_SUCCESS
+                 ? reset
+                 : fail(LLAMA_DART_ERROR_GENERATION,
+                        "failed to return to the prompt boundary; the "
+                        "context was reset");
+    }
+    const size_t size = llama_state_seq_get_size_ext(
+        context->context, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+    std::vector<uint8_t> state(size);
+    if (size == 0 ||
+        llama_state_seq_get_data_ext(context->context, state.data(),
+                                     state.size(), 0,
+                                     LLAMA_STATE_SEQ_FLAGS_NONE) != size) {
+      last_error.clear();
+      return LLAMA_DART_SUCCESS;
+    }
+    context->kept_tokens = context->boundary_tokens;
+    context->kept_state = std::move(state);
+    *out_tokens = static_cast<uint32_t>(context->kept_tokens.size());
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    clear_kept_conversation(context);
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    clear_kept_conversation(context);
+    return fail(LLAMA_DART_ERROR_INTERNAL, error.what());
+  } catch (...) {
+    clear_kept_conversation(context);
+    return fail(LLAMA_DART_ERROR_INTERNAL, "unknown conversation keep failure");
+  }
+}
+
+llama_dart_result
+llama_dart_context_forget_conversation(llama_dart_context *context) {
+  if (context == nullptr || context->context == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "context must not be null");
+  }
+  if (context->active_generations > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "context still has active generations");
+  }
+  clear_kept_conversation(context);
+  last_error.clear();
+  return LLAMA_DART_SUCCESS;
+}
+
 llama_dart_result llama_dart_context_warm_up(llama_dart_context *context) {
   if (context == nullptr || context->context == nullptr ||
       context->model == nullptr || context->model->model == nullptr) {
@@ -6047,8 +6177,9 @@ llama_dart_result llama_dart_context_shift(
 
     context->position = expected_position;
     context->token_history = std::move(next_history);
-    // Shifted positions no longer match the kept boundary state.
+    // Shifted positions no longer match the kept states.
     clear_prompt_boundary(context);
+    clear_kept_conversation(context);
     if (shifted_speculative != nullptr) {
       context->speculative = std::move(shifted_speculative);
     }
@@ -7083,8 +7214,9 @@ llama_dart_result llama_dart_context_set_lora_adapters(
     }
     release_context_lora_adapters(context);
     context->lora_adapters = std::move(next_adapters);
-    // The kept boundary state was read with the previous adapters.
+    // The kept states were read with the previous adapters.
     clear_prompt_boundary(context);
+    clear_kept_conversation(context);
     for (llama_dart_lora_adapter *adapter : context->lora_adapters) {
       adapter->active_contexts += 1;
     }

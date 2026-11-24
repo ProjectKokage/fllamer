@@ -487,6 +487,11 @@ final class NativeLlamaEngineSession {
 
   Future<void> reset() => _request(const ResetRequest());
 
+  Future<int> keepConversation() => _request(const KeepConversationRequest());
+
+  Future<void> forgetConversation() =>
+      _request(const ForgetConversationRequest());
+
   Future<void> warmUp() => _request(const WarmUpRequest());
 
   Future<LlamaModelInfo> modelInfo() => _request(const ModelInfoRequest());

@@ -2589,9 +2589,58 @@ void main() {
           await read(reference, thirdTokens),
         );
 
-        // Without the snapshot the context no longer holds the point and the
-        // prompt is read in full.
+        // Kept by fllamer, the conversation outlives a round that is itself
+        // read with prefix reuse and replaces the point.
+        final fourth = <ChatMessage>[
+          ...third,
+          ChatMessage(role: ChatRole.assistant, text: restored.text.trim()),
+          ChatMessage.user('One last one.'),
+        ];
+        final fourthTokens = await engine.countChatTokens(
+          fourth,
+          enableThinking: false,
+        );
+        final kept = await engine.keepConversation();
+        expect(kept, isNotNull);
+        expect(kept, lessThan(thirdTokens));
+        expect(
+          _snapshotTokenHistory(await engine.saveState()),
+          hasLength(kept),
+        );
         await engine.reset();
+        await reply(engine, <ChatMessage>[
+          system,
+          ChatMessage.user('Unrelated question.'),
+        ], reuse: true);
+        final afterRound = await reply(engine, fourth, reuse: true);
+        await reference.reset();
+        await reply(reference, fourth, reuse: false);
+        expect(afterRound.promptTokens, fourthTokens - kept!);
+        expect(
+          await read(engine, fourthTokens),
+          await read(reference, fourthTokens),
+        );
+
+        // The kept conversation goes back once.
+        await engine.reset();
+        expect(
+          (await reply(engine, fourth, reuse: true)).promptTokens,
+          fourthTokens,
+        );
+
+        // A forgotten conversation does not come back.
+        expect(await engine.keepConversation(), isNotNull);
+        await engine.forgetConversation();
+        await engine.reset();
+        expect(
+          (await reply(engine, fourth, reuse: true)).promptTokens,
+          fourthTokens,
+        );
+
+        // Without the snapshot the context no longer holds the point and the
+        // prompt is read in full; there is then nothing to keep.
+        await engine.reset();
+        expect(await engine.keepConversation(), isNull);
         final afterReset = await reply(engine, third, reuse: true);
         expect(afterReset.promptTokens, thirdTokens);
       } finally {

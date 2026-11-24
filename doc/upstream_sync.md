@@ -437,6 +437,14 @@ nothing that is taken back, and fails with "The chat parser changed output
 that was already streamed" when a later parse reads different text in its
 place.
 
+ABI 46 adds `llama_dart_context_keep_conversation`, which returns a context
+to its kept prompt boundary (restore the `PARTIAL_ONLY` state, then
+`llama_memory_seq_rm` after it) and copies the sequence state there with
+`llama_state_seq_get_data_ext`, and `llama_dart_context_forget_conversation`.
+A completion with prefix reuse puts a kept state back with
+`llama_state_seq_set_data_ext` on a cleared context. A failed return resets
+the context.
+
 ABI 45 keeps message text from becoming control tokens in a planned chat.
 The plan (version 3) adds `message_text_spans`: the byte ranges of its joined
 prompt that pinned `common_chat_prompt` marks `is_input`, without the parts

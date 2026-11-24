@@ -322,6 +322,13 @@ Current verification:
   the suffix. The model-agnostic multimodal test above passed with a Qwen3.5
   4B vision model, its projector and a generated 96x96 PNG. It was not run
   with the pinned TinyGemma3 fixture, and no test covers audio input.
+- On 2026-11-24, ABI 46 (the prompt boundary and
+  `llama_dart_context_keep_conversation`) passed on the macOS arm64
+  host: `ctest` (3/3), `dart test` (222 tests, 15 optional-fixture skips),
+  and `weighted fixture continues a reply from where its last message began`
+  with Qwen3.5 4B and Qwen2.5 0.5B GGUFs. With Qwen3.5 4B a continued reply
+  held exactly the tokens of a full read, also with a kept conversation and
+  another chat read with prefix reuse in between.
 - On 2026-11-23 the upstream pin moved from `v0.9.0` to release `v1.0.0`
   (`b1b770d90d94cad9e9ea5b993bdbc383a522fb28`) and the overlay became
   version 7 ([upstream sync](upstream_sync.md)). The shader source/output

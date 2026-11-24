@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 45u
+#define LLAMA_DART_ABI_VERSION 46u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -535,6 +535,25 @@ LLAMA_DART_EXPORT void llama_dart_context_free(llama_dart_context *context);
 
 LLAMA_DART_EXPORT llama_dart_result
 llama_dart_context_reset(llama_dart_context *context);
+
+/* Keeps the conversation the context holds before another prompt replaces
+ * it: returns the context to its kept prompt boundary (the point where the
+ * turn of the last message began in the last chat prompt read with prefix
+ * reuse), drops every later position and copies the sequence state there.
+ * A later completion with reuse_prompt_prefix whose prompt starts with those
+ * tokens, when the context does not hold them, puts that state back and
+ * reads only the rest; the kept copy is then freed. One conversation is kept
+ * per context; keeping another one frees the previous one first. Writes the
+ * number of tokens kept to out_tokens, or 0 when the context holds no such
+ * point and is unchanged. A failed return resets the context and returns an
+ * error. */
+LLAMA_DART_EXPORT llama_dart_result
+llama_dart_context_keep_conversation(llama_dart_context *context,
+                                     uint32_t *out_tokens);
+
+/* Frees a conversation llama_dart_context_keep_conversation kept. */
+LLAMA_DART_EXPORT llama_dart_result
+llama_dart_context_forget_conversation(llama_dart_context *context);
 
 /* Warms an empty context and restores it to the empty state. */
 LLAMA_DART_EXPORT llama_dart_result

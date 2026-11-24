@@ -802,6 +802,51 @@ class LlamaDartBridgeBindings {
   late final _llama_dart_context_reset = _llama_dart_context_resetPtr
       .asFunction<int Function(ffi.Pointer<llama_dart_context>)>();
 
+  llama_dart_result llama_dart_context_keep_conversation(
+    ffi.Pointer<llama_dart_context> context,
+    ffi.Pointer<ffi.Uint32> out_tokens,
+  ) {
+    return llama_dart_result.fromValue(
+      _llama_dart_context_keep_conversation(context, out_tokens),
+    );
+  }
+
+  late final _llama_dart_context_keep_conversationPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(
+            ffi.Pointer<llama_dart_context>,
+            ffi.Pointer<ffi.Uint32>,
+          )
+        >
+      >('llama_dart_context_keep_conversation');
+  late final _llama_dart_context_keep_conversation =
+      _llama_dart_context_keep_conversationPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<llama_dart_context>,
+              ffi.Pointer<ffi.Uint32>,
+            )
+          >();
+
+  llama_dart_result llama_dart_context_forget_conversation(
+    ffi.Pointer<llama_dart_context> context,
+  ) {
+    return llama_dart_result.fromValue(
+      _llama_dart_context_forget_conversation(context),
+    );
+  }
+
+  late final _llama_dart_context_forget_conversationPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)
+        >
+      >('llama_dart_context_forget_conversation');
+  late final _llama_dart_context_forget_conversation =
+      _llama_dart_context_forget_conversationPtr
+          .asFunction<int Function(ffi.Pointer<llama_dart_context>)>();
+
   llama_dart_result llama_dart_context_warm_up(
     ffi.Pointer<llama_dart_context> context,
   ) {
@@ -2023,4 +2068,4 @@ final class llama_dart_chat_message extends ffi.Struct {
   external int content_size;
 }
 
-const int LLAMA_DART_ABI_VERSION = 45;
+const int LLAMA_DART_ABI_VERSION = 46;
