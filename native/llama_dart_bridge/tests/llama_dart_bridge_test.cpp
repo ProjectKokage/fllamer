@@ -1622,11 +1622,67 @@ int main() {
          std::string::npos);
   llama_dart_buffer_free(tool_stream_parts.data);
 
-  // The pristine upstream Gemma 4 grammar accepts generic dictionary members.
-  // The checked Dart wrapper validates this parsed call against the matching
-  // tool schema before exposing it through GenerationChunk.assistantMessage.
+  // Whether the parser of `request` accepts `call` as an ended message.
+  const auto gemma4_call_result = [&](llama_dart_chat_stream_parser *parser,
+                                      const char *call) {
+    llama_dart_buffer message{};
+    const llama_dart_result result =
+        llama_dart_chat_stream_parser_parse_message(
+            parser, reinterpret_cast<const uint8_t *>(call),
+            std::strlen(call), &message);
+    assert((result == LLAMA_DART_SUCCESS) == (message.data != nullptr));
+    llama_dart_buffer_free(message.data);
+    return result;
+  };
+
+  // The pinned upstream Gemma 4 parser follows the keys of the tool's
+  // parameter schema. A call that has the required key and one the schema
+  // does not declare is not a message it accepts, and neither is a call
+  // without the required key.
+  assert(gemma4_call_result(
+             tool_stream_parser,
+             R"(<|tool_call>call:lookup{query: <|"|>alpha<|"|>, zeta: 1}<tool_call|>)") ==
+         LLAMA_DART_ERROR_GENERATION);
+  assert(gemma4_call_result(
+             tool_stream_parser,
+             R"(<|tool_call>call:lookup{markdown: <|"|>alpha<|"|>}<tool_call|>)") ==
+         LLAMA_DART_ERROR_GENERATION);
+
+  // A schema that lists properties and says nothing about others allows no
+  // other key, the keys come in the template's sorted order, and a property
+  // declared as an array or an object must be one.
+  const char sorted_keys_tool_chat_request[] =
+      R"({"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"store","description":"Store a note","parameters":{"type":"object","properties":{"zulu":{"type":"string"},"alpha":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}}}}}],"tool_choice":"required","parallel_tool_calls":true,"add_generation_prompt":true})";
+  llama_dart_chat_stream_parser *sorted_keys_parser =
+      parser_of(tool_model, sorted_keys_tool_chat_request);
+  assert(gemma4_call_result(
+             sorted_keys_parser,
+             R"(<|tool_call>call:store{alpha: <|"|>a<|"|>, tags: [<|"|>x<|"|>], zulu: <|"|>z<|"|>}<tool_call|>)") ==
+         LLAMA_DART_SUCCESS);
+  assert(gemma4_call_result(
+             sorted_keys_parser,
+             R"(<|tool_call>call:store{zulu: <|"|>z<|"|>}<tool_call|>)") ==
+         LLAMA_DART_SUCCESS);
+  assert(gemma4_call_result(
+             sorted_keys_parser,
+             R"(<|tool_call>call:store{zulu: <|"|>z<|"|>, alpha: <|"|>a<|"|>}<tool_call|>)") ==
+         LLAMA_DART_ERROR_GENERATION);
+  assert(gemma4_call_result(
+             sorted_keys_parser,
+             R"(<|tool_call>call:store{alpha: <|"|>a<|"|>, extra: 1}<tool_call|>)") ==
+         LLAMA_DART_ERROR_GENERATION);
+  assert(gemma4_call_result(
+             sorted_keys_parser,
+             R"(<|tool_call>call:store{tags: 5}<tool_call|>)") ==
+         LLAMA_DART_ERROR_GENERATION);
+  llama_dart_chat_stream_parser_free(sorted_keys_parser);
+
+  // It does not follow the type of a value declared as a string, a number,
+  // a boolean or null. The checked Dart wrapper validates this parsed call
+  // against the matching tool schema before exposing it through
+  // GenerationChunk.assistantMessage.
   const char schema_invalid_gemma4_call[] =
-      R"(<|tool_call>call:lookup{markdown: <|"|>alpha<|"|>}<tool_call|>)";
+      R"(<|tool_call>call:lookup{query: 5}<tool_call|>)";
   assistant_message = {};
   assert(llama_dart_chat_stream_parser_parse_message(
              tool_stream_parser,
@@ -1636,7 +1692,8 @@ int main() {
   const std::string schema_invalid_gemma4_message(
       reinterpret_cast<const char *>(assistant_message.data),
       assistant_message.size);
-  assert(schema_invalid_gemma4_message.find("markdown") != std::string::npos);
+  assert(schema_invalid_gemma4_message.find("{\\\"query\\\":5}") !=
+         std::string::npos);
   llama_dart_buffer_free(assistant_message.data);
   llama_dart_chat_stream_parser_free(tool_stream_parser);
   llama_dart_buffer_free(chat_plan.data);

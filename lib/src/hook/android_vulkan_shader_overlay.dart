@@ -17,9 +17,9 @@ const pinnedMulMmCompSha256 =
 const patchedMulMmCompSha256 =
     '0cb7c1357320807f5c2570a8e4c1819774bce29a4771100cffed6d14b6601bc3';
 const pinnedGgmlVulkanSha256 =
-    'ab0ad31fea14e43f3e7762601f2164ee57629191a082ef86f5ac0e95430fc47d';
+    '4270452ad63f3ead4a2deb39efcc38fece252657f74c864d4edb85a48683829b';
 const patchedGgmlVulkanSha256 =
-    '4502ba0d68252e4d43ab8675adf0964a960fb4f8e9c7c0f3b6c276ad554bf383';
+    'efd05b15b8340f42f07d8d586d4ebe3f3bcff09076c59d07c84a4908e009357d';
 
 const _pinnedQ4_1Dequantize4 =
     '''vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
@@ -106,14 +106,14 @@ layout (binding = 0) readonly buffer BUF_Q4_1     { block_q4_1 data[];     } a_q
 layout (binding = 0) readonly buffer BUF_Q8_0     { block_q8_0 data[];     } a_q8_0;
 // Packed16 aliases''';
 
-const _pinnedQualcommPredicateInsertion = '''    return false;
-#endif
+const _pinnedQualcommPredicateInsertion =
+    '''    return major > 2 || (major == 2 && build >= 416);
 }
 
 void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {''';
 
-const _patchedQualcommPredicateInsertion = '''    return false;
-#endif
+const _patchedQualcommPredicateInsertion =
+    '''    return major > 2 || (major == 2 && build >= 416);
 }
 
 static bool ggml_vk_is_qualcomm_proprietary(const vk_device & device) {

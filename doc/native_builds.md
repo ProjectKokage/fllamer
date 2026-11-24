@@ -322,6 +322,47 @@ Current verification:
   the suffix. The model-agnostic multimodal test above passed with a Qwen3.5
   4B vision model, its projector and a generated 96x96 PNG. It was not run
   with the pinned TinyGemma3 fixture, and no test covers audio input.
+- On 2026-11-23 the upstream pin moved from `v0.9.0` to release `v1.0.0`
+  (`b1b770d90d94cad9e9ea5b993bdbc383a522fb28`) and the overlay became
+  version 7 ([upstream sync](upstream_sync.md)). The shader source/output
+  pairs are unchanged; `ggml-vulkan.cpp` is now
+  `4270452ad63f3ead4a2deb39efcc38fece252657f74c864d4edb85a48683829b` /
+  `efd05b15b8340f42f07d8d586d4ebe3f3bcff09076c59d07c84a4908e009357d`.
+  The native-assets hook built the opt-in Vulkan bridge for `arm64-v8a` and
+  `x86_64` at Android API 28 through
+  `flutter build apk --debug --target-platform android-arm64,android-x64`
+  from `example/` with `vulkan: true`, on macOS 27.0.1 with Flutter 3.50.0,
+  CMake 4.5.0, NDK `30.0.16248370`, bundled Vulkan-Headers 1.4.357.0 and
+  that NDK's glslc. Both libraries have 16 KiB `LOAD` alignment, depend only
+  on `libm.so`, `libdl.so`, `libvulkan.so` and `libc.so`, and embed both
+  safe-policy markers and the pinned commit. The build needed
+  `--android-skip-build-dependency-validation`, because the example's Gradle
+  wrapper (9.1.0) is older than Flutter 3.50 accepts (9.3.1). The hook also
+  built the bridge for the iOS Simulator through
+  `flutter build ios --simulator --debug` with Xcode 27.2: one framework
+  with `arm64` and `x86_64` slices, minimum iOS 15.0. Both are compile and
+  link evidence only: no Android device or emulator and no Simulator has
+  run this pin, and the Qualcomm K-quant policy has not been checked
+  against a CPU oracle since `b10217`. On the macOS arm64 host (Metal) the
+  pin passed `ctest` (3/3), `dart test` (222 tests, 14 optional-fixture
+  skips), the example's `flutter test`, the three `LLAMA_DART_TEST_MODEL`
+  tests and `real tool fixture` with the pinned Qwen2.5 0.5B Q4_K_M file,
+  and the model-agnostic multimodal test with a Qwen3.5 4B vision model, its
+  projector and a generated 96x96 PNG. With that Qwen3.5 model
+  `LlamaEngine.chat` streamed thinking off, thinking on, a 24-token
+  reasoning budget and a required tool call (reasoning and response text
+  arrived apart, and the terminal message carried the parsed call), followed
+  a JSON Schema with an `allOf` integer and a GBNF grammar, generated again
+  after a stream was cancelled, and described a JPEG through `mtmd`; the
+  embeddings CLI ran with Granite 97M Q8_0. Against a `v0.9.0` build of the
+  bridge on CPU at temperature 0, Qwen3.5 2B Q6_K produced the same prompts,
+  token counts and output for plain chat, a JSON Schema, a reasoning budget
+  and a tool call; LFM2.5 1.2B Q6_K produced the same prompts and token
+  counts and different wording. The Gemma 4 fixture test below
+  fails on this pin and on `v0.9.0` alike: since upstream #28335
+  (2026-09-04) the E2B projector decodes causally, so the request it expects
+  to be rejected generates. The fixture-pinned TinyGemma3, audio, embedding,
+  reranker, LoRA, MTP, EAGLE-3 and draft-model tests were not run.
 - Model-free Dart tests cover the Linux/Windows strict-default Vulkan policy,
   Android's explicit opt-in, bundled Vulkan-Hpp pin, selected-NDK `glslc`,
   CPU-only overrides, target-specific header-root propagation, desktop
