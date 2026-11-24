@@ -5613,6 +5613,10 @@ llama_dart_context_forget_conversation(llama_dart_context *context) {
   if (context == nullptr || context->context == nullptr) {
     return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "context must not be null");
   }
+  if (context->active_generations > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "context still has active generations");
+  }
   clear_kept_conversation(context);
   last_error.clear();
   return LLAMA_DART_SUCCESS;
