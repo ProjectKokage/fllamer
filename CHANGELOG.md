@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.0
 
 - ABI 46 adds `LlamaEngine.keepConversation()` and `forgetConversation()`
   (`llama_dart_context_keep_conversation`,
