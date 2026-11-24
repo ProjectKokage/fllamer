@@ -713,12 +713,12 @@ final class LlamaEngine {
   /// When [reusePromptPrefix] is true, the native session keeps its existing
   /// text KV state only if its committed token history is an exact prefix of
   /// the newly rendered and tokenized full prompt. A planned chat read this
-  /// way also keeps the point where its generation prompt began; a later
-  /// prompt that starts with the tokens before that point, as the next turn
-  /// of the conversation does when the template renders the reply
-  /// differently from the generated tokens, continues from there. Any other
-  /// mismatch resets the session and evaluates the full prompt. Media
-  /// prompts and speculative contexts are not eligible for the kept point.
+  /// way also keeps the point where the turn of its last message began; a
+  /// later prompt that starts with the tokens before that point, as the next
+  /// turn of the conversation does, continues from there even when it renders
+  /// that message or the reply after it differently from what was read. Any
+  /// other mismatch resets the session and evaluates the full prompt. Media
+  /// prompts and speculative contexts keep no point.
   ///
   /// A chat that sets tools, a thinking mode, a reasoning budget or
   /// [GenerationConfig.separateReasoning] is rendered by the template planner,

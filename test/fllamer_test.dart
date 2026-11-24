@@ -2461,8 +2461,8 @@ void main() {
       }
     });
 
-    test('weighted fixture continues a reply from where its generation '
-        'prompt began', () async {
+    test('weighted fixture continues a reply from where its last message '
+        'began', () async {
       final modelPath = Platform.environment['LLAMA_DART_TEST_MODEL'];
       if (modelPath == null || modelPath.isEmpty) {
         markTestSkipped('LLAMA_DART_TEST_MODEL is not set');
@@ -2475,7 +2475,7 @@ void main() {
       LlamaModelConfig modelConfig() => LlamaModelConfig(
         modelPath: modelPath,
         nativeLibraryPath: bridgePath,
-        contextSize: 512,
+        contextSize: 1024,
         batchSize: 64,
         threads: 1,
         batchThreads: 1,
@@ -2508,18 +2508,35 @@ void main() {
           );
         }
 
+        // Prompt tokens a context has read, from its snapshot.
+        Future<List<int>> read(LlamaEngine target, int count) async =>
+            _snapshotTokenHistory(
+              await target.saveState(),
+            ).take(count).toList();
+
+        // A long system turn, so a prompt that reads it again reads more than
+        // half of the prompt.
+        final system = ChatMessage(
+          role: ChatRole.system,
+          text: List<String>.generate(
+            24,
+            (i) => 'Rule $i: answer with a single short word.',
+          ).join(' '),
+        );
+        final question = ChatMessage.user('Name a colour.');
+        // The current message carries notes for this turn only, and the
+        // history keeps it without them, as an app that frames a message
+        // with recalled notes does.
         final first = <ChatMessage>[
-          const ChatMessage(
-            role: ChatRole.system,
-            text: 'You are a terse assistant.',
-          ),
-          ChatMessage.user('Name a colour.'),
+          system,
+          ChatMessage.user('NOTES: the user likes blue.\n\n${question.text}'),
         ];
         final firstReply = await reply(engine, first, reuse: true);
-        // The caller keeps a different text for the reply than the tokens
-        // generated, as an app that strips markup does.
+        // The caller also keeps a different text for the reply than the
+        // tokens generated, as an app that strips markup does.
         final next = <ChatMessage>[
-          ...first,
+          system,
+          question,
           ChatMessage(
             role: ChatRole.assistant,
             text: '${firstReply.text.trim()} indeed',
@@ -2530,35 +2547,33 @@ void main() {
           next,
           enableThinking: false,
         );
-        final firstTokens = await engine.countChatTokens(
-          first,
-          enableThinking: false,
-        );
 
         final continued = await reply(engine, next, reuse: true);
         final full = await reply(reference, next, reuse: false);
         expect(full.promptTokens, fullTokens);
-        // Only the reply, the new message and the generation prompts are
-        // read; the system text and the first message are not.
-        expect(continued.promptTokens, lessThan(fullTokens));
-        expect(
-          continued.promptTokens,
-          lessThanOrEqualTo(fullTokens - firstTokens + 16),
-        );
+        // The system turn is not read again; the first message as the
+        // history renders it, the reply and the new message are.
         expect(continued.promptTokens, greaterThan(0));
-        expect(continued.text, full.text);
+        expect(continued.promptTokens, lessThan(fullTokens ~/ 2));
+        // The context holds the same tokens as one that read the prompt in
+        // full. (The replies are not compared: on the CPU a different batch
+        // split can change the arithmetic, and so a sampled token.)
         expect(
-          _snapshotTokenHistory(await engine.saveState()).take(fullTokens),
-          _snapshotTokenHistory(await reference.saveState()).take(fullTokens),
+          await read(engine, fullTokens),
+          await read(reference, fullTokens),
         );
 
-        // A whole-context snapshot keeps the boundary usable after another
-        // prompt replaced the context.
+        // A whole-context snapshot keeps the point usable after a prompt
+        // read without prefix reuse replaced the context.
         final third = <ChatMessage>[
           ...next,
           ChatMessage(role: ChatRole.assistant, text: continued.text.trim()),
           ChatMessage.user('And one more.'),
         ];
+        final thirdTokens = await engine.countChatTokens(
+          third,
+          enableThinking: false,
+        );
         final saved = await engine.saveState();
         await engine.reset();
         await reply(engine, <ChatMessage>[
@@ -2567,16 +2582,18 @@ void main() {
         await engine.restoreState(saved);
         final restored = await reply(engine, third, reuse: true);
         await reference.reset();
-        final thirdFull = await reply(reference, third, reuse: false);
-        expect(restored.promptTokens, lessThan(thirdFull.promptTokens));
-        expect(restored.text, thirdFull.text);
+        await reply(reference, third, reuse: false);
+        expect(restored.promptTokens, lessThan(thirdTokens ~/ 2));
+        expect(
+          await read(engine, thirdTokens),
+          await read(reference, thirdTokens),
+        );
 
-        // Without the snapshot the context no longer holds the boundary and
-        // the prompt is read in full.
+        // Without the snapshot the context no longer holds the point and the
+        // prompt is read in full.
         await engine.reset();
         final afterReset = await reply(engine, third, reuse: true);
-        expect(afterReset.promptTokens, thirdFull.promptTokens);
-        expect(afterReset.text, thirdFull.text);
+        expect(afterReset.promptTokens, thirdTokens);
       } finally {
         await engine.close();
         await reference.close();

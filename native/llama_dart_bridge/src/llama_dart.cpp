@@ -91,11 +91,11 @@ struct llama_dart_context {
   bool speculative_needs_warmup = false;
   int32_t position = 0;
   std::vector<llama_token> token_history;
-  // The last chat prompt read with prefix reuse, up to where its generation
-  // prompt began, and the part of the context state at that point that its
-  // memory cannot recover by dropping later positions (a recurrent state).
-  // A next prompt that repeats those tokens and then renders the reply
-  // differently from the generated tokens continues from here.
+  // The last chat prompt read with prefix reuse, up to where the turn of its
+  // last message began, and the part of the context state at that point that
+  // its memory cannot recover by dropping later positions (a recurrent
+  // state). A next prompt that repeats those tokens and then renders that
+  // message or the reply differently from what was read continues from here.
   std::vector<llama_token> boundary_tokens;
   std::vector<uint8_t> boundary_state;
   uint32_t speculative_ngram_n = 0;
@@ -150,7 +150,7 @@ using llama_dart_bridge_internal::finalize_state_snapshot;
 using llama_dart_bridge_internal::kStateSnapshotHeaderSize;
 using llama_dart_bridge_internal::prompt_run;
 using llama_dart_bridge_internal::read_u32_le;
-using llama_dart_bridge_internal::generation_prompt_boundary;
+using llama_dart_bridge_internal::is_proper_token_prefix;
 using llama_dart_bridge_internal::prompt_continues_boundary;
 using llama_dart_bridge_internal::resolve_prompt_prefix_reuse;
 using llama_dart_bridge_internal::state_snapshot_decode_result;
@@ -1494,6 +1494,47 @@ llama_dart_result tokenize_text_completion_prompt(
   return LLAMA_DART_SUCCESS;
 }
 
+// The number of `tokens`, the tokenized prompt of a chat plan, that come
+// before the template's last control token ahead of the plan's last message
+// text: where the turn of the last message begins. 0 when that point cannot
+// be found or its tokens are not the start of `tokens`.
+size_t last_message_boundary(const llama_dart_context *context,
+                             const llama_vocab *vocab,
+                             const llama_dart_completion_config *config,
+                             const parsed_chat_plan *chat_plan,
+                             const std::vector<llama_token> &tokens) {
+  if (config->parse_special == 0 || chat_plan->message_text_spans.empty()) {
+    return 0;
+  }
+  const std::string_view prompt(
+      reinterpret_cast<const char *>(config->prompt_data),
+      config->prompt_size);
+  const std::vector<byte_span> &spans = chat_plan->message_text_spans;
+  const size_t at = context->model->control_tokens.last_template_token_before(
+      prompt, spans.back().begin, spans);
+  if (at == std::string_view::npos || at == 0) {
+    return 0;
+  }
+  const std::string_view before = prompt.substr(0, at);
+  std::vector<byte_span> before_spans;
+  for (const byte_span &span : spans) {
+    if (span.end <= at) {
+      before_spans.push_back(span);
+    }
+  }
+  std::vector<llama_token> prefix;
+  if (tokenize_prompt_runs(
+          vocab, before,
+          chat_prompt_runs(context->model->control_tokens, before,
+                           before_spans),
+          completion_adds_special(context, config),
+          &prefix) != tokenize_status::ok ||
+      !is_proper_token_prefix(prefix, tokens)) {
+    return 0;
+  }
+  return prefix.size();
+}
+
 llama_dart_result prepare_completion_prompt_reuse(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config,
@@ -1749,9 +1790,6 @@ llama_dart_result decode_multimodal_prompt(
   return LLAMA_DART_SUCCESS;
 }
 
-llama_tokens tokenize_generation_prompt(const llama_vocab *vocab,
-                                        const std::string &generation_prompt);
-
 llama_dart_result decode_completion_prompt(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config,
@@ -1783,18 +1821,15 @@ llama_dart_result decode_completion_prompt(
   }
   *prompt_token_count = static_cast<uint32_t>(sampler_tokens->size());
 
-  // A chat prompt read with prefix reuse stops once where its generation
-  // prompt begins, to keep that point: a template may render the reply in
-  // the next prompt differently from the tokens generated after it.
+  // A chat prompt read with prefix reuse stops once where its last message
+  // begins, to keep that point: the next turn renders that message and the
+  // reply after it from the history, which may differ from what was read.
   const size_t boundary =
       prepared == nullptr || chat_plan == nullptr ||
-              chat_plan->generation_prompt.empty() ||
               context->speculative_type != LLAMA_DART_SPECULATIVE_NONE
           ? 0
-          : generation_prompt_boundary(
-                prepared->tokens,
-                tokenize_generation_prompt(vocab,
-                                           chat_plan->generation_prompt));
+          : last_message_boundary(context, vocab, config, chat_plan,
+                                  prepared->tokens);
   if (boundary == 0 || boundary <= prepared->suffix_start) {
     return decode_prompt_tokens(context, *sampler_tokens);
   }

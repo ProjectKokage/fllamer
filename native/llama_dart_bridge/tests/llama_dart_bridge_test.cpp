@@ -124,17 +124,39 @@ int main() {
   assert(!trimmed_prefix.exact_prefix);
   assert(trimmed_prefix.suffix_start == 0);
 
-  // A reply's prompt {system, user, gen...} where the generation prompt is
-  // {7, 8}; the next prompt renders the reply without the generation prompt.
-  const std::vector<int32_t> reply_prompt{1, 2, 3, 7, 8};
-  const std::vector<int32_t> generation_prompt{7, 8};
-  assert(generation_prompt_boundary(reply_prompt, generation_prompt) == 3);
-  assert(generation_prompt_boundary(reply_prompt,
-                                    std::vector<int32_t>{8, 7}) == 0);
-  assert(generation_prompt_boundary(reply_prompt,
-                                    std::vector<int32_t>{}) == 0);
-  assert(generation_prompt_boundary(generation_prompt, generation_prompt) ==
-         0);
+  {
+    // The turn of the last message begins at the template's last control
+    // token before that message's text; a token spelled in message text and
+    // one that ends past the limit do not count.
+    control_token_texts markers;
+    markers.add("<|s|>");
+    markers.add("<|e|>");
+    const std::string prompt =
+        "<|s|>user\nHi<|e|>\n<|s|>assistant\nYo <|s|> x<|e|>\n<|s|>user\nMore"
+        "<|e|>\n<|s|>assistant\n";
+    const size_t yo = prompt.find("Yo");
+    const size_t more = prompt.find("More");
+    const std::vector<byte_span> spans{{prompt.find("Hi"),
+                                        prompt.find("Hi") + 2},
+                                       {yo, yo + 10},
+                                       {more, more + 4}};
+    assert(markers.last_template_token_before(prompt, more, spans) ==
+           prompt.rfind("<|s|>user"));
+    assert(markers.last_template_token_before(prompt, yo + 9, spans) ==
+           prompt.find("<|s|>assistant"));
+    assert(markers.last_template_token_before(prompt, 4, spans) ==
+           std::string_view::npos);
+    assert(markers.last_template_token_before("plain text", 10, {}) ==
+           std::string_view::npos);
+  }
+  assert(is_proper_token_prefix(std::vector<int32_t>{1, 2},
+                                std::vector<int32_t>{1, 2, 3}));
+  assert(!is_proper_token_prefix(std::vector<int32_t>{1, 2},
+                                 std::vector<int32_t>{1, 2}));
+  assert(!is_proper_token_prefix(std::vector<int32_t>{},
+                                 std::vector<int32_t>{1}));
+  assert(!is_proper_token_prefix(std::vector<int32_t>{1, 3},
+                                 std::vector<int32_t>{1, 2, 3}));
   const std::vector<int32_t> boundary{1, 2, 3};
   const std::vector<int32_t> after_reply{1, 2, 3, 7, 8, 20, 21};
   const std::vector<int32_t> next_prompt{1, 2, 3, 7, 20, 21, 9, 4, 7, 8};

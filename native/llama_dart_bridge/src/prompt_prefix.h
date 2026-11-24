@@ -23,18 +23,12 @@ prompt_prefix_reuse_plan resolve_prompt_prefix_reuse(
   return {true, committed.size()};
 }
 
-// Where a chat prompt's generation prompt begins: the number of prompt tokens
-// before `generation`, or 0 when the prompt does not end with those tokens.
+// Whether `prefix` is the start of `prompt` and leaves part of it unread.
 template <typename Token>
-size_t generation_prompt_boundary(const std::vector<Token> &prompt,
-                                  const std::vector<Token> &generation) {
-  if (generation.empty() || generation.size() >= prompt.size() ||
-      !std::equal(generation.begin(), generation.end(),
-                  prompt.end() - static_cast<std::ptrdiff_t>(
-                                     generation.size()))) {
-    return 0;
-  }
-  return prompt.size() - generation.size();
+bool is_proper_token_prefix(const std::vector<Token> &prefix,
+                            const std::vector<Token> &prompt) {
+  return !prefix.empty() && prefix.size() < prompt.size() &&
+         std::equal(prefix.begin(), prefix.end(), prompt.begin());
 }
 
 // Whether a prompt can continue from a kept boundary: the context still holds
