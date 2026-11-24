@@ -1038,6 +1038,20 @@ final class LlamaEngine {
     await _native.reset();
   }
 
+  /// Returns the context to its kept prompt boundary (see [chat]'s
+  /// `reusePromptPrefix`): the point where the turn of the last message began
+  /// in the last planned chat read with prefix reuse. Every token read after
+  /// it is dropped, so a [saveState] that follows holds the conversation up
+  /// to that turn, and a later chat that starts with it continues by exact
+  /// prefix after a [restoreState]. Returns the number of tokens the context
+  /// then holds, or null when it keeps no boundary that the context still
+  /// holds, and the context is then unchanged.
+  Future<int?> rewindToPromptBoundary() async {
+    _ensureOpen();
+    final tokens = await _native.rewindToPromptBoundary();
+    return tokens == 0 ? null : tokens;
+  }
+
   /// Discards old context tokens while preserving a prefix and recent tail.
   ///
   /// When [discardTokens] is omitted, half of the removable suffix is

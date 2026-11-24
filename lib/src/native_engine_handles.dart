@@ -232,6 +232,21 @@ final class NativeEngineHandles {
     bridge.check(bridge.bindings.llama_dart_context_reset(context));
   }
 
+  int rewindToPromptBoundary() {
+    final tokens = calloc<ffi.Uint32>();
+    try {
+      bridge.check(
+        bridge.bindings.llama_dart_context_rewind_to_prompt_boundary(
+          context,
+          tokens,
+        ),
+      );
+      return tokens.value;
+    } finally {
+      calloc.free(tokens);
+    }
+  }
+
   void warmUp() {
     bridge.check(bridge.bindings.llama_dart_context_warm_up(context));
   }

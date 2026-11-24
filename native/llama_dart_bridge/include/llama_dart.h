@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LLAMA_DART_ABI_VERSION 45u
+#define LLAMA_DART_ABI_VERSION 46u
 
 typedef enum llama_dart_result {
   LLAMA_DART_SUCCESS = 0,
@@ -535,6 +535,17 @@ LLAMA_DART_EXPORT void llama_dart_context_free(llama_dart_context *context);
 
 LLAMA_DART_EXPORT llama_dart_result
 llama_dart_context_reset(llama_dart_context *context);
+
+/* Returns the context to its kept prompt boundary: the point where the turn
+ * of the last message began in the last chat prompt read with prefix reuse.
+ * Every position after it is dropped, so a whole-context state saved next
+ * holds the conversation up to that turn. Writes the number of tokens the
+ * context then holds to out_tokens, or 0 when it keeps no boundary that the
+ * context still holds; the context is then unchanged. A restore that fails
+ * resets the context and returns an error. */
+LLAMA_DART_EXPORT llama_dart_result
+llama_dart_context_rewind_to_prompt_boundary(llama_dart_context *context,
+                                             uint32_t *out_tokens);
 
 /* Warms an empty context and restores it to the empty state. */
 LLAMA_DART_EXPORT llama_dart_result

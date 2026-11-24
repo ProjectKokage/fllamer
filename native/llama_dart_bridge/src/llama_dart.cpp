@@ -5492,6 +5492,53 @@ llama_dart_result llama_dart_context_reset(llama_dart_context *context) {
   }
 }
 
+llama_dart_result
+llama_dart_context_rewind_to_prompt_boundary(llama_dart_context *context,
+                                             uint32_t *out_tokens) {
+  if (out_tokens == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "out_tokens must not be null");
+  }
+  *out_tokens = 0;
+  if (context == nullptr || context->context == nullptr) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT, "context must not be null");
+  }
+  if (context->active_generations > 0) {
+    return fail(LLAMA_DART_ERROR_INVALID_ARGUMENT,
+                "context still has active generations");
+  }
+  try {
+    const std::vector<llama_token> &boundary = context->boundary_tokens;
+    const std::vector<llama_token> &history = context->token_history;
+    const bool holds_boundary =
+        context->speculative_type == LLAMA_DART_SPECULATIVE_NONE &&
+        context->position >= 0 &&
+        static_cast<size_t>(context->position) == history.size() &&
+        !boundary.empty() && boundary.size() <= history.size() &&
+        std::equal(boundary.begin(), boundary.end(), history.begin());
+    if (!holds_boundary) {
+      last_error.clear();
+      return LLAMA_DART_SUCCESS;
+    }
+    if (boundary.size() < history.size() &&
+        !restore_prompt_boundary(context)) {
+      llama_dart_context_reset(context);
+      return fail(LLAMA_DART_ERROR_GENERATION,
+                  "failed to return to the prompt boundary; the context was "
+                  "reset");
+    }
+    *out_tokens = static_cast<uint32_t>(context->boundary_tokens.size());
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  } catch (const std::bad_alloc &) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "native allocation failed");
+  } catch (const std::exception &error) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, error.what());
+  } catch (...) {
+    return fail(LLAMA_DART_ERROR_INTERNAL, "unknown prompt boundary failure");
+  }
+}
+
 llama_dart_result llama_dart_context_warm_up(llama_dart_context *context) {
   if (context == nullptr || context->context == nullptr ||
       context->model == nullptr || context->model->model == nullptr) {

@@ -72,6 +72,9 @@ ffi.Pointer<T> lookupLlamaDartNativeAssetSymbol<T extends ffi.NativeType>(
       native_asset.addresses.llama_dart_context_free.cast<T>(),
     'llama_dart_context_reset' =>
       native_asset.addresses.llama_dart_context_reset.cast<T>(),
+    'llama_dart_context_rewind_to_prompt_boundary' =>
+      native_asset.addresses.llama_dart_context_rewind_to_prompt_boundary
+          .cast<T>(),
     'llama_dart_context_warm_up' =>
       native_asset.addresses.llama_dart_context_warm_up.cast<T>(),
     'llama_dart_context_cancel' =>

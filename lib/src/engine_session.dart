@@ -487,6 +487,9 @@ final class NativeLlamaEngineSession {
 
   Future<void> reset() => _request(const ResetRequest());
 
+  Future<int> rewindToPromptBoundary() =>
+      _request(const RewindToPromptBoundaryRequest());
+
   Future<void> warmUp() => _request(const WarmUpRequest());
 
   Future<LlamaModelInfo> modelInfo() => _request(const ModelInfoRequest());

@@ -2589,9 +2589,41 @@ void main() {
           await read(reference, thirdTokens),
         );
 
-        // Without the snapshot the context no longer holds the point and the
-        // prompt is read in full.
+        // Rewound to the point and saved, the conversation outlives a round
+        // that is itself read with prefix reuse and replaces the point.
+        final fourth = <ChatMessage>[
+          ...third,
+          ChatMessage(role: ChatRole.assistant, text: restored.text.trim()),
+          ChatMessage.user('One last one.'),
+        ];
+        final fourthTokens = await engine.countChatTokens(
+          fourth,
+          enableThinking: false,
+        );
+        final rewound = await engine.rewindToPromptBoundary();
+        expect(rewound, isNotNull);
+        expect(rewound, lessThan(thirdTokens));
+        final atBoundary = await engine.saveState();
+        expect(_snapshotTokenHistory(atBoundary), hasLength(rewound));
         await engine.reset();
+        await reply(engine, <ChatMessage>[
+          system,
+          ChatMessage.user('Unrelated question.'),
+        ], reuse: true);
+        await engine.restoreState(atBoundary);
+        final afterRound = await reply(engine, fourth, reuse: true);
+        await reference.reset();
+        await reply(reference, fourth, reuse: false);
+        expect(afterRound.promptTokens, fourthTokens - rewound!);
+        expect(
+          await read(engine, fourthTokens),
+          await read(reference, fourthTokens),
+        );
+
+        // Without the snapshot the context no longer holds the point and the
+        // prompt is read in full; there is then nothing to rewind to.
+        await engine.reset();
+        expect(await engine.rewindToPromptBoundary(), isNull);
         final afterReset = await reply(engine, third, reuse: true);
         expect(afterReset.promptTokens, thirdTokens);
       } finally {

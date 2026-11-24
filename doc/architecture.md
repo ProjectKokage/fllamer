@@ -381,3 +381,13 @@ the next planned chat read with reuse replaces it. `reset()` and
 `restoreState()` keep it, because it applies only while the context holds its
 tokens; a LoRA change or a context shift clears it. Speculative contexts and
 media prompts keep none.
+
+`rewindToPromptBoundary()` returns the context to the boundary itself: it
+restores the kept state and drops every later position, so the context then
+holds the conversation up to the last message's turn, as an exact prefix of
+the next turn. A caller that must run another prompt in between (a hidden
+round with its own instructions) rewinds, saves the whole context with
+`saveState()`, and restores it before the next turn, which then continues by
+exact prefix even when the round in between replaced the boundary. That
+snapshot holds the attention cache up to the boundary and the recurrent state
+there: about 89 MB at 1,100 tokens with Qwen3.5 4B.
