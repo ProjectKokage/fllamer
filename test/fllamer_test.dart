@@ -2461,6 +2461,128 @@ void main() {
       }
     });
 
+    test('weighted fixture continues a reply from where its generation '
+        'prompt began', () async {
+      final modelPath = Platform.environment['LLAMA_DART_TEST_MODEL'];
+      if (modelPath == null || modelPath.isEmpty) {
+        markTestSkipped('LLAMA_DART_TEST_MODEL is not set');
+        return;
+      }
+      final bridgePath = nativeBridgePath;
+      if (!File(bridgePath).existsSync()) {
+        markTestSkipped('native bridge has not been built at $bridgePath');
+      }
+      LlamaModelConfig modelConfig() => LlamaModelConfig(
+        modelPath: modelPath,
+        nativeLibraryPath: bridgePath,
+        contextSize: 512,
+        batchSize: 64,
+        threads: 1,
+        batchThreads: 1,
+        gpu: const GpuConfig.cpu(),
+      );
+      final engine = await LlamaEngine.load(modelConfig());
+      final reference = await LlamaEngine.load(modelConfig());
+      try {
+        const generation = GenerationConfig(
+          maxTokens: 6,
+          enableThinking: false,
+          temperature: 0,
+          seed: 42,
+        );
+        Future<({String text, int promptTokens})> reply(
+          LlamaEngine target,
+          List<ChatMessage> messages, {
+          required bool reuse,
+        }) async {
+          final chunks = await target
+              .chat(
+                messages: messages,
+                config: generation,
+                reusePromptPrefix: reuse,
+              )
+              .toList();
+          return (
+            text: chunks.map((chunk) => chunk.text).join(),
+            promptTokens: chunks.last.telemetry!.promptTokens,
+          );
+        }
+
+        final first = <ChatMessage>[
+          const ChatMessage(
+            role: ChatRole.system,
+            text: 'You are a terse assistant.',
+          ),
+          ChatMessage.user('Name a colour.'),
+        ];
+        final firstReply = await reply(engine, first, reuse: true);
+        // The caller keeps a different text for the reply than the tokens
+        // generated, as an app that strips markup does.
+        final next = <ChatMessage>[
+          ...first,
+          ChatMessage(
+            role: ChatRole.assistant,
+            text: '${firstReply.text.trim()} indeed',
+          ),
+          ChatMessage.user('Name another one.'),
+        ];
+        final fullTokens = await engine.countChatTokens(
+          next,
+          enableThinking: false,
+        );
+        final firstTokens = await engine.countChatTokens(
+          first,
+          enableThinking: false,
+        );
+
+        final continued = await reply(engine, next, reuse: true);
+        final full = await reply(reference, next, reuse: false);
+        expect(full.promptTokens, fullTokens);
+        // Only the reply, the new message and the generation prompts are
+        // read; the system text and the first message are not.
+        expect(continued.promptTokens, lessThan(fullTokens));
+        expect(
+          continued.promptTokens,
+          lessThanOrEqualTo(fullTokens - firstTokens + 16),
+        );
+        expect(continued.promptTokens, greaterThan(0));
+        expect(continued.text, full.text);
+        expect(
+          _snapshotTokenHistory(await engine.saveState()).take(fullTokens),
+          _snapshotTokenHistory(await reference.saveState()).take(fullTokens),
+        );
+
+        // A whole-context snapshot keeps the boundary usable after another
+        // prompt replaced the context.
+        final third = <ChatMessage>[
+          ...next,
+          ChatMessage(role: ChatRole.assistant, text: continued.text.trim()),
+          ChatMessage.user('And one more.'),
+        ];
+        final saved = await engine.saveState();
+        await engine.reset();
+        await reply(engine, <ChatMessage>[
+          ChatMessage.user('Unrelated question.'),
+        ], reuse: false);
+        await engine.restoreState(saved);
+        final restored = await reply(engine, third, reuse: true);
+        await reference.reset();
+        final thirdFull = await reply(reference, third, reuse: false);
+        expect(restored.promptTokens, lessThan(thirdFull.promptTokens));
+        expect(restored.text, thirdFull.text);
+
+        // Without the snapshot the context no longer holds the boundary and
+        // the prompt is read in full.
+        await engine.reset();
+        final afterReset = await reply(engine, third, reuse: true);
+        expect(afterReset.promptTokens, thirdFull.promptTokens);
+        expect(afterReset.text, thirdFull.text);
+      } finally {
+        await engine.close();
+        await reference.close();
+      }
+    });
+
     test(
       'weighted fixture preserves output across draftless ngram strategies',
       () async {

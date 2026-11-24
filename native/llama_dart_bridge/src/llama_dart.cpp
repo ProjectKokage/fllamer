@@ -91,6 +91,13 @@ struct llama_dart_context {
   bool speculative_needs_warmup = false;
   int32_t position = 0;
   std::vector<llama_token> token_history;
+  // The last chat prompt read with prefix reuse, up to where its generation
+  // prompt began, and the part of the context state at that point that its
+  // memory cannot recover by dropping later positions (a recurrent state).
+  // A next prompt that repeats those tokens and then renders the reply
+  // differently from the generated tokens continues from here.
+  std::vector<llama_token> boundary_tokens;
+  std::vector<uint8_t> boundary_state;
   uint32_t speculative_ngram_n = 0;
   uint32_t speculative_ngram_m = 0;
   uint32_t kv_cache_key_type = LLAMA_DART_KV_CACHE_DEFAULT;
@@ -143,6 +150,8 @@ using llama_dart_bridge_internal::finalize_state_snapshot;
 using llama_dart_bridge_internal::kStateSnapshotHeaderSize;
 using llama_dart_bridge_internal::prompt_run;
 using llama_dart_bridge_internal::read_u32_le;
+using llama_dart_bridge_internal::generation_prompt_boundary;
+using llama_dart_bridge_internal::prompt_continues_boundary;
 using llama_dart_bridge_internal::resolve_prompt_prefix_reuse;
 using llama_dart_bridge_internal::state_snapshot_decode_result;
 using llama_dart_bridge_internal::state_snapshot_layout;
@@ -1291,29 +1300,87 @@ void remember_tokens(llama_dart_context *context, const llama_token *tokens,
 }
 
 llama_dart_result decode_prompt_tokens(llama_dart_context *context,
-                                       const std::vector<llama_token> &tokens) {
+                                       const llama_token *tokens,
+                                       size_t token_count) {
   const int32_t max_batch = llama_n_batch(context->context);
   if (max_batch <= 0) {
     return fail(LLAMA_DART_ERROR_GENERATION,
                 "context reported invalid batch size");
   }
   size_t offset = 0;
-  while (offset < tokens.size()) {
-    const size_t remaining = tokens.size() - offset;
+  while (offset < token_count) {
+    const size_t remaining = token_count - offset;
     const int32_t count = static_cast<int32_t>(
         std::min<size_t>(remaining, static_cast<size_t>(max_batch)));
-    const llama_dart_result decoded = decode_tokens_at(
-        context, tokens.data() + offset, count, context->position);
+    const llama_dart_result decoded =
+        decode_tokens_at(context, tokens + offset, count, context->position);
     if (decoded != LLAMA_DART_SUCCESS) {
       return decoded;
     }
-    remember_tokens(context, tokens.data() + offset,
-                    static_cast<size_t>(count));
+    remember_tokens(context, tokens + offset, static_cast<size_t>(count));
     context->position += count;
     offset += static_cast<size_t>(count);
   }
   last_error.clear();
   return LLAMA_DART_SUCCESS;
+}
+
+llama_dart_result decode_prompt_tokens(llama_dart_context *context,
+                                       const std::vector<llama_token> &tokens) {
+  return decode_prompt_tokens(context, tokens.data(), tokens.size());
+}
+
+void clear_prompt_boundary(llama_dart_context *context) {
+  context->boundary_tokens.clear();
+  context->boundary_tokens.shrink_to_fit();
+  context->boundary_state.clear();
+  context->boundary_state.shrink_to_fit();
+}
+
+// Keeps the context at the end of the prompt read so far as the prompt
+// boundary. Only the part of the state that dropping later positions cannot
+// recover is copied; for a model with attention-only memory that is nothing.
+// A boundary that cannot be kept is cleared: the next prompt reads in full.
+void keep_prompt_boundary(llama_dart_context *context) {
+  clear_prompt_boundary(context);
+  try {
+    const size_t size = llama_state_seq_get_size_ext(
+        context->context, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    std::vector<uint8_t> state(size);
+    if (size > 0 &&
+        llama_state_seq_get_data_ext(context->context, state.data(),
+                                     state.size(), 0,
+                                     LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) !=
+            size) {
+      return;
+    }
+    context->boundary_tokens = context->token_history;
+    context->boundary_state = std::move(state);
+  } catch (const std::bad_alloc &) {
+    clear_prompt_boundary(context);
+  }
+}
+
+// Returns the context to the kept prompt boundary: the copied state goes back
+// and every later position is dropped. False leaves the context to be reset.
+bool restore_prompt_boundary(llama_dart_context *context) {
+  const size_t size = context->boundary_state.size();
+  if (size > 0 &&
+      llama_state_seq_set_data_ext(context->context,
+                                   context->boundary_state.data(), size, 0,
+                                   LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) !=
+          size) {
+    return false;
+  }
+  const llama_pos boundary =
+      static_cast<llama_pos>(context->boundary_tokens.size());
+  llama_memory_t memory = llama_get_memory(context->context);
+  if (memory == nullptr || !llama_memory_seq_rm(memory, 0, boundary, -1)) {
+    return false;
+  }
+  context->token_history.resize(context->boundary_tokens.size());
+  context->position = boundary;
+  return true;
 }
 
 bool completion_adds_special(const llama_dart_context *context,
@@ -1442,11 +1509,20 @@ llama_dart_result prepare_completion_prompt_reuse(
 
   const auto reuse = resolve_prompt_prefix_reuse(context->token_history,
                                                  prepared->tokens);
-  if (context->position >= 0 &&
-      static_cast<size_t>(context->position) ==
-          context->token_history.size() &&
-      reuse.exact_prefix) {
+  const bool history_matches_position =
+      context->position >= 0 && static_cast<size_t>(context->position) ==
+                                    context->token_history.size();
+  if (history_matches_position && reuse.exact_prefix) {
     prepared->suffix_start = reuse.suffix_start;
+    last_error.clear();
+    return LLAMA_DART_SUCCESS;
+  }
+  if (history_matches_position &&
+      context->speculative_type == LLAMA_DART_SPECULATIVE_NONE &&
+      prompt_continues_boundary(context->token_history,
+                                context->boundary_tokens, prepared->tokens) &&
+      restore_prompt_boundary(context)) {
+    prepared->suffix_start = context->boundary_tokens.size();
     last_error.clear();
     return LLAMA_DART_SUCCESS;
   }
@@ -1673,6 +1749,9 @@ llama_dart_result decode_multimodal_prompt(
   return LLAMA_DART_SUCCESS;
 }
 
+llama_tokens tokenize_generation_prompt(const llama_vocab *vocab,
+                                        const std::string &generation_prompt);
+
 llama_dart_result decode_completion_prompt(
     llama_dart_context *context, const llama_vocab *vocab,
     const llama_dart_completion_config *config,
@@ -1703,7 +1782,31 @@ llama_dart_result decode_completion_prompt(
     }
   }
   *prompt_token_count = static_cast<uint32_t>(sampler_tokens->size());
-  return decode_prompt_tokens(context, *sampler_tokens);
+
+  // A chat prompt read with prefix reuse stops once where its generation
+  // prompt begins, to keep that point: a template may render the reply in
+  // the next prompt differently from the tokens generated after it.
+  const size_t boundary =
+      prepared == nullptr || chat_plan == nullptr ||
+              chat_plan->generation_prompt.empty() ||
+              context->speculative_type != LLAMA_DART_SPECULATIVE_NONE
+          ? 0
+          : generation_prompt_boundary(
+                prepared->tokens,
+                tokenize_generation_prompt(vocab,
+                                           chat_plan->generation_prompt));
+  if (boundary == 0 || boundary <= prepared->suffix_start) {
+    return decode_prompt_tokens(context, *sampler_tokens);
+  }
+  const size_t before_boundary = boundary - prepared->suffix_start;
+  const llama_dart_result decoded =
+      decode_prompt_tokens(context, sampler_tokens->data(), before_boundary);
+  if (decoded != LLAMA_DART_SUCCESS) {
+    return decoded;
+  }
+  keep_prompt_boundary(context);
+  return decode_prompt_tokens(context, sampler_tokens->data() + before_boundary,
+                              sampler_tokens->size() - before_boundary);
 }
 
 llama_dart_result add_sampler(llama_sampler *chain, llama_sampler *sampler) {
@@ -5909,6 +6012,8 @@ llama_dart_result llama_dart_context_shift(
 
     context->position = expected_position;
     context->token_history = std::move(next_history);
+    // Shifted positions no longer match the kept boundary state.
+    clear_prompt_boundary(context);
     if (shifted_speculative != nullptr) {
       context->speculative = std::move(shifted_speculative);
     }
@@ -6943,6 +7048,8 @@ llama_dart_result llama_dart_context_set_lora_adapters(
     }
     release_context_lora_adapters(context);
     context->lora_adapters = std::move(next_adapters);
+    // The kept boundary state was read with the previous adapters.
+    clear_prompt_boundary(context);
     for (llama_dart_lora_adapter *adapter : context->lora_adapters) {
       adapter->active_contexts += 1;
     }

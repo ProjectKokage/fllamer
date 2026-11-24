@@ -294,6 +294,23 @@ role is marked too. A part that is exactly `system`, `user`, `assistant` or
 names, and some templates build their role marker from it
 (`'<|' + message['role'] + '|>'`), which must stay one token.
 
+A planned chat read with prefix reuse is decoded in two parts: first up to
+where its generation prompt begins, then the generation prompt. Between them
+the bridge keeps that point, the prompt boundary: its tokens and the part of
+the context state that dropping later positions cannot recover
+(`llama_state_seq_get_data_ext` with `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY`, the
+recurrent state of a recurrent or hybrid model and nothing for attention-only
+memory, a few bytes). A later prompt that is not an exact continuation of the committed
+history, but starts with the boundary's tokens while the context still holds
+them, restores that state, removes every later position and reads only the
+rest. The next turn of a conversation is such a prompt: the template renders
+the reply without the generation prompt's text (Qwen3.5 drops its empty
+thinking block) and the caller may keep other text for it. The tokens read are
+the same as a full read, so the model sees the same prompt. One boundary is
+kept per context. `reset()` and `restoreState()` keep it, because it only
+applies when the context holds its tokens; a LoRA change or a context shift
+clears it. Speculative contexts and media prompts keep none.
+
 The bridge tokenizes a plan's prompt in one function, for generation, for
 exact prefix reuse and for `llama_dart_model_tokenize_chat_plan`, which
 `countChatTokens` calls:

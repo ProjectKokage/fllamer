@@ -1,5 +1,18 @@
 ## Unreleased
 
+- A planned chat read with `reusePromptPrefix` keeps the point where its
+  generation prompt began, and the next prompt that repeats the tokens before
+  it continues from there instead of reading everything again. A template
+  renders a past reply differently from the tokens generated after the
+  generation prompt (Qwen3.5 drops the empty thinking block, and an app may
+  keep other text for the reply), so the exact-prefix rule alone never
+  matched the next turn of a conversation. For a model whose memory cannot
+  drop the end of a sequence (recurrent or hybrid, such as Qwen3.5) the
+  bridge copies the recurrent part of the state at that point: 52.7 MB for
+  Qwen3.5 4B at any prompt length, and 8 bytes for the attention-only
+  Qwen2.5 0.5B. The point survives `reset()` and a whole-context
+  `restoreState()`, so a snapshot taken before another prompt brings it
+  back. No Dart API or ABI change.
 - Synchronized `third_party/llama.cpp` to
   `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (upstream release `v1.0.0`, build
   number 12359), 249 commits after `v0.9.0`. No Dart API change and no ABI

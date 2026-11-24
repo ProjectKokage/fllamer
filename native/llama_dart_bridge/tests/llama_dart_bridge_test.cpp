@@ -124,6 +124,32 @@ int main() {
   assert(!trimmed_prefix.exact_prefix);
   assert(trimmed_prefix.suffix_start == 0);
 
+  // A reply's prompt {system, user, gen...} where the generation prompt is
+  // {7, 8}; the next prompt renders the reply without the generation prompt.
+  const std::vector<int32_t> reply_prompt{1, 2, 3, 7, 8};
+  const std::vector<int32_t> generation_prompt{7, 8};
+  assert(generation_prompt_boundary(reply_prompt, generation_prompt) == 3);
+  assert(generation_prompt_boundary(reply_prompt,
+                                    std::vector<int32_t>{8, 7}) == 0);
+  assert(generation_prompt_boundary(reply_prompt,
+                                    std::vector<int32_t>{}) == 0);
+  assert(generation_prompt_boundary(generation_prompt, generation_prompt) ==
+         0);
+  const std::vector<int32_t> boundary{1, 2, 3};
+  const std::vector<int32_t> after_reply{1, 2, 3, 7, 8, 20, 21};
+  const std::vector<int32_t> next_prompt{1, 2, 3, 7, 20, 21, 9, 4, 7, 8};
+  assert(!resolve_prompt_prefix_reuse(after_reply, next_prompt).exact_prefix);
+  assert(prompt_continues_boundary(after_reply, boundary, next_prompt));
+  assert(!prompt_continues_boundary(after_reply, boundary, boundary));
+  assert(!prompt_continues_boundary(after_reply, boundary,
+                                    std::vector<int32_t>{1, 2, 9, 7}));
+  assert(!prompt_continues_boundary(std::vector<int32_t>{1, 2},
+                                    boundary, next_prompt));
+  assert(!prompt_continues_boundary(std::vector<int32_t>{1, 5, 3, 7},
+                                    boundary, next_prompt));
+  assert(!prompt_continues_boundary(after_reply, std::vector<int32_t>{},
+                                    next_prompt));
+
   assert(resolve_model_load_mode(false, false) == LLAMA_LOAD_MODE_NONE);
   assert(resolve_model_load_mode(true, false) == LLAMA_LOAD_MODE_MMAP);
   assert(resolve_model_load_mode(false, true) == LLAMA_LOAD_MODE_MLOCK);
