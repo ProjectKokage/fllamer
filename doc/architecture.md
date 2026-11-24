@@ -382,12 +382,17 @@ the next planned chat read with reuse replaces it. `reset()` and
 tokens; a LoRA change or a context shift clears it. Speculative contexts and
 media prompts keep none.
 
-`rewindToPromptBoundary()` returns the context to the boundary itself: it
-restores the kept state and drops every later position, so the context then
-holds the conversation up to the last message's turn, as an exact prefix of
-the next turn. A caller that must run another prompt in between (a hidden
-round with its own instructions) rewinds, saves the whole context with
-`saveState()`, and restores it before the next turn, which then continues by
-exact prefix even when the round in between replaced the boundary. That
-snapshot holds the attention cache up to the boundary and the recurrent state
-there: about 89 MB at 1,100 tokens with Qwen3.5 4B.
+A caller that must run another prompt between two turns (a hidden round
+with its own instructions) calls `keepConversation()` first. The bridge
+returns the context to the boundary, drops every later position and copies
+the sequence state there (`llama_state_seq_get_data_ext` with no flags: the
+attention cache up to the boundary and the recurrent state). The other
+prompt then replaces the context and the boundary. A later prompt with prefix
+reuse that starts with the kept tokens, when the context does not hold them,
+clears the context, puts the kept state back and reads only the rest; the
+copy is freed then, or when another conversation is kept,
+`forgetConversation()` is called, the adapters change or the context shifts.
+When more than one of the committed history, the boundary and a kept
+conversation is a prefix of the prompt, the longest is used. One copy is held
+in the native session: with Qwen3.5 4B, 52.7 MB plus about 32.8 KB per token,
+83.7 MB at 944 tokens; returning and copying took 3–5 ms on an M5 Max host.

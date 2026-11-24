@@ -487,8 +487,10 @@ final class NativeLlamaEngineSession {
 
   Future<void> reset() => _request(const ResetRequest());
 
-  Future<int> rewindToPromptBoundary() =>
-      _request(const RewindToPromptBoundaryRequest());
+  Future<int> keepConversation() => _request(const KeepConversationRequest());
+
+  Future<void> forgetConversation() =>
+      _request(const ForgetConversationRequest());
 
   Future<void> warmUp() => _request(const WarmUpRequest());
 

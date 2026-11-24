@@ -1,13 +1,18 @@
 ## Unreleased
 
-- ABI 46 adds `LlamaEngine.rewindToPromptBoundary()`
-  (`llama_dart_context_rewind_to_prompt_boundary`). It returns the context to
-  its kept prompt boundary and drops every later position, so a `saveState()`
-  that follows holds the conversation up to the last message's turn. Restored
-  after another prompt, even one read with prefix reuse that replaced the
-  boundary, that snapshot lets the next turn continue by exact prefix. With
-  Qwen3.5 4B the snapshot is about 89 MB at 1,100 tokens. Custom bridges need
-  a rebuild for ABI 46.
+- ABI 46 adds `LlamaEngine.keepConversation()` and `forgetConversation()`
+  (`llama_dart_context_keep_conversation`,
+  `llama_dart_context_forget_conversation`). Before another prompt replaces
+  the context, `keepConversation()` returns it to its kept prompt boundary
+  and copies the sequence state there in the native session. A later chat
+  with prefix reuse whose prompt starts with those tokens puts it back and
+  reads only the rest, even when the prompt in between was itself read with
+  prefix reuse; the copy is then freed. Nothing passes through Dart, so one
+  copy is held (sizes in
+  [Architecture](doc/architecture.md#prompt-boundary)). Prefix reuse now
+  continues from whichever of the committed history, the prompt boundary and
+  a kept conversation covers the most of the prompt. Custom bridges need a
+  rebuild for ABI 46.
 - A planned chat read with `reusePromptPrefix` keeps the point where the
   turn of its last message began, and a later prompt that repeats the tokens
   before it continues from there instead of reading everything again. The

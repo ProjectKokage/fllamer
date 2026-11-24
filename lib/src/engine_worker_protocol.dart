@@ -53,11 +53,21 @@ final class EngineWorkerRequest {
   final SendPort reply;
 }
 
-final class RewindToPromptBoundaryRequest extends EngineRequest<int> {
-  const RewindToPromptBoundaryRequest();
+final class KeepConversationRequest extends EngineRequest<int> {
+  const KeepConversationRequest();
 
   @override
-  int run(NativeEngineHandles handles) => handles.rewindToPromptBoundary();
+  int run(NativeEngineHandles handles) => handles.keepConversation();
+}
+
+final class ForgetConversationRequest extends EngineRequest<Null> {
+  const ForgetConversationRequest();
+
+  @override
+  Null run(NativeEngineHandles handles) {
+    handles.forgetConversation();
+    return null;
+  }
 }
 
 final class ResetRequest extends EngineRequest<Null> {

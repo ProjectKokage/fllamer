@@ -319,9 +319,14 @@ external int llama_dart_context_reset(ffi.Pointer<llama_dart_context> context);
     ffi.Pointer<ffi.Uint32>,
   )
 >()
-external int llama_dart_context_rewind_to_prompt_boundary(
+external int llama_dart_context_keep_conversation(
   ffi.Pointer<llama_dart_context> context,
   ffi.Pointer<ffi.Uint32> out_tokens,
+);
+
+@ffi.Native<ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)>()
+external int llama_dart_context_forget_conversation(
+  ffi.Pointer<llama_dart_context> context,
 );
 
 @ffi.Native<ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)>()
@@ -774,8 +779,15 @@ class _SymbolAddresses {
       )
     >
   >
-  get llama_dart_context_rewind_to_prompt_boundary =>
-      ffi.Native.addressOf(self.llama_dart_context_rewind_to_prompt_boundary);
+  get llama_dart_context_keep_conversation =>
+      ffi.Native.addressOf(self.llama_dart_context_keep_conversation);
+  ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)
+    >
+  >
+  get llama_dart_context_forget_conversation =>
+      ffi.Native.addressOf(self.llama_dart_context_forget_conversation);
   ffi.Pointer<
     ffi.NativeFunction<
       ffi.UnsignedInt Function(ffi.Pointer<llama_dart_context>)
