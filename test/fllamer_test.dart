@@ -2461,6 +2461,145 @@ void main() {
       }
     });
 
+    test('weighted fixture continues a reply from where its last message '
+        'began', () async {
+      final modelPath = Platform.environment['LLAMA_DART_TEST_MODEL'];
+      if (modelPath == null || modelPath.isEmpty) {
+        markTestSkipped('LLAMA_DART_TEST_MODEL is not set');
+        return;
+      }
+      final bridgePath = nativeBridgePath;
+      if (!File(bridgePath).existsSync()) {
+        markTestSkipped('native bridge has not been built at $bridgePath');
+      }
+      LlamaModelConfig modelConfig() => LlamaModelConfig(
+        modelPath: modelPath,
+        nativeLibraryPath: bridgePath,
+        contextSize: 1024,
+        batchSize: 64,
+        threads: 1,
+        batchThreads: 1,
+        gpu: const GpuConfig.cpu(),
+      );
+      final engine = await LlamaEngine.load(modelConfig());
+      final reference = await LlamaEngine.load(modelConfig());
+      try {
+        const generation = GenerationConfig(
+          maxTokens: 6,
+          enableThinking: false,
+          temperature: 0,
+          seed: 42,
+        );
+        Future<({String text, int promptTokens})> reply(
+          LlamaEngine target,
+          List<ChatMessage> messages, {
+          required bool reuse,
+        }) async {
+          final chunks = await target
+              .chat(
+                messages: messages,
+                config: generation,
+                reusePromptPrefix: reuse,
+              )
+              .toList();
+          return (
+            text: chunks.map((chunk) => chunk.text).join(),
+            promptTokens: chunks.last.telemetry!.promptTokens,
+          );
+        }
+
+        // Prompt tokens a context has read, from its snapshot.
+        Future<List<int>> read(LlamaEngine target, int count) async =>
+            _snapshotTokenHistory(
+              await target.saveState(),
+            ).take(count).toList();
+
+        // A long system turn, so a prompt that reads it again reads more than
+        // half of the prompt.
+        final system = ChatMessage(
+          role: ChatRole.system,
+          text: List<String>.generate(
+            24,
+            (i) => 'Rule $i: answer with a single short word.',
+          ).join(' '),
+        );
+        final question = ChatMessage.user('Name a colour.');
+        // The current message carries notes for this turn only, and the
+        // history keeps it without them, as an app that frames a message
+        // with recalled notes does.
+        final first = <ChatMessage>[
+          system,
+          ChatMessage.user('NOTES: the user likes blue.\n\n${question.text}'),
+        ];
+        final firstReply = await reply(engine, first, reuse: true);
+        // The caller also keeps a different text for the reply than the
+        // tokens generated, as an app that strips markup does.
+        final next = <ChatMessage>[
+          system,
+          question,
+          ChatMessage(
+            role: ChatRole.assistant,
+            text: '${firstReply.text.trim()} indeed',
+          ),
+          ChatMessage.user('Name another one.'),
+        ];
+        final fullTokens = await engine.countChatTokens(
+          next,
+          enableThinking: false,
+        );
+
+        final continued = await reply(engine, next, reuse: true);
+        final full = await reply(reference, next, reuse: false);
+        expect(full.promptTokens, fullTokens);
+        // The system turn is not read again; the first message as the
+        // history renders it, the reply and the new message are.
+        expect(continued.promptTokens, greaterThan(0));
+        expect(continued.promptTokens, lessThan(fullTokens ~/ 2));
+        // The context holds the same tokens as one that read the prompt in
+        // full. (The replies are not compared: on the CPU a different batch
+        // split can change the arithmetic, and so a sampled token.)
+        expect(
+          await read(engine, fullTokens),
+          await read(reference, fullTokens),
+        );
+
+        // A whole-context snapshot keeps the point usable after a prompt
+        // read without prefix reuse replaced the context.
+        final third = <ChatMessage>[
+          ...next,
+          ChatMessage(role: ChatRole.assistant, text: continued.text.trim()),
+          ChatMessage.user('And one more.'),
+        ];
+        final thirdTokens = await engine.countChatTokens(
+          third,
+          enableThinking: false,
+        );
+        final saved = await engine.saveState();
+        await engine.reset();
+        await reply(engine, <ChatMessage>[
+          ChatMessage.user('Unrelated question.'),
+        ], reuse: false);
+        await engine.restoreState(saved);
+        final restored = await reply(engine, third, reuse: true);
+        await reference.reset();
+        await reply(reference, third, reuse: false);
+        expect(restored.promptTokens, lessThan(thirdTokens ~/ 2));
+        expect(
+          await read(engine, thirdTokens),
+          await read(reference, thirdTokens),
+        );
+
+        // Without the snapshot the context no longer holds the point and the
+        // prompt is read in full.
+        await engine.reset();
+        final afterReset = await reply(engine, third, reuse: true);
+        expect(afterReset.promptTokens, thirdTokens);
+      } finally {
+        await engine.close();
+        await reference.close();
+      }
+    });
+
     test(
       'weighted fixture preserves output across draftless ngram strategies',
       () async {

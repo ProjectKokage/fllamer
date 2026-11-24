@@ -124,6 +124,54 @@ int main() {
   assert(!trimmed_prefix.exact_prefix);
   assert(trimmed_prefix.suffix_start == 0);
 
+  {
+    // The turn of the last message begins at the template's last control
+    // token before that message's text; a token spelled in message text and
+    // one that ends past the limit do not count.
+    control_token_texts markers;
+    markers.add("<|s|>");
+    markers.add("<|e|>");
+    const std::string prompt =
+        "<|s|>user\nHi<|e|>\n<|s|>assistant\nYo <|s|> x<|e|>\n<|s|>user\nMore"
+        "<|e|>\n<|s|>assistant\n";
+    const size_t yo = prompt.find("Yo");
+    const size_t more = prompt.find("More");
+    const std::vector<byte_span> spans{{prompt.find("Hi"),
+                                        prompt.find("Hi") + 2},
+                                       {yo, yo + 10},
+                                       {more, more + 4}};
+    assert(markers.last_template_token_before(prompt, more, spans) ==
+           prompt.rfind("<|s|>user"));
+    assert(markers.last_template_token_before(prompt, yo + 9, spans) ==
+           prompt.find("<|s|>assistant"));
+    assert(markers.last_template_token_before(prompt, 4, spans) ==
+           std::string_view::npos);
+    assert(markers.last_template_token_before("plain text", 10, {}) ==
+           std::string_view::npos);
+  }
+  assert(is_proper_token_prefix(std::vector<int32_t>{1, 2},
+                                std::vector<int32_t>{1, 2, 3}));
+  assert(!is_proper_token_prefix(std::vector<int32_t>{1, 2},
+                                 std::vector<int32_t>{1, 2}));
+  assert(!is_proper_token_prefix(std::vector<int32_t>{},
+                                 std::vector<int32_t>{1}));
+  assert(!is_proper_token_prefix(std::vector<int32_t>{1, 3},
+                                 std::vector<int32_t>{1, 2, 3}));
+  const std::vector<int32_t> boundary{1, 2, 3};
+  const std::vector<int32_t> after_reply{1, 2, 3, 7, 8, 20, 21};
+  const std::vector<int32_t> next_prompt{1, 2, 3, 7, 20, 21, 9, 4, 7, 8};
+  assert(!resolve_prompt_prefix_reuse(after_reply, next_prompt).exact_prefix);
+  assert(prompt_continues_boundary(after_reply, boundary, next_prompt));
+  assert(!prompt_continues_boundary(after_reply, boundary, boundary));
+  assert(!prompt_continues_boundary(after_reply, boundary,
+                                    std::vector<int32_t>{1, 2, 9, 7}));
+  assert(!prompt_continues_boundary(std::vector<int32_t>{1, 2},
+                                    boundary, next_prompt));
+  assert(!prompt_continues_boundary(std::vector<int32_t>{1, 5, 3, 7},
+                                    boundary, next_prompt));
+  assert(!prompt_continues_boundary(after_reply, std::vector<int32_t>{},
+                                    next_prompt));
+
   assert(resolve_model_load_mode(false, false) == LLAMA_LOAD_MODE_NONE);
   assert(resolve_model_load_mode(true, false) == LLAMA_LOAD_MODE_MMAP);
   assert(resolve_model_load_mode(false, true) == LLAMA_LOAD_MODE_MLOCK);

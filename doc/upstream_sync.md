@@ -360,8 +360,12 @@ report the applied cache policy rather than the original request.
 
 ABI 41 adds exact prompt-prefix reuse. A completion may reuse committed KV
 state only when its committed token history is an exact prefix of the newly
-tokenized full prompt; a mismatch clears the context before evaluating the
-full prompt.
+tokenized full prompt. Otherwise the context is cleared before evaluating the
+full prompt, unless the prompt continues from the kept prompt boundary. The
+prompt boundary (see [Architecture](architecture.md#prompt-boundary)) builds
+on pinned `llama_state_seq_get_data_ext`/`llama_state_seq_set_data_ext` with
+`LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY` and `llama_memory_seq_rm`, the calls
+upstream's server uses for its context checkpoints; it adds no ABI.
 
 ABI 43 adds the chat stream parser: `llama_dart_chat_stream_parser_create`
 loads a chat plan's parser once, `llama_dart_chat_stream_parser_parse` runs

@@ -1,5 +1,22 @@
 ## Unreleased
 
+- A planned chat read with `reusePromptPrefix` keeps the point where the
+  turn of its last message began, and a later prompt that repeats the tokens
+  before it continues from there instead of reading everything again. The
+  next turn of a conversation was never an exact continuation of what was
+  read: a template renders a past reply differently from the tokens
+  generated after the generation prompt (Qwen3.5 drops the empty thinking
+  block), and an app may keep other text for the reply, or for a message it
+  sent with notes for that turn only. The tokens read are those of a full
+  read. For memory that cannot drop the end of a sequence the bridge copies
+  the part that cannot (`LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY`): 52.7 MB of
+  recurrent state for Qwen3.5 4B at any prompt length, 8 bytes for the
+  attention-only Qwen2.5 0.5B; a sliding-window cache that is not full size
+  copies its window. The copy stays allocated until the next planned chat
+  read with reuse replaces it, a LoRA change or context shift clears it, or
+  the context closes. It survives `reset()` and a whole-context
+  `restoreState()`, so a snapshot taken before a prompt read without reuse
+  brings it back. No Dart API or ABI change.
 - Synchronized `third_party/llama.cpp` to
   `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (upstream release `v1.0.0`, build
   number 12359), 249 commits after `v0.9.0`. No Dart API change and no ABI

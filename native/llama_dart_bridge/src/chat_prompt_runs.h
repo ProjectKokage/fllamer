@@ -59,6 +59,32 @@ public:
     return false;
   }
 
+  // Where the last of the tokens that `prompt` spells in its template text
+  // begins before `limit`: the token ends by `limit` and overlaps none of
+  // `spans`, the ranges of message text. `std::string_view::npos` if none.
+  size_t last_template_token_before(std::string_view prompt, size_t limit,
+                                    const std::vector<byte_span> &spans) const {
+    limit = std::min(limit, prompt.size());
+    for (size_t position = limit; position-- > 0;) {
+      const std::vector<std::string> &candidates =
+          by_first_byte_[static_cast<unsigned char>(prompt[position])];
+      for (const std::string &text : candidates) {
+        const size_t end = position + text.size();
+        if (end > limit || prompt.compare(position, text.size(), text) != 0) {
+          continue;
+        }
+        const bool in_message = std::any_of(
+            spans.begin(), spans.end(), [&](const byte_span &span) {
+              return position < span.end && span.begin < end;
+            });
+        if (!in_message) {
+          return position;
+        }
+      }
+    }
+    return std::string_view::npos;
+  }
+
 private:
   std::array<std::vector<std::string>, 256> by_first_byte_;
   size_t longest_ = 0;
