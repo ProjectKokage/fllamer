@@ -362,7 +362,7 @@ ABI 41 adds exact prompt-prefix reuse. A completion may reuse committed KV
 state only when its committed token history is an exact prefix of the newly
 tokenized full prompt. Otherwise the context is cleared before evaluating the
 full prompt, unless the prompt continues from the kept prompt boundary. The
-prompt boundary (see [Architecture](architecture.md)) builds
+prompt boundary (see [Architecture](architecture.md#prompt-boundary)) builds
 on pinned `llama_state_seq_get_data_ext`/`llama_state_seq_set_data_ext` with
 `LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY` and `llama_memory_seq_rm`, the calls
 upstream's server uses for its context checkpoints; it adds no ABI.
