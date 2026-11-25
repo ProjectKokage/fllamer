@@ -23,17 +23,18 @@ dev_dependencies:
   lints: ^6.0.0
   test: ^1.25.6
 
-# Flutter collects these pinned native notices into its generated NOTICES
-# bundle. This section does not add a Flutter runtime dependency.
+# Flutter appends these copies of the pinned native notices to its generated
+# NOTICES bundle; tool/flutter_notices.dart writes them with the names each
+# covers. This section does not add a Flutter runtime dependency.
 flutter:
   licenses:
-    - third_party/llama.cpp/LICENSE
-    - third_party/llama.cpp/AUTHORS
-    - third_party/llama.cpp/licenses/LICENSE-jsonhpp
-    - third_party/llama.cpp/vendor/cpp-httplib/LICENSE
-    - third_party/llama.cpp/vendor/hash/rotate-bits/LICENSE.md
-    - third_party/llama.cpp/vendor/hash/sha256/LICENSE
-    - third_party/llama.cpp/vendor/hash/xxhash/LICENSE
-    - third_party/licenses/LICENSE-miniaudio
-    - third_party/licenses/LICENSE-stb
-    - third_party/vulkan_headers/LICENSE.md
+    - third_party/flutter_notices/llama.cpp.txt
+    - third_party/flutter_notices/llama.cpp-authors.txt
+    - third_party/flutter_notices/nlohmann-json.txt
+    - third_party/flutter_notices/cpp-httplib.txt
+    - third_party/flutter_notices/rotate-bits.txt
+    - third_party/flutter_notices/sha256.txt
+    - third_party/flutter_notices/xxhash.txt
+    - third_party/flutter_notices/miniaudio.txt
+    - third_party/flutter_notices/stb_image.txt
+    - third_party/flutter_notices/vulkan-headers.txt

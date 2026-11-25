@@ -12,7 +12,9 @@
   `third_party/llama.cpp/vendor/hash/`, plus the package-maintained notices under
   `third_party/licenses/` and the independently pinned
   `third_party/vulkan_headers/LICENSE.md`, with redistributed source or
-  binaries.
+  binaries. After a sync, `dart --disable-dart-dev tool/flutter_notices.dart`
+  rewrites their copies in `third_party/flutter_notices/`, which
+  `flutter.licenses` lists; `test/flutter_notices_test.dart` fails until then.
 
 Android Vulkan builds use the complete `include/` tree from
 KhronosGroup/Vulkan-Headers tag `vulkan-sdk-1.4.357.0`. The upstream source

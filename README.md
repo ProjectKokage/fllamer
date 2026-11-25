@@ -192,7 +192,8 @@ The repository pins `llama.cpp` at
 include its required source files. Redistributed builds must preserve the
 upstream notices in `third_party/llama.cpp/LICENSE`,
 `third_party/llama.cpp/AUTHORS`, and `third_party/llama.cpp/licenses/`.
-`pubspec.yaml` registers these and bundled third-party notices under
+`pubspec.yaml` registers copies of these and the bundled third-party notices,
+written to `third_party/flutter_notices/` with the names each covers, under
 `flutter.licenses` for Flutter's generated license bundle; distributors remain
 responsible for verifying GPL-3.0 compatibility and notice compliance. Model
 weights, `mmproj` files, and LoRA adapters are app-supplied data governed by
