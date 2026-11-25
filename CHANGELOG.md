@@ -1,3 +1,12 @@
+## Unreleased
+
+- The notices under `flutter.licenses` are copies in
+  `third_party/flutter_notices/` that start with the names they cover, as
+  Flutter's license page reads them. An app's license page used to list
+  lines such as "MIT License", "# date: …" and "All rights reserved." as
+  package names. `tool/flutter_notices.dart` writes the copies, and a test
+  fails while one differs from its pinned source.
+
 ## 0.4.0
 
 - ABI 46 adds `LlamaEngine.keepConversation()` and `forgetConversation()`
